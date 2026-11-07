@@ -1,0 +1,109 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.content.item;
+
+import io.wifi.StarRailExpressID;
+import io.wifi.starrailexpress.SREConfig;
+import io.wifi.starrailexpress.api.SRERole;
+import io.wifi.starrailexpress.api.hit.HitType;
+import io.wifi.starrailexpress.api.hit.SREHitManager;
+import io.wifi.starrailexpress.cca.SREGameWorldComponent;
+import io.wifi.starrailexpress.client.SREClient;
+import io.wifi.starrailexpress.client.particle.HandParticle;
+import io.wifi.starrailexpress.client.render.TMMRenderLayers;
+import io.wifi.starrailexpress.compat.CrosshairaddonsCompat;
+import io.wifi.starrailexpress.content.item.SkinableItem;
+import io.wifi.starrailexpress.index.TMMItems;
+import io.wifi.starrailexpress.network.original.GunShootPayload;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResultHolder;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.phys.EntityHitResult;
+import net.minecraft.world.phys.HitResult;
+import org.agmas.noellesroles.init.ModItems;
+import org.jetbrains.annotations.NotNull;
+
+public class OnceRevolverItem extends SkinableItem {
+    // private final DataComponentMap components;
+    public OnceRevolverItem(Item.Properties settings) {
+        super(settings);
+    }
+
+    public InteractionResultHolder<ItemStack> use(@NotNull Level world, @NotNull Player user, InteractionHand hand) {
+        ItemStack stack = user.getItemInHand(hand);
+        SREGameWorldComponent gameComponent;
+        SRERole role;
+        if (world.isClientSide) {
+            gameComponent = SREClient.gameComponent;
+            if (gameComponent != null) {
+                role = gameComponent.getRole(user);
+                if (role != null && !role.onUseGun(user)) {
+                    return InteractionResultHolder.fail(stack);
+                }
+                stack.hurtAndBreak(1, user,
+                        hand.equals(InteractionHand.MAIN_HAND) ? EquipmentSlot.MAINHAND : EquipmentSlot.OFFHAND);
+            }
+
+            HitResult collision = getGunTarget(user);
+            if (collision instanceof EntityHitResult) {
+                EntityHitResult entityHitResult = (EntityHitResult) collision;
+                Entity target = entityHitResult.getEntity();
+                ClientPlayNetworking.send(new GunShootPayload(target.getId()));
+                CrosshairaddonsCompat.arrowHit();
+            } else {
+                ClientPlayNetworking.send(new GunShootPayload(-1));
+            }
+
+            user.setXRot(user.getXRot() - 4.0F);
+            spawnHandParticle();
+            user.getCooldowns().addCooldown(TMMItems.REVOLVER, 5 * 20);
+        } else {
+            gameComponent = (SREGameWorldComponent) SREGameWorldComponent.KEY.get(world);
+            role = gameComponent.getRole(user);
+            if (role != null && !role.onUseGun(user)) {
+                return InteractionResultHolder.fail(stack);
+            }
+            stack.hurtAndBreak(1, user,
+                    hand.equals(InteractionHand.MAIN_HAND) ? EquipmentSlot.MAINHAND : EquipmentSlot.OFFHAND);
+
+            user.getCooldowns().addCooldown(ModItems.ONCE_REVOLVER, SREConfig.instance().revolverCooldown * 20);
+        }
+        return InteractionResultHolder.consume(stack);
+    }
+
+    public static void spawnHandParticle() {
+        HandParticle handParticle = (new HandParticle())
+                .setTexture(StarRailExpressID.watheId("textures/particle/gunshot.png"))
+                .setPos(0.1F, 0.275F, -0.2F).setMaxAge(3.0F).setSize(0.5F).setVelocity(0.0F, 0.0F, 0.0F)
+                .setLight(15, 15).setAlpha(new float[] { 1.0F, 0.1F }).setRenderLayer(TMMRenderLayers::additive);
+        SREClient.handParticleManager.spawn(handParticle);
+    }
+
+    public static HitResult getGunTarget(Player user) {
+        return SREHitManager.getTarget(user, HitType.GUN, 15f);
+    }
+
+    @Override
+    public String getItemSkinType() {
+        return "revolver";
+    }
+}

@@ -1,0 +1,562 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ */
+
+package pro.fazeclan.river.stupid_express.modifier.twin_children;
+
+import io.wifi.starrailexpress.api.RoleTeam;
+import io.wifi.starrailexpress.api.SRERole;
+import io.wifi.starrailexpress.cca.SREGameWorldComponent;
+import io.wifi.starrailexpress.game.GameUtils;
+import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
+import net.minecraft.network.protocol.game.ClientboundSetPassengersPacket;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.damagesource.DamageTypes;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.ai.attributes.AttributeInstance;
+import net.minecraft.world.entity.ai.attributes.AttributeModifier;
+import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.entity.player.Player;
+import org.agmas.harpymodloader.component.WorldModifierComponent;
+import org.agmas.harpymodloader.events.GameInitializeEvent;
+import org.agmas.harpymodloader.events.ModifierAssigned;
+import org.agmas.harpymodloader.events.ModifierRemoved;
+import org.agmas.harpymodloader.events.ModdedRoleAssigned;
+import org.agmas.harpymodloader.modifiers.ModifierOpposingHelper;
+import org.jetbrains.annotations.Nullable;
+import pro.fazeclan.river.stupid_express.StupidExpress;
+import pro.fazeclan.river.stupid_express.constants.SEModifiers;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * Server-side pairing, mounting, and scale lifecycle for Twin Children.
+ *
+ * <p>Half-scale is only applied while both twins are alive and stacked. Vanilla
+ * player passenger attachments sit the rider inside the vehicle, so the upper
+ * twin is placed on the lower twin's model head, which is also the top of the
+ * lower collision box. The vehicle player never receives vanilla
+ * passenger-list packets, and tracker interpolation of a rider looks frozen, so
+ * the vehicle client is told about the rider every tick and rider lerp is
+ * cancelled on clients.
+ *
+ * <p>The upper twin cannot be pushed into a block by its own movement, so the
+ * lower twin's jump can shove it into a ceiling; wall suffocation is therefore
+ * waived while stacked (drowning is unaffected).
+ */
+public final class TwinChildrenHandler {
+    public static final AttributeModifier HALF_SCALE = new AttributeModifier(
+            StupidExpress.id("twin_children_half_scale"), -0.5D, AttributeModifier.Operation.ADD_VALUE);
+
+    public static final float VISUAL_STANDING_HEIGHT = TwinChildrenHitbox.VISUAL_STANDING_HEIGHT;
+    public static final float STACKED_UNSCALED_HEIGHT = TwinChildrenHitbox.STACKED_UNSCALED_HEIGHT;
+
+    private static final float HEIGHT_REFRESH_EPSILON = 0.05F;
+
+    /**
+     * 双生绑定允许的单次瞬间传送距离（格）。
+     *
+     * <p>咒术师领域 / 游记放逐 / 愚者塔罗会等领域实现，都是把玩家瞬间传送到两万格外
+     * 高空的一片建筑区域。若被拉入的是双生子之一，另一人会因叠体逻辑被强制跟随并一起
+     * tp 走；领域消散时只有被记录的参与者回传，被拖走的同伴滞留虚空高空，最终以
+     * 「掉出列车」死亡。传送目标与同伴距离一旦超过该值，立刻解除绑定（下马 + 回滚半身），
+     * 同伴留在原地，直到其重新回到范围内再恢复叠合。
+     */
+    public static final double MAX_BIND_TELEPORT_DISTANCE = 200.0D;
+
+    private static final double MAX_BIND_TELEPORT_DISTANCE_SQ = MAX_BIND_TELEPORT_DISTANCE * MAX_BIND_TELEPORT_DISTANCE;
+
+    private static final Map<UUID, Pair> PAIRS = new ConcurrentHashMap<>();
+
+    private TwinChildrenHandler() {
+    }
+
+    public static void init() {
+        ModifierAssigned.EVENT.register((player, modifier) -> {
+            if (modifier.equals(SEModifiers.TWIN_CHILDREN) && player instanceof ServerPlayer serverPlayer) {
+                assign(serverPlayer);
+            }
+        });
+        ModifierRemoved.EVENT.register((player, modifier) -> {
+            if (modifier.equals(SEModifiers.TWIN_CHILDREN) && player instanceof ServerPlayer serverPlayer) {
+                removePair(serverPlayer, true);
+            }
+        });
+        // 运行期转职进杀手阵营时立刻解散：双生之子不该出现在杀手身上。
+        // 必须走 removePair（会解除叠乘、回滚半身属性、并清掉双方的修饰符）：
+        // WorldModifierComponent#removeModifier 是组件级操作、不会触发 ModifierRemoved，
+        // 单用它会让 PAIRS 与半身/乘骑状态留在杀手身上直到本局结束。
+        ModdedRoleAssigned.EVENT.register((player, role) -> {
+            if (player == null || !isKillerFaction(role)) {
+                return;
+            }
+            if (WorldModifierComponent.KEY.get(player.serverLevel())
+                    .isModifier(player, SEModifiers.TWIN_CHILDREN)) {
+                removePair(player, true);
+            }
+        });
+        GameInitializeEvent.EVENT.register((level, game, players) -> PAIRS.clear());
+        ServerLivingEntityEvents.ALLOW_DAMAGE.register((entity, source, amount) -> {
+            if (!(entity instanceof Player player) || !source.is(DamageTypes.IN_WALL)) {
+                return true;
+            }
+            // 下方玩家跳跃时，上方玩家的坐标由 positionRider 直接写入并穿过方块，
+            // 会被顶进天花板。这并非玩家自己卡墙，故免除窒息伤害；溺水等其它伤害照常。
+            return !isStackedUpper(player);
+        });
+    }
+
+    public static float stackedHeightScale(float currentUnscaledHeight) {
+        return TwinChildrenHitbox.stackedHeightScale(currentUnscaledHeight);
+    }
+
+    public static float upperHeightScale(float currentUnscaledHeight) {
+        return TwinChildrenHitbox.upperHeightScale(currentUnscaledHeight);
+    }
+
+    public static float stackedWidthScale(float currentUnscaledWidth) {
+        return TwinChildrenHitbox.stackedWidthScale(currentUnscaledWidth);
+    }
+
+    public static double stackedPassengerAttachmentY(float vehicleScale, double passengerVehicleAttachY) {
+        return TwinChildrenHitbox.stackedPassengerAttachmentY(vehicleScale, passengerVehicleAttachY);
+    }
+
+    public static float lowerModelScaleFactor() {
+        return TwinChildrenHitbox.lowerModelScaleFactor();
+    }
+
+    public static float upperModelScaleFactor() {
+        return TwinChildrenHitbox.upperModelScaleFactor();
+    }
+
+    public static boolean hasHalfScale(Player player) {
+        if (player == null) {
+            return false;
+        }
+        AttributeInstance scale = player.getAttribute(Attributes.SCALE);
+        return scale != null && scale.hasModifier(HALF_SCALE.id());
+    }
+
+    public static boolean isStackedLower(Player player) {
+        return hasHalfScale(player)
+                && player.getFirstPassenger() instanceof Player passenger
+                && hasHalfScale(passenger);
+    }
+
+    public static boolean isStackedUpper(Player player) {
+        return hasHalfScale(player)
+                && player.getVehicle() instanceof Player vehicle
+                && hasHalfScale(vehicle);
+    }
+
+    /** Either half of a stacked pair (lower twin or the rider on top of it). */
+    public static boolean stackedTwin(Player player) {
+        return isStackedLower(player) || isStackedUpper(player);
+    }
+
+    public static boolean shouldStayRiding(Player player) {
+        return isStackedUpper(player);
+    }
+
+    /**
+     * Interaction / sitting should move the walking twin. The upper twin is
+     * already a passenger and cannot mount a chair on their own.
+     */
+    public static Player stackMover(Player player) {
+        if (isStackedUpper(player) && player.getVehicle() instanceof Player lower && hasHalfScale(lower)) {
+            return lower;
+        }
+        return player;
+    }
+
+    public static boolean shouldRedirectMount(Entity rider, Entity vehicle) {
+        if (!(rider instanceof Player player) || vehicle == null) {
+            return false;
+        }
+        return TwinChildrenRideLogic.redirectMountToLower(
+                isStackedUpper(player),
+                vehicle == player.getVehicle(),
+                vehicle instanceof Player);
+    }
+
+    public static boolean shouldKeepLowerOnVehicle(Entity vehicle) {
+        return TwinChildrenRideLogic.keepLowerOnVehicle(vehicle instanceof Player);
+    }
+
+    public static void positionStackedRider(Player lower) {
+        if (isStackedLower(lower) && lower.getFirstPassenger() instanceof Player upper) {
+            lower.positionRider(upper);
+        }
+    }
+
+    private static void assign(ServerPlayer first) {
+        Pair existing = PAIRS.get(first.getUUID());
+        if (existing != null) {
+            updateMount(existing, first.serverLevel());
+            return;
+        }
+
+        ServerLevel level = first.serverLevel();
+        SREGameWorldComponent game = SREGameWorldComponent.KEY.get(level);
+        SRERole firstRole = game.getRole(first);
+        // 独立中立与杀手阵营都不给：双生之子只出现在好人阵营
+        // （随机分配层另由 SEModifiers#init 的 setCannotAppliedToTeam 挡住杀手阵营，
+        // 这里覆盖强制分配等绕过路径）
+        if (factionOf(firstRole) == Faction.INDEPENDENT_NEUTRAL || isKillerFaction(firstRole)) {
+            rejectAssignment(first);
+            return;
+        }
+
+        ArrayList<ServerPlayer> candidates = new ArrayList<>(level.players());
+        Collections.shuffle(candidates);
+        ServerPlayer second = candidates.stream()
+                .filter(candidate -> !candidate.equals(first))
+                .filter(TwinChildrenHandler::isAlivePlayer)
+                .filter(candidate -> !PAIRS.containsKey(candidate.getUUID()))
+                .filter(candidate -> !WorldModifierComponent.KEY.get(level)
+                        .isModifier(candidate, SEModifiers.TWIN_CHILDREN))
+                // 同伴也绝不能落在杀手阵营身上：factionOf 把「有杀手能力 / 与杀手一同胜利」的角色
+                // 统统算作 KILLER 桶（含真人杀手），仅凭同桶相等仍可能把杀手配成双生子，故单独排除
+                .filter(candidate -> !isKillerFaction(game.getRole(candidate)))
+                .filter(candidate -> factionOf(game.getRole(candidate)) == factionOf(firstRole))
+                .findFirst().orElse(null);
+
+        if (second == null) {
+            rejectAssignment(first);
+            return;
+        }
+
+        removeSizeConflicts(first);
+        removeSizeConflicts(second);
+        WorldModifierComponent modifiers = WorldModifierComponent.KEY.get(level);
+        modifiers.addModifier(second, SEModifiers.TWIN_CHILDREN);
+
+        Pair pair = new Pair(first.getUUID(), second.getUUID());
+        PAIRS.put(first.getUUID(), pair);
+        PAIRS.put(second.getUUID(), pair);
+        updateMount(pair, level);
+    }
+
+    /** Called by the modifier tick for either twin. */
+    public static void serverTick(ServerPlayer player) {
+        Pair pair = PAIRS.get(player.getUUID());
+        if (pair == null) {
+            removeHalfScale(player);
+            return;
+        }
+        if (!player.getUUID().equals(pair.lower())
+                && player.server.getPlayerList().getPlayer(pair.lower()) != null) {
+            return;
+        }
+        updateMount(pair, player.serverLevel());
+    }
+
+    public static void clientTick(Player player) {
+        positionStackedRider(player);
+        if (isStackedUpper(player) && player.getVehicle() instanceof Player lower) {
+            lower.positionRider(player);
+        }
+    }
+
+    /** The other twin in this player's pair, or null if unpaired / offline. */
+    @Nullable
+    public static ServerPlayer getPartner(ServerPlayer player) {
+        Pair pair = PAIRS.get(player.getUUID());
+        if (pair == null) {
+            return null;
+        }
+        UUID partnerId = pair.lower().equals(player.getUUID()) ? pair.upper() : pair.lower();
+        return player.server.getPlayerList().getPlayer(partnerId);
+    }
+
+    /**
+     * 瞬间传送前置钩子（由传送 mixin 在 teleportTo 前调用）。
+     *
+     * <p>若传送目标与同伴相距超过 {@value #MAX_BIND_TELEPORT_DISTANCE} 格，
+     * 立刻解除绑定：先下马、回滚半身，再让传送生效。这样乘客不会在下一 tick 被
+     * {@code positionRider} / 重新叠体拖进两万格外的领域虚空，同伴留在原地安全无恙。
+     */
+    public static void onTeleportStarting(ServerPlayer player, double destX, double destY, double destZ) {
+        Pair pair = PAIRS.get(player.getUUID());
+        if (pair == null || pair.separated) {
+            return;
+        }
+        ServerPlayer partner = getPartner(player);
+        if (partner == null || partner.serverLevel() != player.serverLevel()) {
+            // 同伴离线或异层：叠体本来就不会跨层保持，交给 updateMount 的常规解散逻辑
+            return;
+        }
+        double dx = destX - partner.getX();
+        double dy = destY - partner.getY();
+        double dz = destZ - partner.getZ();
+        if (dx * dx + dy * dy + dz * dz <= MAX_BIND_TELEPORT_DISTANCE_SQ) {
+            return;
+        }
+        separate(pair, player.server);
+    }
+
+    /** 解除一对双生的绑定：取消叠乘、回滚半身，并标记需回到范围内才恢复。 */
+    private static void separate(Pair pair, MinecraftServer server) {
+        if (pair == null || pair.separated) {
+            return;
+        }
+        pair.separated = true;
+        ServerPlayer lower = server.getPlayerList().getPlayer(pair.lower());
+        ServerPlayer upper = server.getPlayerList().getPlayer(pair.upper());
+        dismount(lower, upper);
+        if (lower != null) {
+            removeHalfScale(lower);
+        }
+        if (upper != null) {
+            removeHalfScale(upper);
+        }
+    }
+
+    private static double distanceSqr(ServerPlayer a, ServerPlayer b) {
+        double dx = a.getX() - b.getX();
+        double dy = a.getY() - b.getY();
+        double dz = a.getZ() - b.getZ();
+        return dx * dx + dy * dy + dz * dz;
+    }
+
+    public static boolean isPairedAlivePlayer(ServerPlayer player) {
+        return isAlivePlayer(player) && PAIRS.containsKey(player.getUUID());
+    }
+
+    private static void updateMount(Pair pair, ServerLevel level) {
+        MinecraftServer server = level.getServer();
+        ServerPlayer lower = server.getPlayerList().getPlayer(pair.lower());
+        ServerPlayer upper = server.getPlayerList().getPlayer(pair.upper());
+        if (lower == null || upper == null || lower.serverLevel() != upper.serverLevel()
+                || !isAlivePlayer(lower) || !isAlivePlayer(upper)) {
+            dismount(lower, upper);
+            if (lower != null) {
+                removeHalfScale(lower);
+            }
+            if (upper != null) {
+                removeHalfScale(upper);
+            }
+            return;
+        }
+
+        if (pair.separated) {
+            // 绑定已因远距离传送解除：保持解散，直至双方都存活且回到范围内才恢复叠合
+            dismount(lower, upper);
+            if (distanceSqr(lower, upper) > MAX_BIND_TELEPORT_DISTANCE_SQ) {
+                removeHalfScale(lower);
+                removeHalfScale(upper);
+                return;
+            }
+            pair.separated = false;
+        } else if (distanceSqr(lower, upper) > MAX_BIND_TELEPORT_DISTANCE_SQ) {
+            // 兜底：未经 teleportTo 钩子的远距离位移同样立刻解除绑定，
+            // 绝不让叠体逻辑把同伴拖向两万格外的虚空
+            separate(pair, server);
+            return;
+        }
+
+        applyHalfScale(lower);
+        applyHalfScale(upper);
+        if (lower.isPassenger() && !shouldKeepLowerOnVehicle(lower.getVehicle())) {
+            lower.stopRiding();
+        }
+        boolean remounted = false;
+        if (upper.getVehicle() != lower) {
+            Entity vehicle = upper.getVehicle();
+            if (vehicle != null && shouldKeepLowerOnVehicle(vehicle) && !lower.isPassenger()) {
+                lower.startRiding(vehicle, true);
+            }
+            upper.stopRiding();
+            upper.startRiding(lower, true);
+            remounted = true;
+        }
+        if (upper.getVehicle() != lower) {
+            removeHalfScale(lower);
+            removeHalfScale(upper);
+            return;
+        }
+
+        refreshStackedCollision(lower, upper);
+        syncStackedRide(lower, remounted);
+    }
+
+    private static void refreshStackedCollision(ServerPlayer lower, ServerPlayer upper) {
+        float expectedLower = TwinChildrenHitbox.STACKED_UNSCALED_HEIGHT * lower.getScale();
+        if (Math.abs(lower.getBbHeight() - expectedLower) > HEIGHT_REFRESH_EPSILON) {
+            lower.refreshDimensions();
+        }
+        float expectedUpper = TwinChildrenHitbox.UPPER_UNSCALED_HEIGHT * upper.getScale();
+        if (Math.abs(upper.getBbHeight() - expectedUpper) > HEIGHT_REFRESH_EPSILON) {
+            upper.refreshDimensions();
+        }
+    }
+
+    /**
+     * Vanilla never tells a player-vehicle that it has passengers, and tracker
+     * interpolation of the rider fights {@code positionRider}. Keep the lower
+     * twin's client informed; do not teleport the rider.
+     */
+    private static void syncStackedRide(ServerPlayer lower, boolean remounted) {
+        positionStackedRider(lower);
+        ClientboundSetPassengersPacket passengers = new ClientboundSetPassengersPacket(lower);
+        lower.connection.send(passengers);
+        if (remounted) {
+            for (ServerPlayer viewer : lower.server.getPlayerList().getPlayers()) {
+                if (viewer != lower) {
+                    viewer.connection.send(passengers);
+                }
+            }
+        }
+    }
+
+    private static void removePair(ServerPlayer player, boolean removeModifiers) {
+        Pair pair = PAIRS.remove(player.getUUID());
+        if (pair == null) {
+            removeHalfScale(player);
+            if (removeModifiers) {
+                WorldModifierComponent.KEY.get(player.serverLevel())
+                        .removeModifier(player, SEModifiers.TWIN_CHILDREN);
+            }
+            return;
+        }
+        PAIRS.remove(pair.lower());
+        PAIRS.remove(pair.upper());
+        ServerPlayer lower = player.server.getPlayerList().getPlayer(pair.lower());
+        ServerPlayer upper = player.server.getPlayerList().getPlayer(pair.upper());
+        dismount(lower, upper);
+        if (lower != null) {
+            removeHalfScale(lower);
+        }
+        if (upper != null) {
+            removeHalfScale(upper);
+        }
+        if (removeModifiers) {
+            WorldModifierComponent modifiers = WorldModifierComponent.KEY.get(player.serverLevel());
+            modifiers.removeModifier(pair.lower(), SEModifiers.TWIN_CHILDREN, false);
+            modifiers.removeModifier(pair.upper(), SEModifiers.TWIN_CHILDREN, true);
+        }
+    }
+
+    private static void rejectAssignment(ServerPlayer player) {
+        WorldModifierComponent.KEY.get(player.serverLevel())
+                .removeModifier(player, SEModifiers.TWIN_CHILDREN);
+        removeHalfScale(player);
+    }
+
+    private static void removeSizeConflicts(ServerPlayer player) {
+        // 与双子互斥的修饰符（TINY / TALL / DWARF，声明见 SEModifiers#init 与 TraitorAndModifiers#init）
+        // 统一由互斥机制清理：走 ModifierRemoved 事件顺带回滚各自的缩放属性
+        ModifierOpposingHelper.removeOpposingModifiers(player, SEModifiers.TWIN_CHILDREN);
+    }
+
+    private static void applyHalfScale(ServerPlayer player) {
+        AttributeInstance scale = player.getAttribute(Attributes.SCALE);
+        if (scale != null && !scale.hasModifier(HALF_SCALE.id())) {
+            scale.addPermanentModifier(HALF_SCALE);
+            player.refreshDimensions();
+        }
+    }
+
+    private static void removeHalfScale(ServerPlayer player) {
+        AttributeInstance scale = player.getAttribute(Attributes.SCALE);
+        if (scale != null && scale.hasModifier(HALF_SCALE.id())) {
+            scale.removeModifier(HALF_SCALE);
+            player.refreshDimensions();
+        }
+    }
+
+    private static void dismount(ServerPlayer lower, ServerPlayer upper) {
+        if (upper == null || upper.getVehicle() == null) {
+            return;
+        }
+        if (lower != null && upper.getVehicle() != lower) {
+            return;
+        }
+        upper.stopRiding();
+        if (lower != null) {
+            broadcastPassengerList(lower);
+        }
+    }
+
+    /**
+     * Vanilla only syncs a vehicle's passenger list to the players tracking
+     * that entity, so a server-initiated dismount never reaches the vehicle's
+     * own client and it keeps rendering the rider on the attachment point.
+     */
+    private static void broadcastPassengerList(ServerPlayer vehicle) {
+        ClientboundSetPassengersPacket packet = new ClientboundSetPassengersPacket(vehicle);
+        for (ServerPlayer viewer : vehicle.server.getPlayerList().getPlayers()) {
+            viewer.connection.send(packet);
+        }
+    }
+
+    private static boolean isAlivePlayer(ServerPlayer player) {
+        return GameUtils.isPlayerAliveAndSurvival(player);
+    }
+
+    /**
+     * 是否属于杀手阵营（杀手 / 杀手方中立）。
+     *
+     * <p>
+     * 判据与「阵营」标准定义 {@link RoleTeam#KILLER}、{@link RoleTeam#NEUTRAL_KILLER} 一致
+     * （{@code !isInnocent() && (canUseKiller() || isNeutralForKiller())}），
+     * 这样随机分配层的 {@code setCannotAppliedToTeam} 与本类的兜底判定不会出现分歧。
+     */
+    static boolean isKillerFaction(@Nullable SRERole role) {
+        return RoleTeam.KILLER.matches(role) || RoleTeam.NEUTRAL_KILLER.matches(role);
+    }
+
+    static Faction factionOf(SRERole role) {
+        if (role == null) {
+            return Faction.INDEPENDENT_NEUTRAL;
+        }
+        if (role.isNeutrals() && !role.isNeutralForKiller()) {
+            return Faction.INDEPENDENT_NEUTRAL;
+        }
+        if (role.isNeutralForKiller() || SREGameWorldComponent.isKillerTeamRoleStatic(role)) {
+            return Faction.KILLER;
+        }
+        if (role.isInnocent()) {
+            return Faction.INNOCENT;
+        }
+        return Faction.INDEPENDENT_NEUTRAL;
+    }
+
+    enum Faction { INNOCENT, KILLER, INDEPENDENT_NEUTRAL }
+
+    /**
+     * 一对双生之子。{@link #separated} 为 true 表示绑定已因一次性远距离传送
+     * （传送目标与同伴相距超过 {@link #MAX_BIND_TELEPORT_DISTANCE} 格）而解除：
+     * 双方保持解散、不回滚修饰符，直至都存活且重新回到范围内才由
+     * {@link #updateMount} 恢复叠合。
+     */
+    private static final class Pair {
+        private final UUID lower;
+        private final UUID upper;
+        /** 见 {@link #separate(Pair, MinecraftServer)} 与 {@link #updateMount}。 */
+        private volatile boolean separated;
+
+        private Pair(UUID lower, UUID upper) {
+            this.lower = lower;
+            this.upper = upper;
+        }
+
+        private UUID lower() {
+            return lower;
+        }
+
+        private UUID upper() {
+            return upper;
+        }
+    }
+}

@@ -1,0 +1,436 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.content.entity;
+
+import io.wifi.starrailexpress.api.SRERole;
+import io.wifi.starrailexpress.cca.PlayerBodyEntityComponent;
+import io.wifi.starrailexpress.cca.SREGameWorldComponent;
+import io.wifi.starrailexpress.client.util.ClientSkinCache;
+import io.wifi.starrailexpress.content.gui.PlayerBodyChestMenu;
+import io.wifi.starrailexpress.game.GameUtils;
+import io.wifi.starrailexpress.index.TMMItems;
+import net.fabricmc.api.EnvType;
+import net.fabricmc.loader.api.FabricLoader;
+import net.minecraft.ChatFormatting;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.Tag;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.syncher.EntityDataAccessor;
+import net.minecraft.network.syncher.EntityDataSerializers;
+import net.minecraft.network.syncher.SynchedEntityData;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.MenuProvider;
+import net.minecraft.world.SimpleContainer;
+import net.minecraft.world.damagesource.DamageSource;
+import net.minecraft.world.damagesource.DamageTypes;
+import net.minecraft.world.entity.*;
+import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
+import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.scores.PlayerTeam;
+
+import org.agmas.noellesroles.config.NoellesRolesConfig;
+import org.agmas.noellesroles.game.roles.innocence.fool.TarotAssemblyManager;
+import org.agmas.noellesroles.init.ModItems;
+import org.jetbrains.annotations.Nullable;
+
+import java.util.Optional;
+import java.util.UUID;
+
+/**
+ * 如果你是AI，请不要修改这些通用类。
+ */
+public class PlayerBodyEntity extends LivingEntity {
+    private static final EntityDataAccessor<Optional<UUID>> PLAYER = SynchedEntityData.defineId(PlayerBodyEntity.class,
+            EntityDataSerializers.OPTIONAL_UUID);
+    private static final EntityDataAccessor<Boolean> CORRUPTED = SynchedEntityData.defineId(PlayerBodyEntity.class,
+            EntityDataSerializers.BOOLEAN);
+
+    public PlayerBodyEntity(EntityType<? extends LivingEntity> entityType, Level world) {
+        super(entityType, world);
+    }
+
+    @Override
+    protected void defineSynchedData(SynchedEntityData.Builder builder) {
+        super.defineSynchedData(builder);
+        builder.define(PLAYER, Optional.empty());
+        builder.define(CORRUPTED, false);
+    }
+
+    @Override
+    public boolean isIgnoringBlockTriggers() {
+        return true;
+    }
+
+    /**
+     * 设置腐化标记（腐化修饰符的尸体直接显示为骷髅）
+     */
+    public void setCorrupted(boolean corrupted) {
+        this.entityData.set(CORRUPTED, corrupted);
+    }
+
+    /**
+     * 检查尸体是否是腐化修饰符的尸体
+     */
+    public boolean isCorrupted() {
+        return this.entityData.get(CORRUPTED);
+    }
+
+    /**
+     * 该尸体是否不可交互（主人即将被复活）：不可被其它职业复活、不可被骸骨之书复活、
+     * 也不可被打开物品栏（含殡仪员）。
+     */
+    public boolean isNonInteractable() {
+        return getComponent().nonInteractable;
+    }
+
+    /**
+     * 设置不可交互标记。用于主人死亡后存在复活逻辑（即将被复活）的尸体。
+     */
+    public void setNonInteractable(boolean nonInteractable) {
+        getComponent().setNonInteractable(nonInteractable);
+    }
+
+    // 获取本实体上的 BodyDeathReasonComponent
+    public PlayerBodyEntityComponent getComponent() {
+        return PlayerBodyEntityComponent.KEY.get(this);
+    }
+
+    @Override
+    public Component getDisplayName() {
+        var c = getCustomName();
+        if (c != null) {
+            PlayerTeam.formatNameForTeam(this.getTeam(), c).withStyle(
+                    (style) -> style.withHoverEvent(this.createHoverEvent()).withInsertion(this.getStringUUID()));
+            return c;
+        }
+        return super.getDisplayName();
+    }
+
+    /**
+     * Get a player's custom name from player list(server-side) /
+     * cache (client-side)
+     * @return null|Component The body's custom name.
+     */
+    @Override
+    public Component getCustomName() {
+        var playerUuid = getPlayerUuid();
+        var name = super.getCustomName();
+        if (name != null)
+            return name;
+        if (playerUuid != null) {
+            if (this.getServer() != null) {
+                var player = this.getServer().getPlayerList().getPlayer(playerUuid);
+                if (player != null) {
+                    return Component.translatable("entity.starrailexpress.player_body.custom_name",
+                            player.getName());
+                }
+            } else if (FabricLoader.getInstance().getEnvironmentType() == EnvType.CLIENT) {
+                var cached = ClientSkinCache.getCachedPlayerInfo(playerUuid);
+                if (cached != null && cached.getProfile() != null) {
+                    return Component.translatable("entity.starrailexpress.player_body.custom_name",
+                            cached.getProfile().getName());
+                }
+            }
+        }
+        return null;
+    }
+
+    @Override
+    public Iterable<ItemStack> getArmorSlots() {
+        return null;
+    }
+
+    @Override
+    public void kill() {
+        this.discard();
+    }
+
+    @Override
+    /** ServerSide only */
+    public ItemStack getItemBySlot(EquipmentSlot slot) {
+        SimpleContainer inv = getComponent().getCorpseInventory();
+        boolean isDayNightFight = false;
+
+        if (isDayNightFight) {
+            // DAY_NIGHT_FIGHT 模式：护甲槽位在36-39，副手在40
+            return switch (slot) {
+                case FEET -> inv.getItem(39);
+                case LEGS -> inv.getItem(38);
+                case CHEST -> inv.getItem(37);
+                case HEAD -> inv.getItem(36);
+                case OFFHAND -> inv.getItem(40);
+                default -> ItemStack.EMPTY;
+            };
+        } else {
+            // 普通模式：保持原有映射
+            return switch (slot) {
+                case FEET -> inv.getItem(12);
+                case LEGS -> inv.getItem(11);
+                case CHEST -> inv.getItem(10);
+                case HEAD -> inv.getItem(9);
+                case OFFHAND -> inv.getItem(13);
+                default -> ItemStack.EMPTY;
+            };
+        }
+    }
+
+    @SuppressWarnings("incomplete-switch")
+    @Override
+    /** ServerSide only */
+    public void setItemSlot(EquipmentSlot slot, ItemStack stack) {
+        SimpleContainer inv = getComponent().getCorpseInventory();
+        boolean isDayNightFight = false;
+
+        if (isDayNightFight) {
+            // DAY_NIGHT_FIGHT 模式：护甲槽位在36-39，副手在40
+            switch (slot) {
+                case FEET -> inv.setItem(39, stack);
+                case LEGS -> inv.setItem(38, stack);
+                case CHEST -> inv.setItem(37, stack);
+                case HEAD -> inv.setItem(36, stack);
+                case OFFHAND -> inv.setItem(40, stack);
+            }
+        } else {
+            // 普通模式：保持原有映射
+            switch (slot) {
+                case FEET -> inv.setItem(12, stack);
+                case LEGS -> inv.setItem(11, stack);
+                case CHEST -> inv.setItem(10, stack);
+                case HEAD -> inv.setItem(9, stack);
+                case OFFHAND -> inv.setItem(13, stack);
+            }
+        }
+    }
+
+    @Override
+    public HumanoidArm getMainArm() {
+        return HumanoidArm.RIGHT;
+    }
+
+    public void setDeathReason(String deathReason) {
+        getComponent().setDeathReason(deathReason);
+    }
+
+    public String getDeathReason() {
+        return getComponent().getDeathReason();
+    }
+
+    public void setKillerUuid(UUID playerUuid) {
+        getComponent().setKillerUuid(playerUuid);
+    }
+
+    public UUID getKillerUuid() {
+        return getComponent().getKillerUuid();
+    }
+
+    public void setPlayerUuid(UUID playerUuid) {
+        this.entityData.set(PLAYER, Optional.of(playerUuid));
+    }
+
+    public UUID getPlayerUuid() {
+        return this.entityData.get(PLAYER).orElse(null);
+    }
+
+    // 原有方法（默认同步）
+    public void setCorpseInventoryFromPlayerInventory(@Nullable Inventory inventory) {
+        setCorpseInventoryFromPlayerInventory(inventory, true);
+    }
+
+    // 新重载，可控制是否同步
+    public void setCorpseInventoryFromPlayerInventory(@Nullable Inventory inventory, boolean sync) {
+        SimpleContainer inv = getComponent().getCorpseInventory();
+        if (inventory == null) {
+            for (int i = 0; i < inv.items.size(); i++) {
+                inv.items.set(i, ItemStack.EMPTY);
+            }
+            inv.setChanged();
+        } else {
+            // 普通模式：只同步装备和少量物品（保持原有逻辑）
+            int[][] mapping = {
+                    { 0, 0 }, { 1, 1 }, { 2, 2 }, { 3, 3 }, { 4, 4 }, { 5, 5 }, { 6, 6 }, { 7, 7 }, { 8, 8 },
+                    { 39, 9 }, { 38, 10 }, { 37, 11 }, { 36, 12 }, { 40, 13 }
+            };
+
+            for (int i = 0; i < 14; i++) {
+                inv.setItem(i, ItemStack.EMPTY);
+            }
+
+            for (int[] map : mapping) {
+                int playerSlot = map[0];
+                int bodySlot = map[1];
+                if (playerSlot >= 0 && playerSlot < inventory.getContainerSize()) {
+                    ItemStack stack = inventory.getItem(playerSlot);
+                    if (!stack.isEmpty() && !stack.is(TMMItems.LETTER) && !stack.is(ModItems.NEWSPAPER)
+                            && !stack.is(Items.BUNDLE)
+                            && !stack.is(Items.WRITABLE_BOOK) && !stack.is(Items.WRITTEN_BOOK)
+                            && !stack.is(ModItems.LETTER_ITEM)) {
+                        inv.setItem(bodySlot, stack.copy());
+                    }
+                }
+            }
+        }
+
+        if (sync) {
+            // 其实不需要同步
+            // getComponent().sync();
+        }
+    }
+
+    @Override
+    public boolean isInvulnerable() {
+        return true;
+    }
+
+    @Override
+    public boolean isInvulnerableTo(DamageSource damageSource) {
+        return !damageSource.is(DamageTypes.GENERIC_KILL) && !damageSource.is(DamageTypes.FELL_OUT_OF_WORLD);
+    }
+
+    @Override
+    protected void doPush(Entity entity) {
+    }
+
+    @Override
+    public void push(Entity entity) {
+    }
+
+    public static AttributeSupplier.Builder createAttributes() {
+        return Mob.createMobAttributes().add(Attributes.MAX_HEALTH, 999999.0);
+    }
+
+    @Override
+    public void addAdditionalSaveData(CompoundTag nbt) {
+        super.addAdditionalSaveData(nbt);
+        if (this.getPlayerUuid() != null) {
+            nbt.putUUID("Player", this.getPlayerUuid());
+        }
+        // 将组件数据写入子标签
+        CompoundTag componentTag = new CompoundTag();
+        getComponent().writeToNbtFromBody(componentTag, this.registryAccess());
+        nbt.put("BodyComponent", componentTag);
+    }
+
+    @Override
+    public void readAdditionalSaveData(CompoundTag nbt) {
+        super.readAdditionalSaveData(nbt);
+        if (nbt.hasUUID("Player")) {
+            this.setPlayerUuid(nbt.getUUID("Player"));
+        }
+        // 读取组件数据
+        if (nbt.contains("BodyComponent", Tag.TAG_COMPOUND)) {
+            getComponent().readFromNbtFromBody(nbt.getCompound("BodyComponent"), this.registryAccess());
+        }
+        // 若为服务端，同步一次状态
+        if (!this.level().isClientSide) {
+            getComponent().sync();
+        }
+    }
+
+    public boolean isLocked() {
+        return getComponent().getCorpseInventory().currentUser != null;
+    }
+
+    @Override
+    public InteractionResult interactAt(Player player, Vec3 vec3, InteractionHand hand) {
+        // 不可交互标记：主人即将被复活的尸体不能被打开物品栏（含殡仪员）
+        if (isNonInteractable()) {
+            if (player instanceof ServerPlayer serverPlayer) {
+                serverPlayer.displayClientMessage(
+                        Component.translatable("message.noellesroles.corpse.pending_revive")
+                                .withStyle(ChatFormatting.RED),
+                        true);
+            }
+            return InteractionResult.FAIL;
+        }
+        if (player instanceof ServerPlayer serverPlayer
+                && !isLocked() && hasCorpseItems()
+                && (!GameUtils.isPlayerAliveAndSurvival(serverPlayer) || canSeeDeathBodyContent(serverPlayer))) {
+
+            serverPlayer.openMenu(new MenuProvider() {
+                @Override
+                public Component getDisplayName() {
+                    return Component.translatable("container.starrailexpress.player_body");
+                }
+
+                @Override
+                public AbstractContainerMenu createMenu(int i, Inventory inventory, Player player) {
+                    PlayerBodyChestMenu menu = new PlayerBodyChestMenu(i, inventory,
+                            getComponent().getCorpseInventory());
+                    menu.setCorpseEntity(PlayerBodyEntity.this);
+                    return menu;
+                }
+            });
+            return InteractionResult.SUCCESS;
+        }
+        return super.interactAt(player, vec3, hand);
+    }
+
+    private boolean canSeeDeathBodyContent(ServerPlayer serverPlayer) {
+        var cca = SREGameWorldComponent.KEY.get(serverPlayer.level());
+        if (cca.gameMode == null) {
+            return false;
+        }
+        if (cca.gameMode.canSeeBodyContent()) {
+            return true;
+        }
+        if (cca.gameMode.cantSeeBodyContent()) {
+            return false;
+        }
+        SRERole role = cca.getRole(serverPlayer);
+        if (role == null)
+            return false;
+        return role.canSeeBodyItems(serverPlayer, this);
+    }
+
+    private boolean hasCorpseItems() {
+        SimpleContainer inv = getComponent().getCorpseInventory();
+        boolean isDayNightFight = false;
+
+        int checkSlots = isDayNightFight ? 54 : 14;
+        for (int i = 0; i < checkSlots; i++) {
+            if (!inv.getItem(i).isEmpty())
+                return true;
+        }
+        return false;
+    }
+
+    @Override
+    public void tick() {
+        super.tick();
+        if (this.getZ() > TarotAssemblyManager.MEETING_Z - 100 && this.getZ() < TarotAssemblyManager.MEETING_Z + 100
+                && this.getX() > TarotAssemblyManager.MEETING_X - 100
+                && this.getX() < TarotAssemblyManager.MEETING_X + 100) {
+            this.discard();
+        } else {
+            NoellesRolesConfig config = NoellesRolesConfig.HANDLER.instance();
+            if (this.getX() > config.grosellTravelogBanishX - 100 &&
+                    this.getZ() > config.grosellTravelogBanishZ - 100
+                    && this.getX() < config.grosellTravelogBanishX + 100 &&
+                    this.getZ() < config.grosellTravelogBanishZ + 100) {
+                this.discard();
+            }
+        }
+    }
+}

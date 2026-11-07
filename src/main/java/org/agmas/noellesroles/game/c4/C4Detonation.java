@@ -1,0 +1,905 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.game.c4;
+
+import io.wifi.starrailexpress.SRE;
+import io.wifi.starrailexpress.cca.SREGameTimeComponent;
+import io.wifi.starrailexpress.cca.SREGameWorldComponent;
+import io.wifi.starrailexpress.content.entity.GrenadeEntity;
+import io.wifi.starrailexpress.event.OnGameEnd;
+import io.wifi.starrailexpress.game.GameUtils;
+import io.wifi.utils.cca.CCAManager;
+import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.damagesource.DamageSource;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.entity.projectile.ProjectileUtil;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.phys.*;
+import org.agmas.noellesroles.Noellesroles;
+import org.agmas.noellesroles.cca.C4BackComponent;
+import org.agmas.noellesroles.content.entity.MechanicalBirdEntity;
+import org.agmas.noellesroles.init.ModItems;
+import org.agmas.noellesroles.init.NRSounds;
+
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * C4引爆管理系统
+ */
+public final class C4Detonation {
+    private C4Detonation() {
+    }
+
+    private static final double BLAST_RADIUS = 7.0D;
+    private static final double WALL_PIERCE_STEP = 0.2D;
+    private static final int MAX_PIERCED_WALL_BLOCKS = 1;
+    private static final double SURFACE_OFFSET = 0.001D;
+    private static final Map<UUID, ThrownCharge> thrownCharges = new ConcurrentHashMap<>();
+
+    public static void register() {
+        ServerTickEvents.END_WORLD_TICK.register(C4Detonation::tick);
+        ServerLivingEntityEvents.AFTER_DEATH.register(C4Detonation::afterDeath);
+        OnGameEnd.EVENT.register((world, gameWorldComponent) -> {
+            C4BackComponent comp = C4BackComponent.KEY.getNullable(world);
+            if (comp != null)
+                comp.clearAll();
+            clearThrownCharges();
+        });
+    }
+
+    public static void registerThrownCharge(ItemEntity entity, UUID owner) {
+        if (entity == null || owner == null)
+            return;
+        thrownCharges.put(entity.getUUID(), new ThrownCharge(owner, -1L, -1L, entity.position(), false,
+                SRE.getTicksFromGameStart(), true, null, null));
+    }
+
+    public static boolean plantOnBird(ItemStack stack, Player user, MechanicalBirdEntity bird) {
+        if (!(user instanceof ServerPlayer) || !(user.level() instanceof ServerLevel level))
+            return false;
+        if (stack == null || stack.isEmpty() || bird == null || !isBirdAttachable(bird))
+            return false;
+
+        ItemStack thrownStack = stack.copyWithCount(1);
+        ItemEntity entity = new ItemEntity(level, bird.getX(), bird.getY() + birdStickHeight(bird), bird.getZ(),
+                thrownStack, 0.0D, 0.0D, 0.0D);
+        entity.setThrower(user);
+        entity.setPickUpDelay(32767);
+        entity.setUnlimitedLifetime();
+        level.addFreshEntity(entity);
+        registerThrownCharge(entity, user.getUUID());
+        ThrownCharge charge = thrownCharges.get(entity.getUUID());
+        if (charge != null) {
+            thrownCharges.put(entity.getUUID(), attachToBird(entity, bird, charge));
+        }
+        if (!user.getAbilities().instabuild) {
+            stack.shrink(1);
+        }
+        return true;
+    }
+
+    public static boolean isDefusableBlockCharge(ItemEntity entity) {
+        return entity != null
+                && !entity.isRemoved()
+                && entity.getItem().is(ModItems.C4)
+                && (entity.isNoGravity() || thrownCharges.containsKey(entity.getUUID()));
+    }
+
+    public static ItemEntity findLookedAtCharge(ServerPlayer player, double range) {
+        if (player == null || !(player.level() instanceof ServerLevel level))
+            return null;
+        Vec3 start = player.getEyePosition();
+        Vec3 direction = player.getViewVector(1.0F).normalize();
+        Vec3 end = start.add(direction.scale(range));
+        double maxDistanceSq = range * range;
+
+        BlockHitResult blockHit = level.clip(new ClipContext(start, end,
+                ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, player));
+        if (blockHit.getType() == HitResult.Type.BLOCK) {
+            maxDistanceSq = Math.min(maxDistanceSq, start.distanceToSqr(blockHit.getLocation()) + 0.08D);
+        }
+
+        AABB searchBox = player.getBoundingBox().expandTowards(direction.scale(range)).inflate(0.45D);
+        EntityHitResult hit = ProjectileUtil.getEntityHitResult(player, start, end, searchBox,
+                entity -> entity instanceof ItemEntity item && isDefusableBlockCharge(item), maxDistanceSq);
+        return hit != null && hit.getEntity() instanceof ItemEntity item ? item : null;
+    }
+
+    public static boolean defuseBlockCharge(ServerPlayer defuser, ItemEntity entity) {
+        if (defuser == null || entity == null || entity.isRemoved() || !entity.getItem().is(ModItems.C4))
+            return false;
+        thrownCharges.remove(entity.getUUID());
+        Level level = entity.level();
+        Vec3 pos = entity.position();
+        entity.discard();
+        level.playSound(null, pos.x, pos.y, pos.z,
+                SoundEvents.TRIPWIRE_CLICK_OFF, SoundSource.PLAYERS, 0.9F, 1.2F);
+        level.playSound(null, pos.x, pos.y, pos.z,
+                SoundEvents.SHEEP_SHEAR, SoundSource.PLAYERS, 1.0F, 1.2F);
+        return true;
+    }
+
+    public static boolean misfireBlockCharge(ServerLevel level, ItemEntity entity, Player attacker) {
+        if (level == null || entity == null || entity.isRemoved() || !entity.getItem().is(ModItems.C4))
+            return false;
+        thrownCharges.remove(entity.getUUID());
+        Vec3 pos = entity.position();
+        entity.discard();
+        detonateAt(level, pos, attacker);
+        return true;
+    }
+
+    private static void registerVisibleThrownCharges(ServerLevel level, ServerPlayer owner) {
+        for (ItemEntity entity : level.getEntitiesOfClass(ItemEntity.class, owner.getBoundingBox().inflate(256.0D),
+                e -> e.getItem().is(ModItems.C4) && isOwnedBy(e, owner.getUUID()))) {
+            UUID hostId = stuckHostId(entity);
+            thrownCharges.putIfAbsent(entity.getUUID(),
+                    new ThrownCharge(owner.getUUID(), -1L, -1L, entity.position(),
+                            entity.isNoGravity() || hostId != null,
+                            placedAt(level, entity), true,
+                            hostId == null && entity.isNoGravity() ? entity.position() : null,
+                            hostId));
+        }
+    }
+
+    private static Map.Entry<UUID, ThrownCharge> newestUnarmedCharge(ServerLevel level, ServerPlayer player) {
+        Map.Entry<UUID, ThrownCharge> newest = null;
+        for (Map.Entry<UUID, ThrownCharge> entry : List.copyOf(thrownCharges.entrySet())) {
+            ThrownCharge charge = entry.getValue();
+            if (!player.getUUID().equals(charge.owner()))
+                continue;
+            ItemEntity entity = thrownChargeEntity(level, entry.getKey());
+            if (entity == null) {
+                thrownCharges.remove(entry.getKey());
+                continue;
+            }
+            if (charge.isArmed())
+                continue;
+            if (newest == null || charge.placedAt() > newest.getValue().placedAt()) {
+                newest = entry;
+            }
+        }
+        return newest;
+    }
+
+    private static long placedAt(ServerLevel level, ItemEntity entity) {
+        return Math.max(0L, SRE.getTicksFromGameStart() - Math.max(0, entity.tickCount));
+    }
+
+    public static void triggerRemoteDetonation(ServerPlayer player) {
+        if (player == null || !(player.level() instanceof ServerLevel level))
+            return;
+        registerVisibleThrownCharges(level, player);
+        long now = SRE.getTicksFromGameStart();
+        long detonationAt = now + 3L * 20L + 15L * 20L;
+        Map.Entry<UUID, ThrownCharge> target = newestUnarmedCharge(level, player);
+        if (target == null) {
+            player.displayClientMessage(Component.translatable("c4.no_thrown_charges"), true);
+            return;
+        }
+        ThrownCharge charge = target.getValue();
+        thrownCharges.put(target.getKey(), charge.armed(now, detonationAt));
+        level.playSound(null, player.blockPosition(), SoundEvents.LEVER_CLICK,
+                SoundSource.PLAYERS, 0.8F, 1.4F);
+        player.displayClientMessage(Component.translatable("c4.armed_one_charge"), true);
+    }
+
+    private static boolean hasArmedCharge(ServerLevel level, ServerPlayer player) {
+        for (Map.Entry<UUID, ThrownCharge> entry : List.copyOf(thrownCharges.entrySet())) {
+            ThrownCharge charge = entry.getValue();
+            if (!player.getUUID().equals(charge.owner()))
+                continue;
+            ItemEntity entity = thrownChargeEntity(level, entry.getKey());
+            if (entity == null) {
+                thrownCharges.remove(entry.getKey());
+                continue;
+            }
+            if (charge.isArmed())
+                return true;
+        }
+        return false;
+    }
+
+    private static void tick(ServerLevel level) {
+        if (level.dimension() != Level.OVERWORLD)
+            return;
+        if (!SREGameWorldComponent.getInstance(level).isRunning())
+            return;
+        C4BackComponent comp = C4BackComponent.KEY.getNullable(level);
+        if (comp == null)
+            return;
+        Map<UUID, Long> carriers = comp.getCarriers();
+        boolean hasThrown = !thrownCharges.isEmpty();
+        if (carriers.isEmpty() && !hasThrown)
+            return;
+        if (SREGameTimeComponent.KEY.get(level).isTimeFrozen()) {
+            return;
+        }
+        long now = SRE.getTicksFromGameStart();
+        MinecraftServer server = level.getServer();
+        List<UUID> expired = null;
+        List<UUID> dropOnly = null;
+
+        for (Map.Entry<UUID, Long> e : carriers.entrySet()) {
+            UUID id = e.getKey();
+            long detonationAt = e.getValue();
+            long remaining = detonationAt - now;
+
+            if (remaining <= 0L) {
+                if (expired == null)
+                    expired = new ArrayList<>();
+                expired.add(id);
+                continue;
+            }
+
+            ServerPlayer carrier = server.getPlayerList().getPlayer(id);
+            if (carrier == null || carrier.isRemoved())
+                continue;
+            // 死亡、旁观者（旁观模式下 isAlive() 仍为 true）或非正常存活状态时，
+            // 立即把 C4 从身上卸下并贴到最近的墙面上，避免旁观者继续携带 C4
+            if (!carrier.isAlive() || carrier.isSpectator() || !GameUtils.isPlayerAliveAndSurvival(carrier)) {
+                if (dropOnly == null)
+                    dropOnly = new ArrayList<>();
+                dropOnly.add(id);
+                continue;
+            }
+            maybeBeep(comp, carrier, remaining);
+        }
+
+        if (dropOnly != null) {
+            for (UUID carrierId : dropOnly) {
+                ServerPlayer carrier = server.getPlayerList().getPlayer(carrierId);
+                if (carrier != null && !carrier.isRemoved()) {
+                    dropCarrierCharge(carrier, comp);
+                }
+            }
+        }
+
+        if (expired != null) {
+            for (UUID carrierId : expired) {
+                ServerPlayer carrier = server.getPlayerList().getPlayer(carrierId);
+                UUID planter = comp.getPlanter(carrierId);
+                ServerPlayer attacker = planter != null ? server.getPlayerList().getPlayer(planter) : null;
+                comp.removeC4(carrierId);
+                if (carrier == null || carrier.isRemoved())
+                    continue;
+                if (!(carrier.level() instanceof ServerLevel currentLevel))
+                    continue;
+                detonateAt(currentLevel, carrier.position(), attacker != null ? attacker : carrier);
+            }
+        }
+
+        tickThrownCharges(level, now);
+    }
+
+    private static void tickThrownCharges(ServerLevel level, long now) {
+        for (Map.Entry<UUID, ThrownCharge> entry : List.copyOf(thrownCharges.entrySet())) {
+            ItemEntity entity = thrownChargeEntity(level, entry.getKey());
+            if (entity == null) {
+                thrownCharges.remove(entry.getKey());
+                continue;
+            }
+            ThrownCharge charge = entry.getValue();
+            if (tryAttachThrownToPlayer(level, entity, charge)) {
+                thrownCharges.remove(entry.getKey());
+                continue;
+            }
+            charge = updateStickyState(level, entity, charge);
+            thrownCharges.put(entry.getKey(), charge);
+            if (!charge.isArmed())
+                continue;
+            long remaining = charge.detonationAt() - now;
+            if (remaining <= 0L) {
+                thrownCharges.remove(entry.getKey());
+                Vec3 pos = entity.position();
+                entity.discard();
+                ServerPlayer owner = level.getServer().getPlayerList().getPlayer(charge.owner());
+                detonateAt(level, pos, owner);
+            } else {
+                maybeBeepThrown(level, entity, charge, remaining);
+            }
+        }
+    }
+
+    private static boolean tryAttachThrownToPlayer(ServerLevel level, ItemEntity entity, ThrownCharge charge) {
+        if (!charge.canAttach())
+            return false;
+        if (charge.stuck() && !charge.isStuckToEntity())
+            return false;
+        Vec3 previous = charge.previousPos() != null ? charge.previousPos() : entity.position();
+        Vec3 current = entity.position();
+        Vec3 delta = current.subtract(previous);
+        if (delta.lengthSqr() <= 1.0E-7D)
+            return false;
+        EntityHitResult hit = ProjectileUtil.getEntityHitResult(
+                entity,
+                previous,
+                current,
+                entity.getBoundingBox().expandTowards(delta).inflate(0.7D),
+                target -> canThrownC4AttachTo(charge, target),
+                delta.lengthSqr() + 1.0D);
+        if (hit == null || !(hit.getEntity() instanceof ServerPlayer target))
+            return false;
+
+        C4BackComponent comp = C4BackComponent.KEY.getNullable(level);
+        if (comp == null || comp.hasC4(target.getUUID()))
+            return false;
+        if (!comp.addC4(target.getUUID(), charge.owner()))
+            return false;
+        if (entity.isPassenger()) {
+            entity.stopRiding();
+        }
+        entity.discard();
+        level.playSound(null, target.getX(), target.getY(), target.getZ(),
+                SoundEvents.TRIPWIRE_CLICK_ON, SoundSource.PLAYERS, 0.8F, 1.3F);
+        target.displayClientMessage(Component.translatable("c4.you_have_c4"), true);
+        return true;
+    }
+
+    private static boolean canThrownC4AttachTo(ThrownCharge charge, Entity target) {
+        return target instanceof ServerPlayer player
+                && !player.getUUID().equals(charge.owner())
+                && !player.isSpectator()
+                && player.canBeHitByProjectile();
+    }
+
+    private static ItemEntity thrownChargeEntity(ServerLevel level, UUID entityId) {
+        if (level == null || entityId == null)
+            return null;
+        Entity entity = level.getEntity(entityId);
+        if (!(entity instanceof ItemEntity itemEntity) || itemEntity.isRemoved()
+                || !itemEntity.getItem().is(ModItems.C4)) {
+            return null;
+        }
+        return itemEntity;
+    }
+
+    private static boolean isOwnedBy(ItemEntity entity, UUID ownerId) {
+        if (entity == null || ownerId == null)
+            return false;
+        Entity owner = entity.getOwner();
+        return owner != null && ownerId.equals(owner.getUUID());
+    }
+
+    private static ThrownCharge updateStickyState(ServerLevel level, ItemEntity entity, ThrownCharge charge) {
+        if (charge.isStuckToEntity()) {
+            return followAttachedEntity(level, entity, charge);
+        }
+        if (charge.stuck()) {
+            keepStuck(entity, charge.stuckPos());
+            return charge.withPreviousPos(entity.position());
+        }
+        ThrownCharge attachedToBird = tryAttachToBird(level, entity, charge);
+        if (attachedToBird != null) {
+            return attachedToBird;
+        }
+        Vec3 previous = charge.previousPos() != null ? charge.previousPos() : entity.position();
+        Vec3 current = entity.position();
+        BlockHitResult hit = findSurfaceHit(level, entity, previous, current);
+        if (hit != null) {
+            stickToSurface(entity, hit.getLocation(), hit.getDirection());
+            return charge.stuck(entity.position(), entity.position());
+        }
+        Direction fallbackSide = fallbackCollisionSide(level, entity, previous, current);
+        if (fallbackSide != null) {
+            stickToSurface(entity, current, fallbackSide);
+            return charge.stuck(entity.position(), entity.position());
+        }
+        return charge.withPreviousPos(current);
+    }
+
+    private static ThrownCharge tryAttachToBird(ServerLevel level, ItemEntity entity, ThrownCharge charge) {
+        MechanicalBirdEntity bird = findAttachableBird(level, entity, charge);
+        if (bird == null) {
+            return null;
+        }
+        return attachToBird(entity, bird, charge);
+    }
+
+    private static MechanicalBirdEntity findAttachableBird(ServerLevel level, ItemEntity entity, ThrownCharge charge) {
+        Vec3 previous = charge.previousPos() != null ? charge.previousPos() : entity.position();
+        Vec3 current = entity.position();
+        Vec3 delta = current.subtract(previous);
+        if (delta.lengthSqr() > 1.0E-7D) {
+            EntityHitResult hit = ProjectileUtil.getEntityHitResult(
+                    entity,
+                    previous,
+                    current,
+                    entity.getBoundingBox().expandTowards(delta).inflate(0.85D),
+                    C4Detonation::isBirdAttachable,
+                    delta.lengthSqr() + 1.5D);
+            if (hit != null && hit.getEntity() instanceof MechanicalBirdEntity bird) {
+                return bird;
+            }
+        }
+        AABB search = entity.getBoundingBox().inflate(0.85D);
+        MechanicalBirdEntity nearest = null;
+        double nearestDist = Double.MAX_VALUE;
+        for (MechanicalBirdEntity bird : level.getEntitiesOfClass(MechanicalBirdEntity.class, search,
+                C4Detonation::isBirdAttachable)) {
+            double dist = entity.distanceToSqr(bird);
+            if (dist < nearestDist) {
+                nearestDist = dist;
+                nearest = bird;
+            }
+        }
+        return nearest;
+    }
+
+    private static boolean isBirdAttachable(Entity target) {
+        return target instanceof MechanicalBirdEntity bird
+                && !bird.isRemoved()
+                && bird.isAlive();
+    }
+
+    private static ThrownCharge attachToBird(ItemEntity entity, MechanicalBirdEntity bird, ThrownCharge charge) {
+        prepareAttachedItem(entity);
+        if (!entity.startRiding(bird, true)) {
+            entity.setPos(bird.getX(), bird.getY() + birdStickHeight(bird), bird.getZ());
+        }
+        entity.level().playSound(null, bird.getX(), bird.getY(), bird.getZ(),
+                SoundEvents.TRIPWIRE_CLICK_ON, SoundSource.PLAYERS, 0.8F, 1.3F);
+        return charge.stuckTo(bird.getUUID(), entity.position());
+    }
+
+    private static ThrownCharge followAttachedEntity(ServerLevel level, ItemEntity entity, ThrownCharge charge) {
+        Entity host = level.getEntity(charge.stuckToEntity());
+        if (!(host instanceof MechanicalBirdEntity bird) || !isBirdAttachable(bird)) {
+            detachFromHost(entity);
+            return charge.released(entity.position());
+        }
+        if (!entity.isPassenger() || entity.getVehicle() != bird) {
+            if (!entity.startRiding(bird, true)) {
+                entity.setPos(bird.getX(), bird.getY() + birdStickHeight(bird), bird.getZ());
+                entity.hasImpulse = true;
+            }
+        }
+        entity.setDeltaMovement(Vec3.ZERO);
+        entity.setNoGravity(true);
+        entity.setPickUpDelay(32767);
+        return charge.withPreviousPos(entity.position());
+    }
+
+    private static void prepareAttachedItem(ItemEntity entity) {
+        entity.setDeltaMovement(Vec3.ZERO);
+        entity.setNoGravity(true);
+        entity.setPickUpDelay(32767);
+        entity.hasImpulse = true;
+    }
+
+    private static void detachFromHost(ItemEntity entity) {
+        if (entity.isPassenger()) {
+            entity.stopRiding();
+        }
+        entity.setNoGravity(false);
+        entity.setDeltaMovement(Vec3.ZERO);
+        entity.hasImpulse = true;
+    }
+
+    private static double birdStickHeight(MechanicalBirdEntity bird) {
+        return bird.getBbHeight() * 0.35D;
+    }
+
+    private static UUID stuckHostId(ItemEntity entity) {
+        return entity.getVehicle() instanceof MechanicalBirdEntity bird ? bird.getUUID() : null;
+    }
+
+    private static BlockHitResult findSurfaceHit(ServerLevel level, ItemEntity entity, Vec3 previous, Vec3 current) {
+        if (previous.distanceToSqr(current) <= 1.0E-7D)
+            return null;
+        BlockHitResult hit = level.clip(new ClipContext(previous, current,
+                ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, entity));
+        if (hit.getType() != HitResult.Type.BLOCK)
+            return null;
+        if (level.getBlockState(hit.getBlockPos()).isAir())
+            return null;
+        return hit;
+    }
+
+    private static Direction fallbackCollisionSide(ServerLevel level, ItemEntity entity, Vec3 previous, Vec3 current) {
+        Vec3 delta = current.subtract(previous);
+        Direction side = null;
+        if (entity.onGround()) {
+            side = Direction.UP;
+        } else if (entity.verticalCollision) {
+            side = delta.y > 0.0D ? Direction.DOWN : Direction.UP;
+        } else if (entity.horizontalCollision) {
+            if (Math.abs(delta.x) > Math.abs(delta.z)) {
+                side = delta.x > 0.0D ? Direction.WEST : Direction.EAST;
+            } else {
+                side = delta.z > 0.0D ? Direction.NORTH : Direction.SOUTH;
+            }
+        }
+        // 小鸟等可碰撞实体也会把 ItemEntity 的 collision 标志置位。
+        // 没有真实方块时绝不能当成贴墙，否则 C4 会钉在半空。
+        if (side == null || !hasSolidSurfaceNear(level, entity, current, side)) {
+            return null;
+        }
+        return side;
+    }
+
+    private static boolean hasSolidSurfaceNear(ServerLevel level, ItemEntity entity, Vec3 pos, Direction side) {
+        Vec3 intoBlock = Vec3.atLowerCornerOf(side.getOpposite().getNormal()).scale(0.8D);
+        BlockHitResult hit = level.clip(new ClipContext(pos, pos.add(intoBlock),
+                ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, entity));
+        return hit.getType() == HitResult.Type.BLOCK && !level.getBlockState(hit.getBlockPos()).isAir();
+    }
+
+    private static void stickToSurface(ItemEntity entity, Vec3 surfacePos, Direction side) {
+        Vec3 normal = Vec3.atLowerCornerOf(side.getNormal());
+        Vec3 plantedPos = surfacePos.add(normal.scale(SURFACE_OFFSET));
+        entity.setPos(plantedPos);
+        entity.setDeltaMovement(Vec3.ZERO);
+        entity.setNoGravity(true);
+        entity.setPickUpDelay(32767);
+        entity.hasImpulse = true;
+        entity.setYRot(yawForSide(side));
+        entity.setXRot(pitchForSide(side));
+    }
+
+    private static void keepStuck(ItemEntity entity, Vec3 stuckPos) {
+        // 位置锁定：贴墙的 C4 位置被钉死，任何物理/碰撞推挤都会在下个 tick 被拉回，
+        // 避免出现“抽搐/反复移动”。仅在位置或速度偏离时才写回，避免每 tick 触发 hasImpulse 导致持续同步。
+        if (stuckPos != null && entity.position().distanceToSqr(stuckPos) > 1.0E-7D) {
+            entity.setPos(stuckPos);
+        }
+        if (entity.getDeltaMovement().lengthSqr() > 1.0E-7D) {
+            entity.setDeltaMovement(Vec3.ZERO);
+        }
+        entity.setNoGravity(true);
+        entity.setPickUpDelay(32767);
+    }
+
+    private static float yawForSide(Direction side) {
+        return switch (side) {
+            case NORTH -> 180.0F;
+            case EAST -> -90.0F;
+            case WEST -> 90.0F;
+            default -> 0.0F;
+        };
+    }
+
+    private static float pitchForSide(Direction side) {
+        return switch (side) {
+            case UP -> -90.0F;
+            case DOWN -> 90.0F;
+            default -> 0.0F;
+        };
+    }
+
+    private static long beepInterval(double progress) {
+        if (progress < 0.50D)
+            return 20;
+        if (progress < 0.75D)
+            return 10;
+        if (progress < 0.90D)
+            return 5;
+        return 2;
+    }
+
+    private static void maybeBeep(C4BackComponent comp, ServerPlayer carrier, long remaining) {
+        long ticksSincePlant = comp.ticksSincePlant(carrier.getUUID());
+        long fuseTicks = ticksSincePlant + remaining;
+        long configuredDelay = 3L * 20L;
+        long firstBeepDelay = Math.min(configuredDelay, Math.max(0L, fuseTicks - 1L));
+        long audibleTicks = Math.max(1L, fuseTicks - firstBeepDelay);
+        long ticksSinceFirstBeep = ticksSincePlant - firstBeepDelay;
+        if (ticksSinceFirstBeep < 0L)
+            return;
+
+        double progress = Math.min(1.0D, Math.max(0.0D, ticksSinceFirstBeep / (double) audibleTicks));
+        long interval = beepInterval(progress);
+        if (ticksSinceFirstBeep % interval != 0L)
+            return;
+        if (SREGameTimeComponent.KEY.get(carrier.level()).isTimeFrozen()) {
+            return;
+        }
+        if (!(carrier.level() instanceof ServerLevel level))
+            return;
+
+        float urgency = (float) progress;
+        float pitch = 1.5F + urgency * 0.5F;
+        float volume = 0.5F + urgency * 0.3F;
+
+        level.playSound(
+                null,
+                carrier.blockPosition(),
+                NRSounds.C4_BEEP,
+                SoundSource.PLAYERS,
+                volume,
+                pitch);
+    }
+
+    private static void maybeBeepThrown(ServerLevel level, ItemEntity entity, ThrownCharge charge, long remaining) {
+        long fuseTicks = Math.max(1L, charge.detonationAt() - charge.armedAt());
+        long configuredDelay = 3L * 20L;
+        long firstBeepDelay = Math.min(configuredDelay, Math.max(0L, fuseTicks - 1L));
+        long ticksSinceFirstBeep = SRE.getTicksFromGameStart() - charge.armedAt() - firstBeepDelay;
+        if (ticksSinceFirstBeep < 0L)
+            return;
+
+        if (SREGameTimeComponent.KEY.get(level).isTimeFrozen()) {
+            return;
+        }
+        long audibleTicks = Math.max(1L, fuseTicks - firstBeepDelay);
+        double progress = Math.min(1.0D, Math.max(0.0D, ticksSinceFirstBeep / (double) audibleTicks));
+        long interval = beepInterval(progress);
+        if (ticksSinceFirstBeep % interval != 0L)
+            return;
+
+        float urgency = (float) progress;
+        level.playSound(null, entity.blockPosition(), NRSounds.C4_BEEP,
+                SoundSource.PLAYERS, 0.5F + urgency * 0.3F, 1.5F + urgency * 0.5F);
+    }
+
+    public static void detonateAt(ServerLevel level, Player carrier, Player attacker) {
+        detonateAt(level, carrier.position(), attacker);
+    }
+
+    public static void detonateAt(ServerLevel level, Vec3 blastCenter, Player attacker) {
+        double x = blastCenter.x;
+        double y = blastCenter.y + 0.1D;
+        double z = blastCenter.z;
+        BlockPos pos = BlockPos.containing(blastCenter);
+
+        level.playSound(null, x, y, z, SoundEvents.GENERIC_EXPLODE, SoundSource.BLOCKS,
+                5.0F, 1.0F + (level.getRandom().nextFloat() * 0.1F) - 0.05F);
+
+        level.sendParticles(ParticleTypes.EXPLOSION_EMITTER, x, y, z, 1, 0.0, 0.0, 0.0, 0.0);
+        level.sendParticles(ParticleTypes.EXPLOSION_EMITTER, x, y, z, 100, 0.0, 0.0, 0.0, 0.2);
+        level.sendParticles(ParticleTypes.FLAME, x, y, z, 50, 0.3D, 0.3D, 0.3D, 0.1D);
+
+        // 使用空间视线模拟（与手榴弹共享的精确判定逻辑）
+        List<ServerPlayer> victims = level.players().stream()
+                .filter(p -> p.isAlive()
+                        && !p.isSpectator()
+                        && !p.isCreative()
+                        && p.distanceToSqr(blastCenter) <= BLAST_RADIUS * BLAST_RADIUS
+                        && hasExplosionLineOfSight(level, blastCenter, p))
+                .toList();
+        for (ServerPlayer victim : victims) {
+            // 记录炸弹引爆事件（低频关键事件）
+            io.wifi.starrailexpress.SRE.REPLAY_MANAGER.recordBombDetonate(
+                    attacker != null ? attacker.getUUID() : null, victim.getUUID());
+            C4BackComponent.getInstance(victim).removeC4(victim.getUUID());
+            GameUtils.killPlayer(victim, true,
+                    attacker instanceof Player p ? p : null,
+                    Noellesroles.id("c4_explosion"));
+        }
+    }
+
+    /**
+     * C4 爆炸视线检测 — 使用与手榴弹相同的空间视线模拟引擎。
+     * <p>
+     * 从爆炸中心到目标的眼睛和身体中心两个位置做双射线检测，
+     * 任一畅通即判定可见。如需更精确的空间遮挡率，可改用
+     * {@link GrenadeEntity#computeSpatialVisibility}。
+     */
+    private static boolean hasExplosionLineOfSight(ServerLevel level, Vec3 blastCenter, ServerPlayer victim) {
+        if (GrenadeEntity.hasExplosionLineOfSight(level, blastCenter, victim))
+            return true;
+        Vec3 center = blastCenter.add(0.0D, 0.35D, 0.0D);
+        Vec3 eye = victim.getEyePosition();
+        Vec3 body = victim.position().add(0.0D, victim.getBbHeight() * 0.5D, 0.0D);
+        return canPierceAtMostOneWallBlock(level, center, eye, victim)
+                || canPierceAtMostOneWallBlock(level, center, body, victim);
+    }
+
+    private static boolean canPierceAtMostOneWallBlock(ServerLevel level, Vec3 from, Vec3 to, Entity context) {
+        double distance = from.distanceTo(to);
+        if (distance <= 1.0E-7D)
+            return true;
+        Vec3 direction = to.subtract(from).scale(1.0D / distance);
+        int steps = Math.max(1, (int) Math.ceil(distance / WALL_PIERCE_STEP));
+        Set<BlockPos> piercedBlocks = new HashSet<>();
+
+        for (int i = 1; i < steps; i++) {
+            Vec3 sample = from.add(direction.scale(distance * i / steps));
+            BlockPos pos = BlockPos.containing(sample);
+            if (!isBlockingExplosion(level, pos, context))
+                continue;
+            piercedBlocks.add(pos.immutable());
+            if (piercedBlocks.size() > MAX_PIERCED_WALL_BLOCKS)
+                return false;
+        }
+
+        return true;
+    }
+
+    private static boolean isBlockingExplosion(ServerLevel level, BlockPos pos, Entity context) {
+        var state = level.getBlockState(pos);
+        return !state.isAir()
+                && !state.getCollisionShape(level, pos).isEmpty();
+    }
+
+    private static void afterDeath(LivingEntity entity, DamageSource source) {
+        if (!(entity instanceof ServerPlayer player))
+            return;
+        C4BackComponent comp = C4BackComponent.KEY.getNullable(player.level());
+        if (comp != null)
+            dropCarrierCharge(player, comp);
+    }
+
+    private static void dropCarrierCharge(ServerPlayer carrier, C4BackComponent comp) {
+        if (carrier == null || comp == null || !(carrier.level() instanceof ServerLevel level))
+            return;
+        Long detonationAt = comp.getCarriers().get(carrier.getUUID());
+        if (detonationAt == null)
+            return;
+
+        UUID planter = comp.getPlanter(carrier.getUUID());
+        long plantedAt = SRE.getTicksFromGameStart() - comp.ticksSincePlant(carrier.getUUID());
+
+        // 将 C4 直接贴在距离最近的墙面上（优先脚下的方块），而不是原地掉落
+        SurfaceStick stick = findNearestSurface(level, carrier.position(), carrier);
+        Vec3 pos = stick != null ? stick.pos() : carrier.position().add(0.0D, 0.2D, 0.0D);
+        Direction side = stick != null ? stick.side() : Direction.UP;
+
+        ItemEntity droppedCharge = new ItemEntity(level, pos.x, pos.y, pos.z,
+                ModItems.C4.getDefaultInstance());
+        droppedCharge.setPickUpDelay(32767);
+        droppedCharge.setUnlimitedLifetime();
+        droppedCharge.setNoGravity(true);
+        droppedCharge.setDeltaMovement(Vec3.ZERO);
+        droppedCharge.hasImpulse = true;
+        droppedCharge.setYRot(yawForSide(side));
+        droppedCharge.setXRot(pitchForSide(side));
+        level.addFreshEntity(droppedCharge);
+
+        UUID owner = planter != null ? planter : carrier.getUUID();
+        thrownCharges.put(droppedCharge.getUUID(),
+                new ThrownCharge(owner, plantedAt, detonationAt, droppedCharge.position(), true,
+                        SRE.getTicksFromGameStart(), false, pos, null));
+        comp.removeC4(carrier.getUUID());
+    }
+
+    private record SurfaceStick(Vec3 pos, Direction side) {
+    }
+
+    /**
+     * 寻找离给定位置最近的贴附表面，优先玩家脚下的方块。
+     * 找不到任何表面时返回 null。
+     * <p>
+     * 注意：ClipContext 的碰撞上下文不能传 null，否则构造时
+     * {@code CollisionContext.of(null)} 会触发 NPE，因此这里必须传入实体。
+     */
+    private static SurfaceStick findNearestSurface(ServerLevel level, Vec3 from, Entity context) {
+        // 优先检测脚下的方块
+        BlockHitResult downHit = level.clip(new ClipContext(from, from.add(0.0D, -4.0D, 0.0D),
+                ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, context));
+        if (downHit.getType() == HitResult.Type.BLOCK) {
+            Vec3 normal = Vec3.atLowerCornerOf(downHit.getDirection().getNormal());
+            return new SurfaceStick(downHit.getLocation().add(normal.scale(SURFACE_OFFSET)),
+                    downHit.getDirection());
+        }
+
+        // 向六个方向射线检测，取最近的墙面
+        double nearestDistSq = Double.MAX_VALUE;
+        Vec3 nearestHit = null;
+        Direction nearestSide = null;
+        Vec3 start = from.add(0.0D, 0.1D, 0.0D);
+        for (Direction dir : Direction.values()) {
+            Vec3 end = start.add(dir.getStepX() * 16.0D, dir.getStepY() * 16.0D, dir.getStepZ() * 16.0D);
+            BlockHitResult hit = level.clip(new ClipContext(start, end,
+                    ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, context));
+            if (hit.getType() != HitResult.Type.BLOCK)
+                continue;
+            double distSq = start.distanceToSqr(hit.getLocation());
+            if (distSq < nearestDistSq) {
+                nearestDistSq = distSq;
+                nearestHit = hit.getLocation();
+                nearestSide = hit.getDirection();
+            }
+        }
+        if (nearestHit == null)
+            return null;
+        Vec3 normal = Vec3.atLowerCornerOf(nearestSide.getNormal());
+        return new SurfaceStick(nearestHit.add(normal.scale(SURFACE_OFFSET)), nearestSide);
+    }
+
+    private static void clearThrownCharges() {
+        thrownCharges.clear();
+    }
+
+    public static TimeState snapshotForTimeRewind() {
+        Map<UUID, TimeState.Entry> entries = new ConcurrentHashMap<>();
+        for (Map.Entry<UUID, ThrownCharge> entry : thrownCharges.entrySet()) {
+            entries.put(entry.getKey(), TimeState.Entry.from(entry.getValue()));
+        }
+        return new TimeState(Map.copyOf(entries));
+    }
+
+    public static void restoreForTimeRewind(TimeState state) {
+        thrownCharges.clear();
+        if (state == null)
+            return;
+        for (Map.Entry<UUID, TimeState.Entry> entry : state.thrownCharges().entrySet()) {
+            thrownCharges.put(entry.getKey(), entry.getValue().toThrownCharge());
+        }
+    }
+
+    private record ThrownCharge(UUID owner, long armedAt, long detonationAt, Vec3 previousPos, boolean stuck,
+            long placedAt, boolean canAttach, Vec3 stuckPos, UUID stuckToEntity) {
+        private boolean isArmed() {
+            return armedAt >= 0L && detonationAt >= 0L;
+        }
+
+        private boolean isStuckToEntity() {
+            return stuckToEntity != null;
+        }
+
+        private ThrownCharge armed(long armedAt, long detonationAt) {
+            return new ThrownCharge(owner, armedAt, detonationAt, previousPos, stuck, placedAt, canAttach, stuckPos,
+                    stuckToEntity);
+        }
+
+        private ThrownCharge withPreviousPos(Vec3 previousPos) {
+            return new ThrownCharge(owner, armedAt, detonationAt, previousPos, stuck, placedAt, canAttach, stuckPos,
+                    stuckToEntity);
+        }
+
+        private ThrownCharge stuck(Vec3 previousPos, Vec3 stuckPos) {
+            return new ThrownCharge(owner, armedAt, detonationAt, previousPos, true, placedAt, canAttach, stuckPos,
+                    null);
+        }
+
+        private ThrownCharge stuckTo(UUID host, Vec3 previousPos) {
+            return new ThrownCharge(owner, armedAt, detonationAt, previousPos, true, placedAt, canAttach, previousPos,
+                    host);
+        }
+
+        private ThrownCharge released(Vec3 previousPos) {
+            return new ThrownCharge(owner, armedAt, detonationAt, previousPos, false, placedAt, canAttach, null, null);
+        }
+    }
+
+    public record TimeState(Map<UUID, Entry> thrownCharges) {
+        public record Entry(UUID owner, long armedAt, long detonationAt, Vec3 previousPos,
+                boolean stuck, long placedAt, boolean canAttach, Vec3 stuckPos, UUID stuckToEntity) {
+            private static Entry from(ThrownCharge charge) {
+                return new Entry(charge.owner(), charge.armedAt(), charge.detonationAt(),
+                        charge.previousPos(), charge.stuck(), charge.placedAt(), charge.canAttach(),
+                        charge.stuckPos(), charge.stuckToEntity());
+            }
+
+            private ThrownCharge toThrownCharge() {
+                return new ThrownCharge(owner, armedAt, detonationAt, previousPos, stuck, placedAt, canAttach,
+                        stuckPos, stuckToEntity);
+            }
+        }
+    }
+}

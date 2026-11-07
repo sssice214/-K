@@ -1,0 +1,788 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.game;
+
+import com.google.common.collect.Lists;
+import io.wifi.starrailexpress.SRE;
+import io.wifi.starrailexpress.SREConfig;
+import io.wifi.starrailexpress.api.GameMode;
+import io.wifi.starrailexpress.cca.AreasWorldComponent;
+import io.wifi.starrailexpress.cca.SREWorldBlackoutComponent;
+import io.wifi.starrailexpress.content.block.*;
+import io.wifi.starrailexpress.content.block.api.AutoResetBlockInterface;
+import io.wifi.starrailexpress.content.block.api.LightBlockInterface;
+import io.wifi.starrailexpress.customblock.CustomBlock;
+import io.wifi.starrailexpress.customblock.CustomBlockLoader;
+import io.wifi.starrailexpress.content.block_entity.*;
+import io.wifi.starrailexpress.game.GameUtils.BlockEntityInfo;
+import net.minecraft.ChatFormatting;
+import net.minecraft.core.BlockPos;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.Clearable;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.LecternBlock;
+import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.entity.LecternBlockEntity;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.pattern.BlockInWorld;
+import net.minecraft.world.level.block.state.properties.BedPart;
+import net.minecraft.world.level.block.state.properties.DoubleBlockHalf;
+import net.minecraft.world.level.levelgen.structure.BoundingBox;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import org.agmas.noellesroles.utils.MapScannerManager;
+
+public class ServerTaskInfoClasses {
+    public static abstract class ServerTaskInfo {
+        public boolean finished = false;
+        public boolean cancelled = false;
+
+        /**
+         * Called every tick.
+         * 
+         * @return true for task finished.
+         */
+        public boolean onTick(MinecraftServer server) {
+            return true;
+        }
+
+        /**
+         * Called on task finished.
+         */
+        public void onFinished() {
+
+        }
+    }
+
+    public static class FullTrainResetTask extends ServerTaskInfo {
+        int progress = 0;
+        private AreasWorldComponent area;
+        int count = 0;
+        private ServerLevel serverWorld;
+        public boolean shouldStartGame = true;
+        private GameMode gameMode;
+        private int time;
+        private int MAX_RESET_PER = 1; // 每 tick 处理的 chunk 数，每块已约 5000
+        BlockPos backupMinPos;
+        BlockPos backupMaxPos;
+        BoundingBox backupTrainBox;
+        BlockPos trainMinPos;
+        BlockPos trainMaxPos;
+        BoundingBox trainBox;
+        int totalProgress = 0;
+        BlockPos offsetBlockPos;
+        List<BoundingBox> resetChunks; // ← 新增：预计算的分块列表
+
+        // ── 构造器 ─────────────────────────────────────────────────────────────
+        public FullTrainResetTask(AreasWorldComponent areas, ServerLevel world, GameMode gameMode, int gameStartTime,
+                boolean shouldStartGame) {
+            this(areas, world, gameMode, gameStartTime);
+            this.shouldStartGame = shouldStartGame;
+        }
+
+        public FullTrainResetTask(AreasWorldComponent areas, ServerLevel world, GameMode gameMode, int gameStartTime) {
+            if (SREConfig.instance().verboseTrainResetLogs) {
+                SRE.LOGGER.info("Resetting train " + areas.mapName);
+            }
+            GameUtils.resetPoints.clear();
+            backupMinPos = BlockPos.containing(areas.getResetTemplateArea().getMinPosition());
+            backupMaxPos = BlockPos.containing(areas.getResetTemplateArea().getMaxPosition());
+            backupTrainBox = BoundingBox.fromCorners(backupMinPos, backupMaxPos);
+            trainMinPos = BlockPos.containing(areas.getResetPasteArea().getMinPosition());
+            trainMaxPos = trainMinPos.offset(backupTrainBox.getLength());
+            trainBox = BoundingBox.fromCorners(trainMinPos, trainMaxPos);
+            offsetBlockPos = new BlockPos(
+                    trainBox.minX() - backupTrainBox.minX(), trainBox.minY() - backupTrainBox.minY(),
+                    trainBox.minZ() - backupTrainBox.minZ());
+
+            // ── 预计算三维分块（替换原来的 MAX_RESET_PER 逻辑）──────────────
+            resetChunks = buildChunks(backupTrainBox, 5000);
+            this.totalProgress = resetChunks.size();
+            // MAX_RESET_PER 保留为 1：每块已接近 5000，通常无需一次处理多块
+            // 若区域极小可自动合并（buildChunks 保证至少 1 块）
+
+            this.area = areas;
+            this.progress = 0;
+            this.serverWorld = world;
+            this.gameMode = gameMode;
+            this.time = gameStartTime;
+        }
+
+        // ── 预计算三维分块 ──────────────────────────────────────────────────
+        private static List<BoundingBox> buildChunks(BoundingBox box, int target) {
+            List<BoundingBox> chunks = new ArrayList<>();
+
+            int xLen = box.maxX() - box.minX() + 1;
+            int yLen = box.maxY() - box.minY() + 1;
+            int zLen = box.maxZ() - box.minZ() + 1;
+
+            // 按体积比例计算各轴 chunk 尺寸，使每块体积 ≈ target
+            double scale = Math.cbrt((double) target / ((double) xLen * yLen * zLen));
+            int cx = Math.max(1, Math.min(xLen, (int) Math.ceil(xLen * scale)));
+            int cy = Math.max(1, Math.min(yLen, (int) Math.ceil(yLen * scale)));
+            int cz = Math.max(1, Math.min(zLen, (int) Math.ceil(zLen * scale)));
+
+            // 从 maxY 到 minY（保持原来从顶向下的顺序）
+            for (int y = box.maxY(); y >= box.minY(); y -= cy) {
+                int yMin = Math.max(box.minY(), y - cy + 1);
+                for (int x = box.minX(); x <= box.maxX(); x += cx) {
+                    int xMax = Math.min(box.maxX(), x + cx - 1);
+                    for (int z = box.minZ(); z <= box.maxZ(); z += cz) {
+                        int zMax = Math.min(box.maxZ(), z + cz - 1);
+                        chunks.add(BoundingBox.fromCorners(
+                                new BlockPos(x, yMin, z),
+                                new BlockPos(xMax, y, zMax)));
+                    }
+                }
+            }
+            return chunks;
+        }
+
+        // ── resetBlock：按 chunk 索引推进 ──────────────────────────────────
+        public void resetBlock() {
+            for (int i = 0; i < MAX_RESET_PER && this.progress < this.totalProgress; i++, this.progress++) {
+                BoundingBox chunk = resetChunks.get(this.progress);
+
+                BlockCopyUtils.copyLayer(serverWorld, chunk, offsetBlockPos);
+                // 特殊方块扫描：加 Y 轴循环，其余结构不变
+                for (int y = chunk.minY(); y <= chunk.maxY(); y++) { // ← 新增 Y 循环
+                    for (int k = chunk.minZ(); k <= chunk.maxZ(); k++) {
+                        for (int m = chunk.minX(); m <= chunk.maxX(); m++) {
+                            BlockPos fromPos = new BlockPos(m, y, k);
+
+                            BlockPos targetPos = fromPos.offset(offsetBlockPos);
+
+                            BlockInWorld cachedBlockPosition = new BlockInWorld(serverWorld, fromPos, true);
+                            BlockState blockState = cachedBlockPosition.getState();
+
+                            if (blockState.getBlock() instanceof LockableButtonBlock) {
+                                GameUtils.resetPoints.add(targetPos);
+                            } else if (blockState.getBlock() instanceof SmallDoorBlock) {
+                                GameUtils.resetPoints.add(targetPos);
+                            } else if (blockState.getBlock() instanceof ToiletBlock) {
+                                GameUtils.resetPoints.add(targetPos);
+                            } else if (blockState.getBlock() instanceof TrimmedBedBlock) {
+                                if (blockState.getValue(TrimmedBedBlock.PART).equals(BedPart.HEAD)) {
+                                    GameUtils.resetPoints.add(targetPos);
+                                }
+                            } else if (blockState.getBlock() instanceof FoodPlatterBlock) {
+                                GameUtils.resetPoints.add(targetPos);
+                            } else if (blockState.getBlock() instanceof LecternBlock) {
+                                if (serverWorld.getBlockEntity(targetPos) instanceof LecternBlockEntity) {
+                                    GameUtils.resetPoints.add(targetPos);
+                                }
+                            } else if (blockState.getBlock() instanceof SprinklerBlock) {
+                                GameUtils.resetPoints.add(targetPos);
+                            } else if (blockState.getBlock() instanceof LightBlockInterface) {
+                                GameUtils.resetPoints.add(targetPos);
+                            } else if (blockState.getBlock() instanceof VentHatchBlock) {
+                                GameUtils.resetPoints.add(targetPos);
+                            } else if (blockState.getBlock() instanceof AutoResetBlockInterface) {
+                                GameUtils.resetPoints.add(targetPos);
+                            } else if (blockState.getBlock() instanceof CustomBlock
+                                    && CustomBlockLoader.isBlackoutAffected(serverWorld, targetPos)) {
+                                // 自定义方块勾了「受关灯影响」时才登记（关灯事件按这份点位表工作）
+                                GameUtils.resetPoints.add(targetPos);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── onTick 不变 ────────────────────────────────────────────────────
+        @Override
+        public boolean onTick(MinecraftServer server) {
+            count++;
+
+            if (area.areasSettings.noReset) {
+                if (SREConfig.instance().verboseTrainResetLogs) {
+                    SRE.LOGGER.info("NO RESET MAP!");
+                }
+                return true;
+            }
+            if (this.progress >= this.totalProgress) {
+                return true;
+            }
+
+            if (count % 10 == 1) {
+                if (SREConfig.instance().verboseTrainResetLogs) {
+                    SRE.LOGGER.info("RESETING MAP: {}/{}", this.progress, this.totalProgress);
+                }
+                this.serverWorld.players().forEach((p) -> {
+                    p.displayClientMessage(
+                            Component
+                                    .translatable("message.sre.reseting",
+                                            String.format("%.0f", (this.progress / (float) this.totalProgress) * 100))
+                                    .withStyle(ChatFormatting.YELLOW),
+                            true);
+                });
+            }
+            this.resetBlock();
+
+            if (this.progress >= this.totalProgress) {
+                return true;
+            }
+            return false;
+        }
+
+        @Override
+        public void onFinished() {
+            this.serverWorld.players().forEach((p) -> {
+                p.displayClientMessage(
+                        Component
+                                .translatable("message.sre.reseting",
+                                        "100")
+                                .withStyle(ChatFormatting.YELLOW),
+                        true);
+            });
+            // if (!shouldStartGame) {
+            // GameUtils.serverTaskQueue.addLast(new SchedulerTask(1, () -> {
+            // this.serverWorld.players().forEach((p) -> {
+            // p.displayClientMessage(
+            // Component
+            // .translatable("message.sre.map_scanning")
+            // .withStyle(ChatFormatting.GOLD),
+            // true);
+            // });
+            // MapScannerManager.scanAndSaveScannerArea(serverWorld, area);
+            // }));
+            // }
+            if (shouldStartGame) {
+                if (SREConfig.instance().verboseTrainResetLogs) {
+                    SRE.LOGGER.info("RESETING MAP FINISHED. STARTING RESET TASK BLOCKS.");
+                }
+                // GameUtils.trueStartGame(this.serverWorld, this.gameMode, this.time);
+                var task = new ServerTaskInfoClasses.OnlySomeBlockResetTask(GameUtils.resetPoints,
+                        serverWorld,
+                        gameMode, time, this.area);
+                GameUtils.serverTaskQueue.addLast(task);
+            }
+            MapResetManager.saveArea(serverWorld);
+            MapScannerManager.scanAndSaveScannerArea(serverWorld, area);
+        }
+    }
+
+    public static class OnlySomeBlockResetTask extends ServerTaskInfo {
+        ArrayList<BlockPos> blocks = null;
+        int progress = 0;
+        int totalProgress = 0;
+        int count = 0;
+        private ServerLevel world;
+        private GameMode gameMode;
+        public boolean shouldStartGame = true;
+        private int time;
+        private final int MAX_RESET_PER = 500;
+        BlockPos backupMinPos;
+        BlockPos backupMaxPos;
+        BoundingBox backupTrainBox;
+        BlockPos trainMinPos;
+        BlockPos trainMaxPos;
+        BoundingBox trainBox;
+        BlockPos offsetBlockPos;
+
+        public OnlySomeBlockResetTask(ArrayList<BlockPos> points, ServerLevel world, GameMode gameMode,
+                int gameStartTime, AreasWorldComponent areasWorldComponent) {
+            this.blocks = new ArrayList<BlockPos>(points);
+            this.progress = 0;
+            this.totalProgress = this.blocks.size();
+            this.world = world;
+            this.gameMode = gameMode;
+            this.time = gameStartTime;
+            backupMinPos = BlockPos.containing(areasWorldComponent.getResetTemplateArea().getMinPosition());
+            backupMaxPos = BlockPos.containing(areasWorldComponent.getResetTemplateArea().getMaxPosition());
+            backupTrainBox = BoundingBox.fromCorners(backupMinPos, backupMaxPos);
+            trainMinPos = BlockPos.containing(areasWorldComponent.getResetPasteArea().getMinPosition());
+            trainMaxPos = trainMinPos.offset(backupTrainBox.getLength());
+            trainBox = BoundingBox.fromCorners(trainMinPos, trainMaxPos);
+            offsetBlockPos = new BlockPos(
+                    trainBox.minX() - backupTrainBox.minX(), trainBox.minY() - backupTrainBox.minY(),
+                    trainBox.minZ() - backupTrainBox.minZ());
+        }
+
+        public void resetBlock() {
+            if (SREConfig.instance().verboseTrainResetLogs) {
+                SRE.LOGGER.info("RESETING MAP: {}/{}", this.progress, this.totalProgress);
+            }
+            ServerLevel serverWorld = this.world;
+
+            ArrayList<GameUtils.BlockInfo> list3 = new ArrayList<>(); // 仅更新方块状态
+            ArrayList<GameUtils.BlockInfo> list2 = new ArrayList<>();
+            // ArrayList<GameUtils.BlockInfo> list_Doorlike = new ArrayList<>();
+            for (int i = 0; i <= MAX_RESET_PER && this.progress < this.totalProgress; i++, this.progress++) {
+                BlockPos blockPos6 = blocks.get(this.progress);
+                BlockPos blockPos7 = blockPos6;
+                BlockInWorld cachedBlockPosition = new BlockInWorld(serverWorld, blockPos6, true);
+                BlockState blockState = cachedBlockPosition.getState();
+                if (blockState.getBlock() instanceof LockableButtonBlock) {
+                    if (serverWorld.getBlockEntity(blockPos6) instanceof LockableButtonBlockEntity entity) {
+                        entity.setBlasted(false);
+                        entity.setJammed(0);
+                        entity.setOpen(false);
+                        String keyName = entity.getKeyName();
+                        if (keyName == null)
+                            keyName = "";
+                        else if (keyName.endsWith(":")) {
+                            keyName = "";
+                        } else if (keyName.contains(":")) {
+                            var arr = keyName.split(":");
+                            if (arr.length > 0) {
+                                keyName = arr[arr.length - 1];
+                            }
+                        }
+                        entity.setKeyName(keyName);
+                        blockState = blockState.setValue(LockableButtonBlock.POWERED, false);
+                        BlockEntityInfo blockEntityInfo = new BlockEntityInfo(
+                                entity.saveCustomOnly(serverWorld.registryAccess()),
+                                entity.components());
+                        list2.add(new GameUtils.BlockInfo(blockPos7, blockState, blockEntityInfo));
+                    }
+                }
+                // Check if the block is one of our door blocks
+                else if (blockState.getBlock() instanceof SmallDoorBlock) {
+                    if (blockState.getValue(SmallDoorBlock.HALF).equals(DoubleBlockHalf.LOWER)) {
+                        if (serverWorld.getBlockEntity(blockPos6) instanceof SmallDoorBlockEntity entity) {
+                            entity.setBlasted(false);
+                            entity.setJammed(0);
+                            entity.setOpen(false);
+                            String keyName = entity.getKeyName();
+                            if (keyName == null)
+                                keyName = "";
+                            else if (keyName.endsWith(":")) {
+                                keyName = "";
+                            } else if (keyName.contains(":")) {
+                                var arr = keyName.split(":");
+                                if (arr.length > 0) {
+                                    keyName = arr[arr.length - 1];
+                                }
+                            }
+                            entity.setKeyName(keyName);
+                            blockState = blockState.setValue(SmallDoorBlock.OPEN, false);
+                            blockState = blockState.setValue(SmallDoorBlock.POWERED, false);
+                            BlockEntityInfo blockEntityInfo = new BlockEntityInfo(
+                                    entity.saveCustomOnly(serverWorld.registryAccess()),
+                                    entity.components());
+                            list2.add(new GameUtils.BlockInfo(blockPos7, blockState, blockEntityInfo));
+                        }
+                    } else if (blockState.getValue(SmallDoorBlock.HALF).equals(DoubleBlockHalf.UPPER)) {
+                        blockState = blockState.setValue(SmallDoorBlock.OPEN, false);
+                        list2.add(new GameUtils.BlockInfo(blockPos7, blockState, null));
+                    }
+                } else if (blockState.getBlock() instanceof ToiletBlock) {
+                    if (serverWorld.getBlockEntity(blockPos6) instanceof ToiletBlockEntity entity) {
+                        entity.setHasPoison(false, null);
+                        BlockEntityInfo blockEntityInfo = new BlockEntityInfo(
+                                entity.saveCustomOnly(serverWorld.registryAccess()),
+                                entity.components());
+                        list3.add(new GameUtils.BlockInfo(blockPos7, blockState, blockEntityInfo));
+                    }
+                } else if (blockState.getBlock() instanceof TrimmedBedBlock) {
+                    if (blockState.getValue(TrimmedBedBlock.PART).equals(BedPart.HEAD)) {
+                        if (serverWorld.getBlockEntity(blockPos6) instanceof TrimmedBedBlockEntity entity) {
+                            entity.setHasScorpion(false, null);
+                            blockState = blockState.setValue(TrimmedBedBlock.OCCUPIED, false);
+                            BlockEntityInfo blockEntityInfo = new BlockEntityInfo(
+                                    entity.saveCustomOnly(serverWorld.registryAccess()),
+                                    entity.components());
+                            list3.add(new GameUtils.BlockInfo(blockPos7, blockState, blockEntityInfo));
+                            // deque.addLast(blockPos6); // Add to end to process last
+                        }
+                    }
+                } else if (blockState.getBlock() instanceof FoodPlatterBlock) {
+                    if (serverWorld.getBlockEntity(blockPos6) instanceof BeveragePlateBlockEntity entity) {
+                        entity.setArmorer(null);
+                        entity.setPoisoner(null);
+                        entity.isPoisonFake = false;
+                        BlockEntityInfo blockEntityInfo = new BlockEntityInfo(
+                                entity.saveCustomOnly(serverWorld.registryAccess()),
+                                entity.components());
+                        list3.add(new GameUtils.BlockInfo(blockPos7, blockState, blockEntityInfo));
+                    }
+                } else if (blockState.getBlock() instanceof LecternBlock) {
+                    if (serverWorld.getBlockEntity(blockPos6) instanceof LecternBlockEntity entity) {
+                        BlockEntityInfo blockEntityInfo = new BlockEntityInfo(
+                                entity.saveCustomOnly(serverWorld.registryAccess()),
+                                entity.components());
+                        list3.add(new GameUtils.BlockInfo(blockPos7, blockState, blockEntityInfo));
+                    }
+                } else if (blockState.getBlock() instanceof SprinklerBlock) {
+                    if (serverWorld.getBlockEntity(blockPos6) instanceof SprinklerBlockEntity entity) {
+                        entity.setPowered(false);
+                        BlockEntityInfo blockEntityInfo = new BlockEntityInfo(
+                                entity.saveCustomOnly(serverWorld.registryAccess()),
+                                entity.components());
+                        blockState = blockState.setValue(SprinklerBlock.POWERED, false);
+                        list3.add(new GameUtils.BlockInfo(blockPos7, blockState, blockEntityInfo));
+                    }
+                } else if (blockState.getBlock() instanceof LightBlockInterface) {
+                    if (!blockState.getOptionalValue(LightBlockInterface.ACTIVE).isEmpty()) {
+                        blockState = (BlockState) blockState.setValue(LightBlockInterface.ACTIVE, true);
+                    }
+                    if (!blockState.getOptionalValue(LightBlockInterface.LIT).isEmpty()) {
+                        blockState = (BlockState) blockState.setValue(LightBlockInterface.LIT, true);
+                    }
+                    list2.add(new GameUtils.BlockInfo(blockPos7, blockState, null));
+                } else if (blockState.getBlock() instanceof VentHatchBlock) {
+                    blockState = blockState.setValue(VentHatchBlock.OPEN, false);
+                    list2.add(new GameUtils.BlockInfo(blockPos7, blockState, null));
+                } else if (blockState.getBlock() instanceof AutoResetBlockInterface arbi) {
+                    blockState = arbi.onResetBlockState(serverWorld, blockState, blockPos7);
+                    BlockEntity entity = serverWorld.getBlockEntity(blockPos7);
+                    BlockEntityInfo entityinfo = null;
+                    if (entity != null) {
+                        entityinfo = arbi.onResetBlockEntity(serverWorld, blockState, entity, blockPos7);
+                        if (entityinfo == null) {
+                            entityinfo = new BlockEntityInfo(entity.saveCustomOnly(serverWorld.registryAccess()),
+                                    entity.components());
+                        }
+                    }
+                    if (entityinfo != null) {
+                        list3.add(new GameUtils.BlockInfo(blockPos7, blockState, entityinfo));
+                    } else {
+                        list2.add(new GameUtils.BlockInfo(blockPos7, blockState, null));
+                    }
+                }
+            }
+
+            List<GameUtils.BlockInfo> list4 = Lists.newArrayList();
+            list4.addAll(list2); // Only doors
+            List<GameUtils.BlockInfo> list_onlyBlockEntity = Lists.newArrayList();
+            list_onlyBlockEntity.addAll(list2);
+            list_onlyBlockEntity.addAll(list3);
+            List<GameUtils.BlockInfo> list6 = Lists.newArrayList();
+            list6.addAll(list4);
+            list6.addAll(list3);
+            List<GameUtils.BlockInfo> list5 = Lists.reverse(list6);
+            // list_Doorlike
+            // Clear only the door locations with barrier blocks
+            for (GameUtils.BlockInfo blockInfo : list5) {
+                BlockEntity blockEntity3 = serverWorld.getBlockEntity(blockInfo.pos());
+                Clearable.tryClear(blockEntity3);
+            }
+
+            for (GameUtils.BlockInfo blockInfo : list4) {
+                serverWorld.setBlock(blockInfo.pos(), Blocks.BARRIER.defaultBlockState(),
+                        Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE);
+                serverWorld.getLightEngine().checkBlock(blockInfo.pos());
+            }
+
+            // Place the doors back
+            for (GameUtils.BlockInfo blockInfo2 : list4) {
+                try {
+                    if (serverWorld.setBlock(blockInfo2.pos(), blockInfo2.state(),
+                            Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE)) {
+                        serverWorld.getLightEngine().checkBlock(blockInfo2.pos());
+                    }
+                } catch (Exception e) {
+                    SRE.LOGGER.error("Error while simple reseting. BlockPos {} (id: {})",
+                            blockInfo2.pos().toShortString(), blockInfo2.state().getBlock().getDescriptionId(), e);
+                }
+            }
+
+            // Restore block entities for doors
+            for (GameUtils.BlockInfo blockInfo2x : list_onlyBlockEntity) {
+                BlockEntity blockEntity4 = serverWorld.getBlockEntity(blockInfo2x.pos());
+                if (blockInfo2x.blockEntityInfo() != null && blockEntity4 != null) {
+                    blockEntity4.loadCustomOnly(blockInfo2x.blockEntityInfo().nbt(), serverWorld.registryAccess());
+                    blockEntity4.setComponents(blockInfo2x.blockEntityInfo().components());
+                    blockEntity4.setChanged();
+                }
+            }
+            for (GameUtils.BlockInfo blockInfo2x : list5) {
+                // serverWorld.blockUpdated(blockInfo2x.pos(), blockInfo2x.state().getBlock());
+                serverWorld.getLightEngine().checkBlock(blockInfo2x.pos());
+            }
+        }
+
+        @Override
+        public boolean onTick(MinecraftServer server) {
+            count++;
+            if (this.progress >= this.totalProgress) {
+                return true;
+            }
+            this.resetBlock();
+
+            if (count % 10 == 1) {
+                // 1s
+                this.world.players().forEach((p) -> {
+                    p.displayClientMessage(
+                            Component
+                                    .translatable("message.sre.reseting",
+                                            String.format("%.0f", (this.progress / (float) this.totalProgress) * 100))
+                                    .withStyle(ChatFormatting.GOLD),
+                            true);
+                });
+            }
+            if (this.progress >= this.totalProgress) {
+                return true;
+            }
+            return false;
+        }
+
+        @SuppressWarnings("deprecation")
+        @Override
+        public void onFinished() {
+            var serverWorld = this.world;
+            GameUtils.chunksToClearEntities.clear();
+            if (!serverWorld.hasChunksAt(trainMinPos, trainMaxPos)) {
+                int trainChunkMinX = trainMinPos.getX() >> 4;
+                int trainChunkMinZ = trainMinPos.getZ() >> 4;
+                int trainChunkMaxX = trainMaxPos.getX() >> 4;
+                int trainChunkMaxZ = trainMaxPos.getZ() >> 4;
+
+                if (SREConfig.instance().verboseTrainResetLogs) {
+                    SRE.LOGGER.info(
+                            "Train reset: Loading chunks - Paste: ({}, {}) to ({}, {})",
+                            trainChunkMinX, trainChunkMinZ, trainChunkMaxX, trainChunkMaxZ);
+                }
+                for (int x = trainChunkMinX; x <= trainChunkMaxX; x++) {
+                    for (int z = trainChunkMinZ; z <= trainChunkMaxZ; z++) {
+                        // 必须先登记再加载：getChunk 是同步加载，实体入世界事件可能紧随其后触发
+                        GameUtils.chunksToClearEntities.add(new ChunkPos(x, z));
+                        serverWorld.getChunk(x, z);
+                    }
+                }
+                // 清理窗口只覆盖开局前后几秒：强载区块的实体延迟入世界时被按区块清掉；
+                // 窗口过后条目作废，避免局中区块重载时误清活跃实体（彩虹马/轮椅/掉落物等）
+                GameUtils.chunksToClearEntitiesDeadline = serverWorld.getGameTime() + 100;
+
+                if (SREConfig.instance().verboseTrainResetLogs) {
+                    SRE.LOGGER.info("Train reset: Chunks loaded, attempting clear entities.");
+                }
+
+                // Continue with the reset after loading chunks
+            }
+            // 立即清掉当前已加载的上一局残留实体（与 noReset 分支一致；晚入世界的由上面的窗口机制兜底）
+            GameUtils.resetEntities(serverWorld);
+            if (shouldStartGame) {
+                if (SREConfig.instance().verboseTrainResetLogs) {
+                    SRE.LOGGER.info("RESETING MAP FINISHED. STARTING THE GAME.");
+                }
+                var blackoutComponent = SREWorldBlackoutComponent.KEY.get(this.world);
+                blackoutComponent.reset();
+                // GameUtils.serverTaskQueue.add(new ServerTaskInfoClasses.SchedulerTask(5, ()
+                // -> {
+                // blackoutComponent.reset();
+                // }));
+
+                GameUtils.serverTaskQueue.add(new ServerTaskInfoClasses.SchedulerTask(5, () -> {
+                    GameUtils.trueStartGame(this.world, this.gameMode, this.time);
+                }));
+                //
+                this.world.players().forEach((p) -> {
+                    p.displayClientMessage(
+                            Component
+                                    .translatable("message.sre.starting")
+                                    .withStyle(ChatFormatting.GREEN),
+                            true);
+                });
+            } else {
+                this.world.players().forEach((p) -> {
+                    p.displayClientMessage(
+                            Component
+                                    .translatable("message.sre.reseting",
+                                            "100")
+                                    .withStyle(ChatFormatting.GOLD),
+                            true);
+                });
+            }
+        }
+    }
+
+    public static class SchedulerTask extends ServerTaskInfo {
+        public int timeleft;
+        public Runnable func;
+
+        public SchedulerTask(int time, Runnable task) {
+            this.timeleft = time;
+            this.func = task;
+        }
+
+        public boolean onTick(MinecraftServer server) {
+            if (timeleft > 0) {
+                timeleft--;
+                return false;
+            }
+            return true;
+        }
+
+        public void onFinished() {
+            func.run();
+        }
+    }
+
+    /**
+     * 区域整块复制（{@code /sre:clone} 用）。
+     *
+     * <p>
+     * 推进方式与 {@link FullTrainResetTask} 一致：把源区域按体积切成若干分块，
+     * 每 tick 处理一个分块（{@link BlockCopyUtils#copyLayer}），避免一次性写几万个方块卡住主线程；
+     * 方块实体（含自定义方块的 id）由 copyLayer 连 NBT 一起搬过去。
+     *
+     * <p>
+     * <b>源与目标重叠时</b>改用「先整体快照、再按分块写入」：逐块直搬在重叠区域会边写边读
+     * （先写的目标方块会污染还没读的源方块），快照后写才是原版 {@code /clone} 的语义。
+     * 快照体积上限因此更小（{@link #MAX_VOLUME_OVERLAP}）。
+     */
+    public static class CloneRegionTask extends ServerTaskInfo {
+
+        /** 每个分块的目标方块数（与 FullTrainResetTask 同一个数量级）。 */
+        private static final int TARGET_BLOCKS_PER_CHUNK = 5000;
+
+        /** 不重叠时的源区域体积上限（分块直搬，不占内存）。 */
+        public static final int MAX_VOLUME = 32 * 64 * 128;
+
+        /** 重叠时（需要整体快照）的源区域体积上限。 */
+        public static final int MAX_VOLUME_OVERLAP = 32 * 32 * 32;
+
+        private final ServerLevel level;
+        private final BoundingBox sourceBox;
+        private final BlockPos offset;
+        private final List<BoundingBox> chunks;
+        private final int volume;
+
+        /** 源区域与目标区域是否有交集（决定走哪条复制路径）。 */
+        private final boolean overlapping;
+
+        /** 重叠复制时的整体快照（按源坐标索引）。 */
+        private BlockState[] stateSnapshot;
+        private java.util.Map<BlockPos, CompoundTag> blockEntitySnapshot;
+
+        private int progress = 0;
+
+        /** 完成后给发起者回执（可为 null）。 */
+        private final net.minecraft.commands.CommandSourceStack feedback;
+
+        public CloneRegionTask(ServerLevel level, BoundingBox sourceBox, BlockPos offset,
+                net.minecraft.commands.CommandSourceStack feedback) {
+            this.level = level;
+            this.sourceBox = sourceBox;
+            this.offset = offset;
+            this.feedback = feedback;
+            this.volume = sourceBox.getXSpan() * sourceBox.getYSpan() * sourceBox.getZSpan();
+            // 分块列表复用 FullTrainResetTask 的切分算法（同一个类里的 private 方法可直接调用）
+            this.chunks = FullTrainResetTask.buildChunks(sourceBox, TARGET_BLOCKS_PER_CHUNK);
+            BoundingBox destBox = sourceBox.moved(offset.getX(), offset.getY(), offset.getZ());
+            this.overlapping = destBox.intersects(sourceBox);
+            if (overlapping) {
+                captureSnapshot();
+            }
+        }
+
+        /** 源区域体积（方块数）。 */
+        public int volume() {
+            return volume;
+        }
+
+        /** 是否为重叠复制（走快照路径）。 */
+        public boolean isOverlapping() {
+            return overlapping;
+        }
+
+        private int indexOf(int x, int y, int z) {
+            int dx = x - sourceBox.minX();
+            int dy = y - sourceBox.minY();
+            int dz = z - sourceBox.minZ();
+            return (dy * sourceBox.getYSpan() + dx) * sourceBox.getZSpan() + dz;
+        }
+
+        /** 一次性把源区域读进内存（方块状态 + 方块实体 NBT）。 */
+        private void captureSnapshot() {
+            stateSnapshot = new BlockState[volume];
+            blockEntitySnapshot = new java.util.HashMap<>();
+            for (int y = sourceBox.minY(); y <= sourceBox.maxY(); y++) {
+                for (int x = sourceBox.minX(); x <= sourceBox.maxX(); x++) {
+                    for (int z = sourceBox.minZ(); z <= sourceBox.maxZ(); z++) {
+                        BlockPos pos = new BlockPos(x, y, z);
+                        stateSnapshot[indexOf(x, y, z)] = level.getBlockState(pos);
+                        BlockEntity entity = level.getBlockEntity(pos);
+                        if (entity != null) {
+                            blockEntitySnapshot.put(pos.immutable(),
+                                    entity.saveWithFullMetadata(level.registryAccess()));
+                        }
+                    }
+                }
+            }
+        }
+
+        @Override
+        public boolean onTick(MinecraftServer server) {
+            if (progress >= chunks.size()) {
+                return true;
+            }
+            BoundingBox chunk = chunks.get(progress++);
+            if (overlapping) {
+                copyChunkFromSnapshot(chunk);
+            } else {
+                BlockCopyUtils.copyLayer(level, chunk, offset);
+            }
+            return progress >= chunks.size();
+        }
+
+        /** 从快照写一个分块（方块 + 该分块内的方块实体）。 */
+        private void copyChunkFromSnapshot(BoundingBox chunk) {
+            for (int y = chunk.minY(); y <= chunk.maxY(); y++) {
+                for (int x = chunk.minX(); x <= chunk.maxX(); x++) {
+                    for (int z = chunk.minZ(); z <= chunk.maxZ(); z++) {
+                        BlockState state = stateSnapshot[indexOf(x, y, z)];
+                        if (state == null) {
+                            continue;
+                        }
+                        BlockPos dst = new BlockPos(x, y, z).offset(offset);
+                        level.setBlock(dst, state, Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE);
+                        level.getLightEngine().checkBlock(dst);
+                    }
+                }
+            }
+            if (blockEntitySnapshot.isEmpty()) {
+                return;
+            }
+            for (java.util.Map.Entry<BlockPos, CompoundTag> entry : blockEntitySnapshot.entrySet()) {
+                BlockPos src = entry.getKey();
+                if (!chunk.isInside(src)) {
+                    continue;
+                }
+                BlockPos dst = src.offset(offset);
+                CompoundTag tag = entry.getValue().copy();
+                tag.putInt("x", dst.getX());
+                tag.putInt("y", dst.getY());
+                tag.putInt("z", dst.getZ());
+                BlockEntity dstEntity = level.getBlockEntity(dst);
+                if (dstEntity != null) {
+                    dstEntity.loadWithComponents(tag, level.registryAccess());
+                    dstEntity.setChanged();
+                }
+            }
+        }
+
+        @Override
+        public void onFinished() {
+            SRE.LOGGER.info("[Clone] Copied {} blocks ({} chunk(s), overlapping={})",
+                    volume, chunks.size(), overlapping);
+            if (feedback != null) {
+                feedback.sendSuccess(() -> Component.translatable("sre.custom_content.clone.done", volume)
+                        .withStyle(ChatFormatting.GREEN), false);
+            }
+        }
+    }
+}

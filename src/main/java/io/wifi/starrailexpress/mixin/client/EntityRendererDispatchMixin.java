@@ -1,0 +1,196 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.mixin.client;
+
+import com.google.common.collect.ImmutableMap;
+import com.llamalad7.mixinextras.sugar.Local;
+import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.blaze3d.vertex.VertexConsumer;
+import io.wifi.starrailexpress.SRE;
+import io.wifi.starrailexpress.client.render.entity.PlayerBodyEntityRenderer;
+import io.wifi.starrailexpress.client.render.entity.TrainDummyRenderer;
+import io.wifi.starrailexpress.client.util.ClientSkinCache;
+import io.wifi.starrailexpress.content.entity.PlayerBodyEntity;
+import io.wifi.starrailexpress.traindummy.TrainDummyEntity;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.PlayerInfo;
+import net.minecraft.client.renderer.entity.EntityRenderDispatcher;
+import net.minecraft.client.renderer.entity.EntityRenderer;
+import net.minecraft.client.renderer.entity.EntityRendererProvider;
+import net.minecraft.client.resources.PlayerSkin;
+import net.minecraft.server.packs.resources.ResourceManager;
+import net.minecraft.world.entity.Entity;
+
+import org.agmas.noellesroles.client.renderer.PuppeteerBodyEntityRenderer;
+import org.agmas.noellesroles.content.entity.PuppeteerBodyEntity;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Unique;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+
+import java.util.Map;
+
+@SuppressWarnings("unchecked")
+@Mixin(EntityRenderDispatcher.class)
+public class EntityRendererDispatchMixin {
+
+    @Unique
+    private static final Map<PlayerSkin.Model, EntityRendererProvider<PuppeteerBodyEntity>> PUPPETEER_BODY_RENDERER_FACTORIES = Map
+            .of(
+                    PlayerSkin.Model.WIDE,
+                    context -> new PuppeteerBodyEntityRenderer<>(context, false),
+                    PlayerSkin.Model.SLIM,
+                    context -> new PuppeteerBodyEntityRenderer<>(context, true));
+    @Unique
+    private static final Map<PlayerSkin.Model, EntityRendererProvider<PlayerBodyEntity>> PLAYER_BODY_RENDERER_FACTORIES = Map
+            .of(
+                    PlayerSkin.Model.WIDE,
+                    context -> new PlayerBodyEntityRenderer<>(context, false),
+                    PlayerSkin.Model.SLIM,
+                    context -> new PlayerBodyEntityRenderer<>(context, true));
+    @Unique
+    private static final Map<PlayerSkin.Model, EntityRendererProvider<TrainDummyEntity>> TRAIN_DUMMY_RENDERER_FACTORIES = Map
+            .of(
+                    PlayerSkin.Model.WIDE,
+                    context -> new TrainDummyRenderer(context, false),
+                    PlayerSkin.Model.SLIM,
+                    context -> new TrainDummyRenderer(context, true));
+
+    @Unique
+    private Map<PlayerSkin.Model, EntityRenderer<? extends PlayerBodyEntity>> bodyModelRenderers = Map.of();
+    @Unique
+    private Map<PlayerSkin.Model, EntityRenderer<? extends PuppeteerBodyEntity>> puppeteerBodyModelRenderers = Map.of();
+    @Unique
+    private Map<PlayerSkin.Model, EntityRenderer<? extends TrainDummyEntity>> trainDummyModelRenderers = Map.of();
+
+    @Inject(method = "renderHitbox", at = @At("HEAD"), cancellable = true)
+    private static void disableF3B(PoseStack poseStack, VertexConsumer vertexConsumer, Entity entity, float f, float g,
+            float h, float i, CallbackInfo ci) {
+        if (SRE.isLobby)
+            return;
+        if (Minecraft.getInstance() == null)
+            return;
+        if (Minecraft.getInstance().player == null)
+            return;
+        if (Minecraft.getInstance().player.isCreative())
+            return;
+        ci.cancel();
+    }
+
+    @Inject(method = "onResourceManagerReload", at = @At("TAIL"))
+    public void reload(ResourceManager manager, CallbackInfo ci, @Local EntityRendererProvider.Context context) {
+        this.bodyModelRenderers = reloadPlayerBodyRenderers(context);
+        this.puppeteerBodyModelRenderers = reloadPuppeteerBodyRenderers(context);
+        this.trainDummyModelRenderers = reloadTrainDummyRenderers(context);
+    }
+
+    @Inject(method = "getRenderer", at = @At("HEAD"), cancellable = true)
+    public <T extends Entity> void tmm$addPlayerBodyRenderer(T entity,
+            CallbackInfoReturnable<EntityRenderer<? super T>> cir) {
+        if (entity instanceof PlayerBodyEntity body) {
+            PlayerInfo playerListEntry = ClientSkinCache.getCachedPlayerInfo(body.getPlayerUuid());
+            if (playerListEntry == null) {
+                cir.setReturnValue((EntityRenderer<? super T>) this.bodyModelRenderers.get(PlayerSkin.Model.WIDE));
+            } else {
+                PlayerSkin.Model model = playerListEntry.getSkin().model();
+                EntityRenderer<? extends PlayerBodyEntity> entityRenderer = this.bodyModelRenderers.get(model);
+                cir.setReturnValue((EntityRenderer<? super T>) (entityRenderer != null ? entityRenderer
+                        : (EntityRenderer<? super T>) this.bodyModelRenderers.get(PlayerSkin.Model.WIDE)));
+            }
+        }
+    }
+
+    @Inject(method = "getRenderer", at = @At("HEAD"), cancellable = true)
+    public <T extends Entity> void tmm$addPuppeteerBodyRenderer(T entity,
+            CallbackInfoReturnable<EntityRenderer<? super T>> cir) {
+        if (entity instanceof PuppeteerBodyEntity body) {
+            PlayerInfo playerListEntry = ClientSkinCache.getCachedPlayerInfo(body.getOwnerUuid().orElse(null));
+            if (playerListEntry == null) {
+                cir.setReturnValue(
+                        (EntityRenderer<? super T>) this.puppeteerBodyModelRenderers.get(PlayerSkin.Model.WIDE));
+            } else {
+                PlayerSkin.Model model = playerListEntry.getSkin().model();
+                EntityRenderer<? extends PuppeteerBodyEntity> entityRenderer = this.puppeteerBodyModelRenderers
+                        .get(model);
+                cir.setReturnValue((EntityRenderer<? super T>) (entityRenderer != null ? entityRenderer
+                        : (EntityRenderer<? super T>) this.puppeteerBodyModelRenderers.get(PlayerSkin.Model.WIDE)));
+            }
+        }
+    }
+
+    @Inject(method = "getRenderer", at = @At("HEAD"), cancellable = true)
+    public <T extends Entity> void sre$addTrainDummyRenderer(T entity,
+            CallbackInfoReturnable<EntityRenderer<? super T>> cir) {
+        if (!(entity instanceof TrainDummyEntity dummy)) {
+            return;
+        }
+        PlayerSkin.Model model = TrainDummyRenderer.slim(dummy) ? PlayerSkin.Model.SLIM : PlayerSkin.Model.WIDE;
+        EntityRenderer<? extends TrainDummyEntity> renderer = this.trainDummyModelRenderers.get(model);
+        if (renderer == null) {
+            renderer = this.trainDummyModelRenderers.get(PlayerSkin.Model.WIDE);
+        }
+        if (renderer != null) {
+            cir.setReturnValue((EntityRenderer<? super T>) renderer);
+        }
+    }
+
+    @Unique
+    private static Map<PlayerSkin.Model, EntityRenderer<? extends TrainDummyEntity>> reloadTrainDummyRenderers(
+            EntityRendererProvider.Context ctx) {
+        ImmutableMap.Builder<PlayerSkin.Model, EntityRenderer<? extends TrainDummyEntity>> builder = ImmutableMap
+                .builder();
+        TRAIN_DUMMY_RENDERER_FACTORIES.forEach((model, factory) -> {
+            try {
+                builder.put(model, factory.create(ctx));
+            } catch (Exception failure) {
+                throw new IllegalArgumentException("Failed to create train dummy model for " + model, failure);
+            }
+        });
+        return builder.build();
+    }
+
+    @Unique
+    private static Map<PlayerSkin.Model, EntityRenderer<? extends PlayerBodyEntity>> reloadPlayerBodyRenderers(
+            EntityRendererProvider.Context ctx) {
+        ImmutableMap.Builder<PlayerSkin.Model, EntityRenderer<? extends PlayerBodyEntity>> builder = ImmutableMap
+                .builder();
+        PLAYER_BODY_RENDERER_FACTORIES.forEach((model, factory) -> {
+            try {
+                builder.put(model, factory.create(ctx));
+            } catch (Exception var5) {
+                throw new IllegalArgumentException("Failed to create player body model for " + model, var5);
+            }
+        });
+        return builder.build();
+    }
+
+    @Unique
+    private static Map<PlayerSkin.Model, EntityRenderer<? extends PuppeteerBodyEntity>> reloadPuppeteerBodyRenderers(
+            EntityRendererProvider.Context ctx) {
+        ImmutableMap.Builder<PlayerSkin.Model, EntityRenderer<? extends PuppeteerBodyEntity>> builder = ImmutableMap
+                .builder();
+        PUPPETEER_BODY_RENDERER_FACTORIES.forEach((model, factory) -> {
+            try {
+                builder.put(model, factory.create(ctx));
+            } catch (Exception var5) {
+                throw new IllegalArgumentException("Failed to create player body model for " + model, var5);
+            }
+        });
+        return builder.build();
+    }
+}

@@ -1,0 +1,712 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.init.events;
+
+import io.wifi.starrailexpress.SRE;
+import io.wifi.starrailexpress.api.AreasSettings;
+import io.wifi.starrailexpress.api.SRERole;
+import io.wifi.starrailexpress.cca.AreasWorldComponent;
+import io.wifi.starrailexpress.cca.SREGameRoundEndComponent;
+import io.wifi.starrailexpress.cca.SREGameWorldComponent;
+import io.wifi.starrailexpress.event.*;
+import io.wifi.starrailexpress.game.GameUtils;
+import io.wifi.starrailexpress.game.ServerTaskInfoClasses;
+import io.wifi.starrailexpress.index.TMMItems;
+import io.wifi.starrailexpress.network.RemoveStatusBarPayload;
+import io.wifi.starrailexpress.util.TrueFalseResult;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.minecraft.ChatFormatting;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.entity.ai.attributes.AttributeModifier;
+import io.wifi.starrailexpress.customrole.CustomRoleData;
+import io.wifi.starrailexpress.customrole.CustomRoleLoader;
+import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.entity.animal.Pig;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.entity.EntityTypeTest;
+import net.minecraft.world.phys.Vec3;
+import org.agmas.harpymodloader.Harpymodloader;
+import org.agmas.harpymodloader.component.WorldModifierComponent;
+import org.agmas.noellesroles.*;
+import org.agmas.noellesroles.commands.BroadcastCommand;
+import org.agmas.noellesroles.component.InfectedPlayerComponent;
+import org.agmas.noellesroles.component.ModComponents;
+import org.agmas.noellesroles.config.NoellesRolesConfig;
+import org.agmas.noellesroles.content.effects.TimeStopEffect;
+import org.agmas.noellesroles.content.entity.HallucinationAreaManager;
+import org.agmas.noellesroles.content.entity.ServerSmokeAreaManager;
+import org.agmas.noellesroles.content.item.*;
+import org.agmas.noellesroles.game.modifier.NRModifiers;
+import org.agmas.noellesroles.game.modifier.expedition.ExpeditionComponent;
+import org.agmas.noellesroles.game.roles.innocence.fool.TarotAssemblyManager;
+import org.agmas.noellesroles.game.roles.innocence.hoan_meirin.HoanMeirinFistPunchHandler;
+import io.wifi.starrailexpress.api.data.RoleData;
+import org.agmas.noellesroles.role_data.innocence.BuilderRoleData;
+import org.agmas.noellesroles.role_data.killer.DelayerRoleData;
+import org.agmas.noellesroles.game.roles.neutral.pelican.PelicanManager;
+import org.agmas.noellesroles.role_data.neutral.ThiefRoleData;
+import org.agmas.noellesroles.init.ModEventsRegister;
+import org.agmas.noellesroles.init.ModItems;
+import org.agmas.noellesroles.init.NRSounds;
+import org.agmas.noellesroles.init.RoleShopHandler;
+import org.agmas.noellesroles.packet.BloodConfigS2CPacket;
+import org.agmas.noellesroles.packet.EmbalmerSkinSwapS2CPacket;
+import org.agmas.noellesroles.role.ModRoles;
+import org.agmas.noellesroles.role.RoleTickers;
+import org.agmas.noellesroles.role.bouns.BounsRoles;
+import org.agmas.noellesroles.handler.utils.BeeFamilyManager;
+import org.agmas.noellesroles.utils.MCItemsUtils;
+import pro.fazeclan.river.stupid_express.constants.SERoles;
+
+import java.util.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+/**
+ * 游戏生命周期、服务器 Tick、玩家连接事件处理
+ */
+public class NRGameStateEvents {
+
+    private static AttributeModifier noJumpingAttribute = new AttributeModifier(
+            Noellesroles.id("no_jumping"), -1.0f, AttributeModifier.Operation.ADD_MULTIPLIED_TOTAL);
+    private static final Map<UUID, Vec3> oldmanPigRidePositions = new HashMap<>();
+    public static AtomicBoolean pendingRejudgingSpectatorDeathPeanlty = new AtomicBoolean(false);
+    /** 本局游戏是否已发放过年兽鞭炮（一局只能有一次） */
+    public static boolean nianShouFirecrackersDistributedThisGame = false;
+
+    public static void register() {
+        registerOnGameStarted();
+        registerOnGameEnd();
+        registerOnGameTrueStarted();
+        registerServerLifecycle();
+        registerServerTick();
+        registerPlayerConnection();
+        CustomWinnerClass.registerEvents();
+        org.agmas.noellesroles.game.roles.innocence.angler.AnglerWorldMemory.register();
+    }
+
+    // --- OnGameStarted ---
+
+    private static void registerOnGameStarted() {
+        OnGameStarted.EVENT.register((serverLevel) -> {
+            // 物资箱：清空上局遗留的物资与领取记录，间隔重新计时并复位开启状态
+            org.agmas.noellesroles.content.block_entity.SupplyCrateBlockEntity.resetAll(serverLevel);
+            TarotAssemblyManager.havingMeeting = false;
+            HoanMeirinFistPunchHandler.PUNCH_RECORDS.clear();
+            RoleShopHandler.resetOldmanEasterEggState();
+            org.agmas.noellesroles.game.roles.innocence.angler.AnglerWorldMemory.reset(serverLevel);
+            // 复位蜂后领袖加成（蜜蜂家族中毒致死时间减半）
+            BeeFamilyManager.resetQueenLeaderBonus();
+            // 重置疫使时刻状态
+            org.agmas.noellesroles.game.roles.neutral.infected.InfectedWinChecker.resetAcceleratedState();
+            org.agmas.noellesroles.game.roles.neutral.priest.PriestHeavenManager.reset(serverLevel);
+
+            SREGameWorldComponent gameWorldComponent = SREGameWorldComponent.KEY.get(serverLevel);
+            WorldModifierComponent worldModifierComponent = WorldModifierComponent.KEY.get(serverLevel);
+            final var all_players = serverLevel.players();
+            for (var p : all_players) {
+                if (!gameWorldComponent.isJumpAvailable() && GameUtils.isPlayerAliveAndSurvivalIgnoreShitSplit(p)) {
+                    if (!p.hasPermissions(2)) {
+                        p.getAttribute(Attributes.JUMP_STRENGTH).addOrReplacePermanentModifier(noJumpingAttribute);
+                    }
+                }
+                if (worldModifierComponent.isModifier(p, NRModifiers.EXPEDITION)) {
+                    SRERole role = gameWorldComponent.getRole(p);
+                    var expeditionComponent = ExpeditionComponent.KEY.get(p);
+                    if (expeditionComponent != null && expeditionComponent.isExpedition()) {
+                        if (role != null && (!role.isInnocent() || role.canUseKiller() || role.isNeutrals())) {
+                            expeditionComponent.clear();
+                            expeditionComponent.sync();
+                            worldModifierComponent.removeModifier(p.getUUID(), NRModifiers.EXPEDITION);
+                            Noellesroles.LOGGER
+                                    .info("Expedition modifier effect disabled for player due to role change: "
+                                            + p.getName().getString() + ", new role: " + role.identifier());
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // --- OnGameEnd ---
+
+    private static void registerOnGameEnd() {
+        OnGameEnd.EVENT.register((world, gameWorldComponent) -> {
+            // 物资箱：清空本局物资与领取记录，间隔重新计时并复位开启状态
+            org.agmas.noellesroles.content.block_entity.SupplyCrateBlockEntity.resetAll(world);
+            nianShouFirecrackersDistributedThisGame = false;
+            HoanMeirinFistPunchHandler.PUNCH_RECORDS.clear();
+            RoleShopHandler.resetOldmanEasterEggState();
+            org.agmas.noellesroles.game.roles.innocence.angler.AnglerWorldMemory.reset(world);
+            DelayerRoleData.timeBoostTriggered = false;
+
+            // 清除感染状态
+            for (ServerPlayer player : world.players()) {
+                InfectedPlayerComponent infectedComponent = ModComponents.INFECTED.get(player);
+                if (infectedComponent != null) {
+                    infectedComponent.cure();
+                }
+            }
+            org.agmas.noellesroles.game.roles.neutral.infected.InfectedWinChecker.resetAcceleratedState();
+            org.agmas.noellesroles.game.roles.neutral.priest.PriestHeavenManager.reset(world);
+
+            // 清除建筑师客户端墙
+            for (ServerPlayer player : world.players()) {
+                var builderComp = RoleData.getNullable(BuilderRoleData.class, player);
+                if (builderComp != null) {
+                    builderComp.clearAllWalls();
+                }
+            }
+            org.agmas.noellesroles.game.roles.innocence.builder.BuilderWallPositions.clearAll();
+
+            // 清除厨师放置的「客户端」食物盘 / 饮料盘（会一直存在到当局结束）
+            org.agmas.noellesroles.game.roles.neutral.chef.ChefTrayManager.clearAll(world);
+
+            // 清除"领袖招募教父"带来的家族标记，避免下一局残留
+            org.agmas.noellesroles.game.roles.neutral.mafia.MafiaManager.clearLeaderFamilyMarks();
+
+            // 清除冒险家路径点
+            io.wifi.starrailexpress.game.data.WaypointVisibilityManager.get(world.getServer())
+                    .setWaypointsVisibility(false);
+
+            // 清除鹈鹕状态
+            PelicanManager.releaseAllInWorld(world);
+            PelicanManager.clearAll();
+
+            // 清除嬉命人变装
+            for (ServerPlayer p : world.players()) {
+                ServerPlayNetworking.send(p, EmbalmerSkinSwapS2CPacket.clear());
+            }
+
+            // 肉汁的悬赏在职业赋予时由 RoleData.init() 自动重置
+
+            // 重置实体交互方块内置冷却
+            if (io.wifi.starrailexpress.content.block_entity.EntityInteractionBlockEntity.getCountForMap(world) > 0) {
+                var playArea = AreasWorldComponent.KEY.get(world).getPlayArea();
+                int minChunkX = ((int) playArea.minX) >> 4;
+                int maxChunkX = ((int) playArea.maxX) >> 4;
+                int minChunkZ = ((int) playArea.minZ) >> 4;
+                int maxChunkZ = ((int) playArea.maxZ) >> 4;
+                var chunkSource = world.getChunkSource();
+                for (int cx = minChunkX; cx <= maxChunkX; cx++) {
+                    for (int cz = minChunkZ; cz <= maxChunkZ; cz++) {
+                        var chunk = chunkSource.getChunkNow(cx, cz);
+                        if (chunk != null) {
+                            for (var be : chunk.getBlockEntities().values()) {
+                                if (be instanceof io.wifi.starrailexpress.content.block_entity.EntityInteractionBlockEntity entity
+                                        && playArea.contains(entity.getBlockPos().getCenter())) {
+                                    entity.resetAllCooldowns();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 时间到时的特殊处理
+            SREGameRoundEndComponent roundEnd = SREGameRoundEndComponent.KEY.get(world);
+            if (roundEnd.getWinStatus().equals(GameUtils.WinStatus.TIME)) {
+                int alivePlayers = 0, aliveKillers = 0, aliveGhost = 0;
+                var players = world.players();
+                for (ServerPlayer player : players) {
+                    if (GameUtils.isPlayerAliveAndSurvival(player)) {
+                        alivePlayers++;
+                        if (gameWorldComponent.isKillerTeam(player)) {
+                            aliveKillers++;
+                        }
+                        if (gameWorldComponent.isRole(player, ModRoles.GHOST)) {
+                            aliveGhost++;
+                        }
+                    }
+                }
+                if (aliveGhost >= 1 && aliveKillers >= 1 && aliveGhost + aliveKillers >= alivePlayers) {
+                    GameUtils.serverAsynTaskLists.add(new ServerTaskInfoClasses.SchedulerTask(8 * 20, () -> {
+                        players.forEach((p) -> {
+                            p.playNotifySound(NRSounds.TO_BE_CONTINUED, SoundSource.MASTER, 0.5f, 1f);
+                        });
+                    }));
+                }
+            }
+        });
+    }
+
+    // --- OnGameTrueStarted ---
+
+    private static void registerOnGameTrueStarted() {
+        OnGameTrueStarted.EVENT.register((serverLevel) -> {
+            var areacca = AreasWorldComponent.KEY.get(serverLevel);
+            if (areacca.areasSettings != null) {
+                if (areacca.areasSettings.meetingEnabled) {
+                    Component meetingType = null;
+                    MutableComponent meetingResultMsg = Component.literal("").withStyle(ChatFormatting.GOLD);
+                    MutableComponent startCooldownMsg = Component.literal("").withStyle(ChatFormatting.GOLD);
+                    if (areacca.areasSettings.bodyMeetingEnabled) {
+                        meetingType = Component.translatable("meeting.sre.body_meeting").withStyle(ChatFormatting.AQUA);
+                        startCooldownMsg.append("\n").append(Component.translatable("meeting.sre.entry.is_comming",
+                                Component.translatable("meeting.sre.body_meeting").withStyle(ChatFormatting.AQUA),
+                                Component.literal(String.format("%d", areacca.areasSettings.meetingStartCooldown))
+                                        .withStyle(ChatFormatting.GREEN)));
+                        meetingResultMsg.append("\n").append(Component.translatable("meeting.sre.entry.processor",
+                                Component.translatable("meeting.sre.body_meeting").withStyle(ChatFormatting.AQUA),
+                                getProcessorType(areacca.areasSettings, false))
+                                .withStyle(ChatFormatting.GREEN));
+
+                    }
+                    {
+                        meetingType = meetingType == null
+                                ? Component
+                                        .translatable(
+                                                areacca.areasSettings.bellMeetingEnabled ? "meeting.sre.bell_meeting"
+                                                        : "meeting.sre.emergency_meeting")
+                                        .withStyle(ChatFormatting.YELLOW)
+                                : Component.translatable("meeting.sre.entry.and", meetingType,
+                                        Component
+                                                .translatable(areacca.areasSettings.bellMeetingEnabled
+                                                        ? "meeting.sre.bell_meeting"
+                                                        : "meeting.sre.emergency_meeting")
+                                                .withStyle(ChatFormatting.YELLOW))
+                                        .withStyle(ChatFormatting.GOLD);
+                        if (areacca.areasSettings.bellMeetingEnabled)
+                            startCooldownMsg.append("\n").append(Component.translatable("meeting.sre.entry.is_comming",
+                                    Component.translatable("meeting.sre.bell_meeting").withStyle(ChatFormatting.YELLOW),
+                                    Component
+                                            .literal(
+                                                    String.format("%d", areacca.areasSettings.bellMeetingStartCooldown))
+                                            .withStyle(ChatFormatting.GREEN)));
+
+                        meetingResultMsg.append("\n").append(Component.translatable("meeting.sre.entry.processor",
+                                Component.translatable(areacca.areasSettings.bellMeetingEnabled
+                                        ? "meeting.sre.bell_meeting"
+                                        : "meeting.sre.emergency_meeting").withStyle(ChatFormatting.YELLOW),
+                                getProcessorType(areacca.areasSettings, true))
+                                .withStyle(ChatFormatting.GREEN));
+                    }
+                    if (meetingType != null) {
+                        final var entryMeetingMessage = Component.translatable("meeting.sre.start_game_broadcast",
+                                Component.translatable(areacca.mapDisplayName).withStyle(ChatFormatting.GREEN),
+                                meetingType, meetingResultMsg,
+                                startCooldownMsg).withStyle(ChatFormatting.GOLD);
+                        for (var p : serverLevel.players()) {
+                            BroadcastCommand.BroadcastMessage(p, entryMeetingMessage);
+                        }
+                    }
+                    // meeting.sre.start_game_broadcast
+                }
+            }
+            SREGameWorldComponent gameWorldComponent = SREGameWorldComponent.KEY.get(serverLevel);
+            boolean hasDio = false, hasRecorder = false, hasCandlebearer = false, hasRaven = false, hasBee = false;
+            boolean hasNianShou = false, hasArsonist = false, hasCuckoo = false, hasPelican = false,
+                    hasGodfather = false, hasLeader = false, hasLicensedVillain = false, hasNatureSpirit = false;
+            boolean hasDictator = false, hasDaywalker = false;
+            final var all_players = serverLevel.players();
+
+            for (var p : all_players) {
+                if (!gameWorldComponent.isJumpAvailable() && GameUtils.isPlayerAliveAndSurvivalIgnoreShitSplit(p)) {
+                    if (!p.hasPermissions(2)) {
+                        p.getAttribute(Attributes.JUMP_STRENGTH).addOrReplacePermanentModifier(noJumpingAttribute);
+                    }
+                }
+
+                if (gameWorldComponent.isRole(p, ModRoles.THIEF)) {
+                    ThiefRoleData thiefData = RoleData.getNullable(ThiefRoleData.class, p);
+                    if (thiefData != null) {
+                        thiefData.updateHonorCost(serverLevel.players().size());
+                    }
+                } else if (gameWorldComponent.isRole(p, ModRoles.ATTENDANT)) {
+                    SRE.SendRoomInfoToPlayer(p);
+                } else if (gameWorldComponent.isRole(p, ModRoles.DIO)) {
+                    hasDio = true;
+                } else if (gameWorldComponent.isRole(p, ModRoles.RECORDER)) {
+                    hasRecorder = true;
+                } else if (gameWorldComponent.isRole(p, ModRoles.CANDLE_BEARER)) {
+                    hasCandlebearer = true;
+                } else if (gameWorldComponent.isRole(p, ModRoles.RAVEN)) {
+                    hasRaven = true;
+                } else if (gameWorldComponent.isRole(p, BounsRoles.BEE_QUEEN)) {
+                    hasBee = true;
+                } else if (gameWorldComponent.isRole(p, ModRoles.NIAN_SHOU)) {
+                    hasNianShou = true;
+                } else if (gameWorldComponent.isRole(p, SERoles.ARSONIST)) {
+                    hasArsonist = true;
+                } else if (gameWorldComponent.isRole(p, ModRoles.CUCKOO)) {
+                    hasCuckoo = true;
+                } else if (gameWorldComponent.isRole(p, ModRoles.DAYWALKER)) {
+                    hasDaywalker = true;
+                } else if (gameWorldComponent.isRole(p, ModRoles.PELICAN)) {
+                    hasPelican = true;
+                } else if (gameWorldComponent.isRole(p, ModRoles.GODFATHER)) {
+                    hasGodfather = true;
+                } else if (gameWorldComponent.isRole(p, ModRoles.LEADER)) {
+                    hasLeader = true;
+                } else if (gameWorldComponent.isRole(p, BounsRoles.LICENSED_VILLAIN)) {
+                    hasLicensedVillain = true;
+                } else if (gameWorldComponent.isRole(p, ModRoles.NATURE_SPIRIT)) {
+                    hasNatureSpirit = true;
+                } else if (gameWorldComponent.isRole(p, ModRoles.DICTATOR)) {
+                    hasDictator = true;
+                }
+            }
+
+            if (hasDio) {
+                GameUtils.serverAsynTaskLists.add(new ServerTaskInfoClasses.SchedulerTask(20 * 8, () -> {
+                    all_players.forEach((p) -> {
+                        if (p != null)
+                            p.playNotifySound(NRSounds.DIO_SPAWN, SoundSource.PLAYERS, 0.5F, 1.0F);
+                    });
+                }));
+            }
+            if (hasRecorder) {
+                all_players.forEach((p) -> {
+                    if (p != null) {
+                        BroadcastCommand.BroadcastMessage(p, Component
+                                .translatable("message.noellesroles.recorder.entry").withStyle(ChatFormatting.YELLOW));
+                    }
+                });
+            }
+
+            if (hasBee) {
+                all_players.forEach((p) -> {
+                    if (p != null) {
+
+                        p.playNotifySound(SoundEvents.BEE_LOOP, SoundSource.MASTER, 0.5F, 1.0f);
+                        BroadcastCommand.BroadcastMessage(p, Component
+                                .translatable("message.noellesroles.bee.entry").withStyle(ChatFormatting.YELLOW));
+                    }
+                });
+            }
+            if (hasLicensedVillain) {
+                all_players.forEach((p) -> {
+                    if (p != null) {
+                        BroadcastCommand.BroadcastMessage(p, Component
+                                .translatable("message.noellesroles.licensed_villain.entry")
+                                .withStyle(ChatFormatting.YELLOW));
+                    }
+                });
+            }
+            if (hasCandlebearer) {
+                all_players.forEach((p) -> {
+                    if (p != null) {
+                        BroadcastCommand.BroadcastMessage(p, Component
+                                .translatable("message.noellesroles.candlebearer.entry")
+                                .withStyle(ChatFormatting.YELLOW));
+                    }
+                });
+            }
+            if (hasRaven) {
+                all_players.forEach((p) -> {
+                    if (p != null) {
+                        BroadcastCommand.BroadcastMessage(p, Component
+                                .translatable("message.noellesroles.raven.entry").withStyle(ChatFormatting.YELLOW));
+                    }
+                });
+            }
+            if (hasNatureSpirit) {
+                all_players.forEach((p) -> {
+                    if (p != null) {
+                        BroadcastCommand.BroadcastMessage(p, Component
+                                .translatable("message.noellesroles.nature_spirit.entry")
+                                .withStyle(ChatFormatting.RED));
+                    }
+                });
+            }
+            if (hasArsonist) {
+                all_players.forEach((p) -> {
+                    if (p != null) {
+                        BroadcastCommand.BroadcastMessage(p, Component
+                                .translatable("message.noellesroles.arsonist.entry").withStyle(ChatFormatting.YELLOW));
+                    }
+                });
+            }
+            if (hasCuckoo) {
+                all_players.forEach((p) -> {
+                    if (p != null) {
+                        BroadcastCommand.BroadcastMessage(p, Component
+                                .translatable("message.noellesroles.cuckoo.entry").withStyle(ChatFormatting.YELLOW));
+                    }
+                });
+            }
+            // 逐日者：出场播报（与布谷鸟/纵火犯等一致，场上存在该职业即向所有玩家广播）
+            if (hasDaywalker) {
+                all_players.forEach((p) -> {
+                    if (p != null) {
+                        BroadcastCommand.BroadcastMessage(p, Component
+                                .translatable("message.noellesroles.daywalker.entry").withStyle(ChatFormatting.YELLOW));
+                    }
+                });
+            }
+            if (hasPelican) {
+                all_players.forEach((p) -> {
+                    if (p != null) {
+                        BroadcastCommand.BroadcastMessage(p, Component
+                                .translatable("message.noellesroles.pelican.entry").withStyle(ChatFormatting.YELLOW));
+                    }
+                });
+            }
+            // 独裁者：全场播报（蓝色）
+            if (hasDictator) {
+                all_players.forEach((p) -> {
+                    if (p != null) {
+                        BroadcastCommand.BroadcastMessage(p, Component
+                                .translatable("message.noellesroles.dictator.entry").withStyle(ChatFormatting.AQUA));
+                    }
+                });
+            }
+            if (hasLeader) {
+                all_players.forEach((p) -> {
+                    if (p != null) {
+                        BroadcastCommand.BroadcastMessage(p, Component
+                                .translatable("message.noellesroles.leader.entry").withStyle(ChatFormatting.YELLOW));
+                    }
+                });
+            }
+            // 自定义职业：开局入场提示（与布谷鸟/纵火犯一致——场上存在该职业即向所有玩家广播）
+            java.util.Set<String> announcedCustomRoles = new java.util.HashSet<>();
+            java.util.List<CustomRoleData> customEntranceHints = new java.util.ArrayList<>();
+            for (var p : all_players) {
+                if (p == null) {
+                    continue;
+                }
+                SRERole role = gameWorldComponent.getRole(p);
+                if (role == null || !"customrole".equals(role.identifier().getNamespace())) {
+                    continue;
+                }
+                String rolePath = role.identifier().getPath();
+                if (announcedCustomRoles.contains(rolePath)) {
+                    continue;
+                }
+                CustomRoleData cd = CustomRoleLoader.getCustomRoleData(rolePath);
+                if (cd == null || cd.entranceHint == null || cd.entranceHint.isBlank()) {
+                    continue;
+                }
+                announcedCustomRoles.add(rolePath);
+                customEntranceHints.add(cd);
+            }
+            for (CustomRoleData cd : customEntranceHints) {
+                ChatFormatting hintColor = ChatFormatting.YELLOW;
+                if (cd.entranceHintColor != null && !cd.entranceHintColor.isBlank()) {
+                    try {
+                        hintColor = ChatFormatting.valueOf(cd.entranceHintColor.toUpperCase(java.util.Locale.ROOT));
+                    } catch (IllegalArgumentException ignored) {
+                    }
+                }
+                final ChatFormatting finalColor = hintColor;
+                for (var p : all_players) {
+                    if (p != null) {
+                        BroadcastCommand.BroadcastMessage(p, Component.literal(cd.entranceHint).withStyle(finalColor));
+                    }
+                }
+            }
+            if (hasGodfather) {
+                GameUtils.serverAsynTaskLists.add(new ServerTaskInfoClasses.SchedulerTask(20 * 6, () -> {
+                    all_players.forEach((p) -> {
+                        if (p != null)
+                            p.playNotifySound(NRSounds.MAFIA, SoundSource.MASTER, 1.0F, 1.0F);
+                    });
+                }));
+            }
+            if (hasNianShou && !nianShouFirecrackersDistributedThisGame) {
+                nianShouFirecrackersDistributedThisGame = true;
+                for (var player : all_players) {
+                    ItemStack firecrackerStack = new ItemStack(TMMItems.FIRECRACKER);
+                    firecrackerStack.set(DataComponents.MAX_STACK_SIZE, 4);
+                    firecrackerStack.setCount(4);
+                    player.getInventory().add(firecrackerStack);
+                    BroadcastCommand.BroadcastMessage(player, Component
+                            .translatable("message.noellesroles.nianshou.firecrackers_distributed")
+                            .withStyle(ChatFormatting.GOLD));
+                }
+            }
+        });
+    }
+
+    // --- ServerLifecycleEvents ---
+
+    private static Component getProcessorType(AreasSettings areasSettings, boolean emergency) {
+        boolean noVote = false;
+        var result = Component.translatable("meeting.sre.entry.kill").withStyle(ChatFormatting.RED);
+        if (!areasSettings.meetingVoteEnabled) {
+            result = Component.translatable("meeting.sre.entry.no_vote").withStyle(ChatFormatting.WHITE);
+            noVote = true;
+        } else {
+            switch (areasSettings.meetingVoteProcessor) {
+                case DEFAULT:
+                case FORCE_KILL:
+                case KILL:
+                    result = Component.translatable("meeting.sre.entry.kill").withStyle(ChatFormatting.RED);
+                    break;
+                case GLOWING:
+                    result = Component.translatable("meeting.sre.entry.glow").withStyle(ChatFormatting.LIGHT_PURPLE);
+                    break;
+                default:
+                    result = Component.translatable("meeting.sre.entry.custom");
+                    break;
+            }
+        }
+        if (emergency) {
+            if (areasSettings.emergencyMeetingVoteEnabled == TrueFalseResult.FALSE) {
+                result = Component.translatable("meeting.sre.entry.no_vote").withStyle(ChatFormatting.WHITE);
+            } else if (areasSettings.emergencyMeetingVoteEnabled == TrueFalseResult.PASS) {
+                if (noVote) {
+                    return result;
+                }
+            }
+            {
+                switch (areasSettings.emergencyMeetingVoteProcessor) {
+                    case FORCE_KILL:
+                    case KILL:
+                        result = Component.translatable("meeting.sre.entry.kill").withStyle(ChatFormatting.RED);
+                        break;
+                    case FUNCTION:
+                        result = Component.translatable("meeting.sre.entry.custom").withStyle(ChatFormatting.GREEN);
+                        break;
+                    case GLOWING:
+                        result = Component.translatable("meeting.sre.entry.glow")
+                                .withStyle(ChatFormatting.LIGHT_PURPLE);
+                        break;
+                    case DEFAULT:
+                    default:
+                        break;
+                }
+            }
+        }
+        return result;
+    }
+
+    private static void registerServerLifecycle() {
+        ServerLifecycleEvents.SERVER_STARTED.register((server) -> {
+            if (ModEventsRegister.isMJVerifyEnabled) {
+                Harpymodloader.officialVerify = Noellesroles.checkMJVerify();
+            } else {
+                Harpymodloader.officialVerify = true;
+            }
+        });
+    }
+
+    // --- ServerTick ---
+
+    private static void registerServerTick() {
+        OnGameServerTick.EVENT.register((world) -> {
+            var gamecca = SREGameWorldComponent.KEY.get(world);
+            var modifiercca = WorldModifierComponent.KEY.get(world);
+            for (ServerPlayer p : world.players()) {
+                if (gamecca.isRole(p, ModRoles.OLDMAN)) {
+                    RoleTickers.skipRunningTaskTick(p, gamecca);
+                } else if (modifiercca.isModifier(p, NRModifiers.FRAIL)) {
+                    RoleTickers.skipRunningTaskTick(p, gamecca);
+                }
+            }
+        });
+        // 烟雾/迷幻区域 + 塔罗 + 收音机
+        ServerTickEvents.END_SERVER_TICK.register((server) -> {
+            ServerSmokeAreaManager.tick();
+            org.agmas.noellesroles.content.entity.ServerGrenadeAreaManager.tick();
+            org.agmas.noellesroles.game.wallbreak.WallBreakManager.tick(server);
+            HallucinationAreaManager.tick();
+
+            if (server.getTickCount() % 10 == 0) {
+                HashSet<UUID> toDeleted = new HashSet<>();
+                for (var p_u : RadioItem.RADIO_GROUP) {
+                    ServerPlayer p = server.getPlayerList().getPlayer(p_u);
+                    if (p == null) {
+                        toDeleted.add(p_u);
+                    } else {
+                        if (p.isSpectator()) {
+                            toDeleted.add(p_u);
+                            p.displayClientMessage(Component.translatable("message.noellesroles.radio.left")
+                                    .withStyle(ChatFormatting.RED), true);
+                        } else if (!MCItemsUtils.hasItem(p, ModItems.RADIO)) {
+                            toDeleted.add(p_u);
+                            p.displayClientMessage(Component.translatable("message.noellesroles.radio.left")
+                                    .withStyle(ChatFormatting.RED), true);
+                        }
+                    }
+                }
+                RadioItem.RADIO_GROUP.removeAll(toDeleted);
+            }
+        });
+
+        OnGameServerTick.EVENT.register((world) -> {
+            TarotAssemblyManager.serverLevelTick(world);
+        });
+
+        // pending spectator death penalty checker
+        ServerTickEvents.END_SERVER_TICK.register(server -> {
+            if (pendingRejudgingSpectatorDeathPeanlty.getAndSet(false)) {
+                NRDeathEvents.reJudgeSpectatorsPenalty(server.overworld());
+            }
+        });
+        // 老人猪处理
+        ServerTickEvents.END_SERVER_TICK.register(server -> {
+            var gameWorldComponent = SREGameWorldComponent.KEY.maybeGet(server.overworld()).orElse(null);
+            if (gameWorldComponent == null || !gameWorldComponent.isRunning())
+                return;
+            ServerLevel level = server.overworld();
+            List<? extends Pig> pigs = level.getEntities(EntityTypeTest.forExactClass(Pig.class),
+                    (pig) -> pig.getTags().contains(RoleShopHandler.OLDMAN_EASTER_EGG_PIG_NO_STEP_TAG));
+            for (Pig pig : pigs) {
+                if (pig.getControllingPassenger() == null) {
+                    oldmanPigRidePositions.remove(pig.getUUID());
+                    continue;
+                }
+                pig.setJumping(false);
+            }
+        });
+
+        // 喷气背包 tick
+        ServerTickEvents.END_SERVER_TICK.register(server -> {
+            for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+                JetpackItem.tickJetpackEffect(player);
+            }
+        });
+
+        // 时间停止 effect
+        ServerTickEvents.START_SERVER_TICK.register((server) -> {
+            if (TimeStopEffect.freezeTime > 0) {
+                TimeStopEffect.freezeTime--;
+                if (TimeStopEffect.freezeTime == 0) {
+                    server.getPlayerList().getPlayers().forEach((player) -> {
+                        if (TimeStopEffect.canMovePlayers.contains(player.getUUID())) {
+                            player.addEffect(new MobEffectInstance(MobEffects.INVISIBILITY, 5, 0, false, false, false));
+                        }
+                        ServerPlayNetworking.send(player, new RemoveStatusBarPayload("Time_Stop"));
+                    });
+                    server.tickRateManager().setFrozen(false);
+                }
+            }
+        });
+    }
+
+    // --- PlayerConnection ---
+
+    private static void registerPlayerConnection() {
+        ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
+            final var player = handler.getPlayer();
+            NRDeathEvents.handleDeathPenalty(player, true, true);
+            sender.sendPacket(new BloodConfigS2CPacket(NoellesRolesConfig.HANDLER.instance().enableClientBlood));
+        });
+    }
+
+}

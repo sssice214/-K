@@ -1,0 +1,632 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.role.bouns;
+
+import io.wifi.starrailexpress.SRE;
+import io.wifi.starrailexpress.api.AreasSettingUtils.MapSpecialFeatures;
+import io.wifi.starrailexpress.api.EggRole;
+import io.wifi.starrailexpress.api.InstinctType;
+import io.wifi.starrailexpress.api.NormalRole;
+import io.wifi.starrailexpress.api.RoleTeam;
+import io.wifi.starrailexpress.api.SRERole;
+import io.wifi.starrailexpress.api.TMMRoles;
+import io.wifi.starrailexpress.api.NormalRole.RoleType;
+import io.wifi.starrailexpress.api.SRERole.MoodType;
+import io.wifi.starrailexpress.cca.SREGameWorldComponent;
+import io.wifi.starrailexpress.api.data.RoleData;
+import io.wifi.starrailexpress.cca.SREPlayerPsychoComponent;
+import io.wifi.starrailexpress.event.AllowPlayerDeathWithKiller;
+import io.wifi.starrailexpress.game.GameUtils;
+import io.wifi.starrailexpress.game.GameConstants;
+import io.wifi.starrailexpress.util.Color;
+import io.wifi.starrailexpress.util.SRENetworkMessageUtils;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
+import org.agmas.harpymodloader.Harpymodloader;
+import org.agmas.harpymodloader.events.GameInitializeEvent;
+import org.agmas.noellesroles.role_data.innocence.AnglerRoleData;
+import org.agmas.noellesroles.role_data.innocence.ClimbPoseRoleData;
+import org.agmas.noellesroles.role_data.innocence.FatFishRoleData;
+import org.agmas.noellesroles.role_data.innocence.VoodooRoleData;
+import org.agmas.noellesroles.role_data.innocence.DiscMasterRoleData;
+import org.agmas.noellesroles.role_data.innocence.TelegrapherRoleData;
+import org.agmas.noellesroles.role_data.killer.CreeperRoleData;
+import org.agmas.noellesroles.utils.RoleUtils;
+import org.agmas.noellesroles.game.roles.killer.creeper.RainbowCreeperRole;
+import org.agmas.noellesroles.init.FunnyItems;
+import org.agmas.noellesroles.init.NRSounds;
+import org.agmas.noellesroles.modifier.BounsModifiers;
+import org.agmas.noellesroles.role.touhou.THMagicForestRoles;
+import org.agmas.noellesroles.role.ModRoles;
+import org.agmas.noellesroles.role.anime.AnimeRoles;
+import org.agmas.noellesroles.role.touhou.THHumanVillageRoles;
+import org.agmas.noellesroles.role.touhou.THLostForestRoles;
+import org.agmas.noellesroles.role.touhou.THMountainRoles;
+import org.agmas.noellesroles.role.touhou.THRedHouseRoles;
+import org.agmas.noellesroles.role.touhou.THMiscRoles;
+import org.agmas.noellesroles.role.bouns.roles.*;
+import io.wifi.starrailexpress.index.TMMItems;
+import org.agmas.noellesroles.role_data.neutral.LicensedVillainRoleData;
+
+/**
+ * 彩蛋角色类，受到彩蛋刷新概率影响
+ */
+public class BounsRoles {
+    public static final String NAMESPACE = "bouns";
+    public static final ResourceLocation LENGXIAO_ID = id("lengxiao");
+    public static final ResourceLocation BEST_VIGILANTE_ID = id("best_vigilante");
+    public static final ResourceLocation WRITER_ID = id("writer");
+    public static final ResourceLocation BASEBALL_PLAYER_ID = id("baseball_player");
+    public static final ResourceLocation CREEPER_ID = id("creeper");
+    public static final ResourceLocation TELEGRAPHER_ID = id("telegrapher");
+    public static final ResourceLocation DISC_MASTER_ID = id("disc_master");
+    public static final ResourceLocation ANGLER_ID = id("angler");
+    public static final ResourceLocation PROGRAMMER_ID = id("programmer");
+    public static final ResourceLocation SCOUT_ID = id("scout");
+    public static final ResourceLocation SCOUT_CAPTAIN_ID = id("scout_captain");
+    public static final ResourceLocation FOREST_MUSHROOM_ZOMBIE_ID = id("forest_mushroom_zombie");
+    public static final ResourceLocation FAT_FISH_ID = id("fat_fish");
+    public static final ResourceLocation PURPLE_MONSTER_ID = id("purple_monster");
+
+    public static ResourceLocation id(String path) {
+        return ResourceLocation.fromNamespaceAndPath(NAMESPACE, path);
+    }
+
+    /**
+     * 棒球员角色
+     * - 属于警长阵营 (isInnocent = true, setVigilanteTeam = true)
+     * - 不能使用杀手能力 (canUseKiller = false)
+     * - 真实心情系统
+     * - 标准冲刺时间
+     * - 在计分板上显示
+     * - 技能：开局自带一个球棒
+     * - 2% * egg chance 概率刷新
+     */
+    public static SRERole BASEBALL_PLAYER = TMMRoles.registerRole(new EggRole(
+            BASEBALL_PLAYER_ID, // 角色 ID
+            new Color(139, 69, 19).getRGB(), // 棕色 - 代表球棒
+            true, // isInnocent = 警长阵营
+            false, // canUseKiller = 无杀手能力
+            SRERole.MoodType.REAL, // 真实心情
+            TMMRoles.CIVILIAN.getMaxSprintTime(), // 标准冲刺时间
+            false // 显示计分板
+    )).setVigilanteTeam(true).setCanPickUpRevolver(true).setCanBeRandomedByOtherRoles(false)
+            .setSpecialVigilante(true).setDefaultEnableChance(200).setCanSetSpawnInfoInConfig(true);
+
+    /**
+     * 苦力怕角色
+     * - 属于杀手阵营 (isInnocent = false, canUseKiller = true)
+     * - 假心情系统
+     * - 无限冲刺时间
+     * - 在计分板上显示
+     * - 技能：按下技能键花费300金币引燃自身，10s后爆炸
+     * - 只能购买撬锁器和刀（130金币）
+     * - 10%概率刷新
+     */
+    public static SRERole CREEPER = TMMRoles.registerRole(new RainbowCreeperRole(CREEPER_ID, // 角色 ID
+            new Color(0, 128, 0).getRGB(), // 绿色 - 代表苦力怕
+            false, // isInnocent = 杀手阵营
+            true, // canUseKiller = 有杀手能力
+            SRERole.MoodType.FAKE, // 假心情
+            -1, // 无限冲刺时间
+            true // 显示计分板
+    ) {
+        @Override
+        public int getMoodColor() {
+            return ModRoles.PUPPETEER_COLOR.getOrRandomColor();
+        }
+    }, "creator_team").setRoleData(CreeperRoleData::new).setCanBeRandomedByOtherRoles(false).setDefaultMax(1)
+            .setDefaultEnableChance(5000).setCanSeeTime(true);
+    /**
+     * 作家角色
+     * - 属于乘客阵营 (isInnocent = true)
+     * - 不能使用杀手能力 (canUseKiller = false)
+     * - 真实心情系统
+     * - 标准冲刺时间
+     * - 在计分板上显示
+     * - 专属商店：书与笔(100金币)
+     * - 2%概率刷新
+     */
+    // 作家角色 - 乘客阵营
+    public static SRERole WRITER = TMMRoles.registerRole(new EggRole(
+            WRITER_ID, // 角色 ID
+            new Color(254, 254, 254).getRGB(), // 白色 - 代表书与笔
+            true, // isInnocent = 乘客阵营
+            false, // canUseKiller = 无杀手能力
+            SRERole.MoodType.REAL, // 真实心情
+            TMMRoles.CIVILIAN.getMaxSprintTime(), // 标准冲刺时间
+            false // 不隐藏计分板
+    )).setCanSeeCoin(true).setDefaultEnableChance(200);
+    // 唱片师角色 - 平民阵营（彩蛋职业，1% 概率刷新）
+    public static SRERole DISC_MASTER = TMMRoles.registerRole(new EggRole(
+            DISC_MASTER_ID, // 角色 ID
+            new Color(255, 87, 34).getRGB(), // 橙红色 - 代表唱片/音乐
+            true, // isInnocent = 平民阵营
+            false, // canUseKiller = 无杀手能力
+            SRERole.MoodType.REAL, // 真实心情
+            TMMRoles.CIVILIAN.getMaxSprintTime(), // 标准冲刺时间
+            false // 不隐藏计分板
+    )).setCanSeeCoin(true).setRoleData(DiscMasterRoleData::new).setDefaultEnableChance(100);
+    /**
+     * 电报员角色
+     * - 属于乘客阵营 (isInnocent = true)
+     * - 不能使用杀手能力 (canUseKiller = false)
+     * - 真实心情系统
+     * - 标准冲刺时间
+     * - 不隐藏计分板
+     * - 技能：可以发送匿名消息给所有玩家
+     * - 每局最多发送6次
+     * - 2%概率刷新
+     */
+    // 电报员角色 - 乘客阵营
+    public static SRERole TELEGRAPHER = TMMRoles.registerRole(new EggRole(
+            TELEGRAPHER_ID, // 角色 ID
+            new Color(199, 155, 233).getRGB(), // 浅紫色
+            true, // isInnocent = 乘客阵营
+            false, // canUseKiller = 无杀手能力
+            SRERole.MoodType.REAL, // 真实心情
+            TMMRoles.CIVILIAN.getMaxSprintTime(), // 标准冲刺时间
+            false // 不隐藏计分板
+    )).setCanSeeCoin(true).setRoleData(TelegrapherRoleData::new)
+            .setDefaultEnableChance(200);
+
+    /**
+     * 垂钓者：常驻平民。在水下职业地图或实验室地图刷新（两者为「或」关系）。
+     */
+    public static SRERole ANGLER = TMMRoles.registerRole(new NormalRole(
+            ANGLER_ID,
+            new Color(32, 72, 86).getRGB(),
+            true,
+            false,
+            SRERole.MoodType.REAL,
+            TMMRoles.CIVILIAN.getMaxSprintTime(),
+            false)).setCanSeeCoin(true).setRoleData(AnglerRoleData::new)
+            // 水下图或实验室图均可刷新（参照网警，用 SpecialMapRolesCondition 表达组合关系）
+            .setSpecialMapRolesCondition((t) -> t.contains(MapSpecialFeatures.UNDERWATER)
+                    || t.contains(MapSpecialFeatures.LAB))
+            .setDefaultEnableChance(4000).setDefaultMax(1).setCanBeRandomedByOtherRoles(false)
+            .setAddedVersion("4.4"); // versiontag 4.4
+
+    public static SRERole CAT_KILLER = TMMRoles.registerRole(new EggRole(id("cat_killer"), // 角色 ID
+            new Color(255, 80, 140).getRGB(), // 深粉色 - 猫娘~
+            false, // isInnocent = 好人阵营
+            true, // canUseKiller = 无杀手能力
+            SRERole.MoodType.FAKE, // 真实心情
+            Integer.MAX_VALUE, // 标准冲刺时间
+            true // 不显示计分板
+    ) {
+        @Override
+        public void onPsychoOver(Player player, SREPlayerPsychoComponent psychoComponent) {
+            GameUtils.killPlayer(player, true, null, SRE.wifiId("cat_killer"));
+            // 先走默认逻辑，防止傀儡死
+            if (!player.isSpectator()) {
+                if (SREGameWorldComponent.KEY.get(player.level()).isRole(player,
+                        BounsRoles.CAT_KILLER)) {
+                    GameUtils.forceKillPlayer(player, true, null, SRE.wifiId("cat_killer"));
+                }
+            }
+        }
+
+        @Override
+        public ResourceLocation getPsychoSkin(Player player, boolean isSlim) {
+            return SRE.id("textures/entity/custom_psycho/cat_killer.png");
+        }
+    }).setCanSeeTime(true).setCanSeeCoin(true).setDefaultMax(0).setCanBeRandomedByOtherRoles(false);
+    public static SRERole CAT_NECROMANCER = TMMRoles.registerRole(new EggRole(
+            SRE.wifiId("cat_necromancer"), // 角色 ID
+            new Color(255, 174, 201).getRGB(), // 粉色 - 猫娘~
+            false, // isInnocent = 好人阵营
+            true, // canUseKiller = 无杀手能力
+            SRERole.MoodType.FAKE, // 真实心情
+            Integer.MAX_VALUE, // 标准冲刺时间
+            true // 不显示计分板
+    )).setCanSeeTime(true).setCanSeeCoin(true)
+            .setDefaultMax(1).setDefaultEnableChance(4000).setDefaultEnableNeededPlayerCount(12);
+    /**
+     * 更好的义警角色
+     * - 属于警长阵营 (isInnocent = true, setVigilanteTeam = true)
+     * - 不能使用杀手能力 (canUseKiller = false)
+     * - 真实心情系统
+     * - 标准冲刺时间
+     * - 在计分板上显示
+     * - 技能：开局自带一颗手榴弹
+     */
+    public static SRERole BEST_VIGILANTE = TMMRoles.registerRole(new EggRole(
+            BEST_VIGILANTE_ID, // 角色 ID
+            new Color(0, 128, 128).getRGB(), // 深青色 - 代表更强悍的义警
+            true, // isInnocent = 警长阵营
+            false, // canUseKiller = 无杀手能力
+            SRERole.MoodType.REAL, // 真实心情
+            TMMRoles.CIVILIAN.getMaxSprintTime(), // 标准冲刺时间
+            false // 显示计分板
+    )).setVigilanteTeam(true).setCanPickUpRevolver(true).setCanBeRandomedByOtherRoles(false)
+            .setSpecialVigilante(true).setDefaultMax(1).setDefaultEnableChance(10);
+    /**
+     * 职业：冷笑
+     * 巫毒对立职业
+     */
+    public static SRERole LENGXIAO = TMMRoles
+            .registerRole(new EggRole(LENGXIAO_ID, new Color(230, 178, 130).getRGB(),
+                    false, true, SRERole.MoodType.FAKE, Integer.MAX_VALUE, true) {
+                @Override
+                public ResourceLocation getPsychoSkin(Player player, boolean isSlim) {
+                    ResourceLocation texture = SRE.id("textures/block/plush/lengxiaocn.png");
+                    return texture;
+                }
+            }, "creator_team").setDefaultEnableChance(1000).setRoleData(VoodooRoleData::new)
+            .addRelatedRole(ModRoles.VOODOO);
+
+    public static SRERole LAO_DA = TMMRoles.registerRole(new EggRole(id("lao_da"), new Color(236, 209, 72).getRGB(),
+            true, false, SRERole.MoodType.REAL, TMMRoles.CIVILIAN_MAX_SPRINT_TICKS, false) {
+        @Override
+        public InteractionResult onDropItem(Player player, ItemStack item) {
+            if (item.is(FunnyItems.ICE_RED_TEA))
+                return InteractionResult.SUCCESS;
+            return InteractionResult.PASS;
+        }
+
+        @Override
+        public void onDeath(Player victim, boolean spawnBody, Player killer, ResourceLocation deathReason,
+                boolean forceDeath) {
+            for (Player p : victim.level().players()) {
+                if (p instanceof ServerPlayer sp) {
+                    SRENetworkMessageUtils.sendBroadcast(sp,
+                            Component.translatable("message.noellesroles.lao_da.death"));
+                    RoleUtils.playSound(sp, NRSounds.ROLES_LAODA_SEE_YOU_AGAIN, SoundSource.MASTER,
+                            0.4f, 1f);
+                }
+            }
+            return;
+        }
+    }).setDefaultEnableChance(100);
+
+    public static SRERole BEE_QUEEN = TMMRoles.registerRole(new BeeFamilyRole(id("bee_queen"),
+            new Color(255, 242, 0).getRGB(),
+            false,
+            false,
+            SRERole.MoodType.FAKE,
+            Integer.MAX_VALUE,
+            false))
+            .setCanBeRandomedByOtherRoles(false)
+            .setNeutrals(true)
+            .setCanAutoAddMoney(true)
+            .setCanEarnKillerCoinAwardsFromKills(true)
+            .setDefaultEnableNeededPlayerCount(16)
+            .setDefaultEnableChance(2000)
+            .setCanUseInstinctAndNightVision(true);
+
+    public static SRERole BEE_WASP = TMMRoles.registerRole(new BeeFamilyRole(id("bee_wasp"),
+            new Color(255, 242, 0).getRGB(),
+            false,
+            false,
+            SRERole.MoodType.FAKE,
+            Integer.MAX_VALUE,
+            false))
+            .setCanBeRandomedByOtherRoles(false)
+            .setNeutrals(true)
+            .setCanSetSpawnInfoInConfig(false)
+            .setDefaultMax(0)
+            .setCanEarnKillerCoinAwardsFromKills(true)
+            .addBothRelatedRole(BEE_QUEEN)
+            .setCanUseInstinctAndNightVision(true);
+    public static SRERole BEE_WORKER = TMMRoles.registerRole(new BeeFamilyRole(id("bee_worker"),
+            new Color(255, 242, 0).getRGB(),
+            false,
+            false,
+            SRERole.MoodType.FAKE,
+            Integer.MAX_VALUE,
+            false))
+            .setCanBeRandomedByOtherRoles(false)
+            .setCanEarnKillerCoinAwardsFromKills(true)
+            .setNeutrals(true)
+            .setCanSetSpawnInfoInConfig(false)
+            .setDefaultMax(0)
+            .addBothRelatedRole(BEE_QUEEN)
+            .setCanUseInstinctAndNightVision(true);
+
+    public static SRERole HENG_XING_TI = TMMRoles.registerRole(
+            new HengXingTiRole(
+                    id("heng_xing_ti"),
+                    new Color(100, 100, 0).getRGB(),
+                    false,
+                    false,
+                    SRERole.MoodType.REAL,
+                    TMMRoles.CIVILIAN_MAX_SPRINT_TICKS,
+                    false))
+            .setBeSeenInstinctType(InstinctType.DEFAULT, InstinctType.TARGET_ROLE_COLOR)
+            .setDefaultEnableChance(1000)
+            .setNeutralForInnocent(true);
+
+    public static SRERole WITCH_MAIDEN = TMMRoles.registerRole(new WitchMaidenRole(
+            id("witch_maiden"),
+            new Color(104, 10, 10).getRGB(),
+            RoleType.NEUTRALS_FOR_KILLERS,
+            MoodType.FAKE,
+            Integer.MAX_VALUE, true))
+            .setCanUseInstinctAndNightVision(true)
+            .setDefaultEnableChance(1000)
+            .setDefaultEnableNeededPlayerCount(18)
+            .setAddedVersion("4.4"); // versiontag 4.4
+
+    public static SRERole RABBIT_WANSUI = TMMRoles.registerRole(new RabbitWansuiRole(
+            id("rabbit_wansui"),
+            new Color(253, 253, 253).getRGB(),
+            RoleType.NEUTRALS,
+            MoodType.FAKE,
+            Integer.MAX_VALUE,
+            true))
+            .setDefaultEnableChance(500)
+            .setBeSeenInstinctType(InstinctType.NONE, InstinctType.NONE)
+            .setCanUseInstinctAndNightVision(true)
+            .setInstinctType(InstinctType.DEFAULT, InstinctType.OBSERVER_ROLE_COLOR)
+            .setKillExtraCoinAwards(50)
+            .setDefaultEnableNeededPlayerCount(18)
+            .setAddedVersion("4.4"); // versiontag 4.4
+
+    public static SRERole LICENSED_VILLAIN = TMMRoles.registerRole(new EggRole(
+            id("licensed_villain"), // 角色 ID
+            new Color(0x2B, 0x2B, 0x2B).getRGB(), // 浅黑色
+            RoleType.NEUTRALS,
+            SRERole.MoodType.FAKE, // 真实心情
+            Integer.MAX_VALUE,
+            true) // 显示计分板
+    )
+            .setRoleData(LicensedVillainRoleData::new)
+            .setNeutrals(true) // 独立胜利中立
+            .setNeutralForKiller(false)
+            .setCanBeRandomedByOtherRoles(false)
+            .setDefaultEnableChance(1000) // 刷新率 10%
+            .setDefaultEnableNeededPlayerCount(12) // 人数刷新上限 12 人
+            .setCanAutoAddMoney(true) // 被动收入金币
+            .setAddedVersion("4.4") // versiontag 4.4
+            .setTaskReward(2, 1, new ItemStack(TMMItems.STANDARD_REVOLVER)) // 完成 2 个任务获制式左轮
+            .setCanUseInstinctAndNightVision(true)
+            .setCanUncuffOthers(true);
+
+    /**
+     * 程序员角色
+     * - 彩蛋职业（受彩蛋刷新概率影响）
+     * - 属于杀手阵营 (isInnocent = false, canUseKiller = true)
+     * - 假心情系统、无限冲刺时间、在计分板上显示
+     * - 商店：杀手默认刀具 + 终端（150金币）
+     * - 终端右键打开终端界面，可输入 /give @s <物品ID> 与 /tp @s room，执行成功后终端销毁
+     * - 职业相关规则全部集中在 {@link ProgrammerRole} 里
+     */
+    public static SRERole PROGRAMMER = TMMRoles.registerRole(new ProgrammerRole(
+            PROGRAMMER_ID, // 角色 ID
+            new Color(0, 170, 120).getRGB(), // 终端绿
+            false, // isInnocent = 杀手阵营
+            true, // canUseKiller = 有杀手能力
+            SRERole.MoodType.FAKE, // 假心情
+            -1, // 无限冲刺时间
+            true // 显示计分板
+    )).setCanBeRandomedByOtherRoles(false)
+            .setDefaultMax(1)
+            .setDefaultEnableChance(2000) // 彩蛋刷新率 20%
+            .setAddedVersion("4.4"); // versiontag 4.4
+
+    /**
+     * 童子军角色（参考 PEAK）
+     * - 彩蛋职业（受彩蛋刷新概率影响），只在带 {@link MapSpecialFeatures#PEAK} 特性的爬山图刷新
+     * - 属于乘客阵营 (isInnocent = true, canUseKiller = false)、真实心情
+     * - 2 倍平民体力：空手右键紧贴的墙壁开始攀爬，攀爬时按移动方向消耗体力
+     * - 技能：切换站立 / 匍匐姿态
+     * - 攀爬能力由 {@code setCanClimbWalls(true)} 开启，实现在 {@link ScoutRole} 里
+     */
+    public static SRERole SCOUT = TMMRoles.registerRole(new ScoutRole(
+            SCOUT_ID, // 角色 ID
+            new Color(120, 170, 80).getRGB(), // 童子军绿
+            true, // isInnocent = 乘客阵营
+            false, // canUseKiller = 无杀手能力
+            SRERole.MoodType.REAL, // 真实心情
+            TMMRoles.CIVILIAN.getMaxSprintTime() * 2, // 攀爬需要更多体力
+            false // 不隐藏计分板
+    )).setCanSeeCoin(true)
+            .setRoleData(ClimbPoseRoleData::new)
+            .setCanClimbWalls(true)
+            .addFlag("peak")
+            // 只在爬山地图刷新（枚举里 PEAK 就是为童子军预留的）
+            .setSpecialMapRolesCondition((t) -> t.contains(MapSpecialFeatures.PEAK))
+            .setDefaultMax(1)
+            .setDefaultEnableChance(0) // 彩蛋刷新率 2%
+            .setCanBeRandomedByOtherRoles(false);
+
+    /**
+     * 森蕈僵尸（杀手，参考 PEAK 的追猎者）
+     * - 彩蛋职业，复用童子军那套攀爬逻辑（{@code setCanClimbWalls(true)}）
+     * - 属于杀手阵营 (isInnocent = false, canUseKiller = true)：吃默认杀手商店，不覆写
+     * getShopEntries()
+     * - 只在带 {@link MapSpecialFeatures#PEAK} 特性的爬山图出现
+     * - 作为主职业：通过 addOccupationRole 绑定生成 {@link #SCOUT}（见类末尾静态块）
+     * - 技能：与童子军相同的站立 / 匍匐姿态
+     */
+    public static SRERole FOREST_MUSHROOM_ZOMBIE = TMMRoles.registerRole(new ScoutRole(
+            FOREST_MUSHROOM_ZOMBIE_ID, // 角色 ID
+            new Color(96, 116, 66).getRGB(), // 森蕈的菌盖苔绿
+            false, // isInnocent = 杀手阵营
+            true, // canUseKiller = 有杀手能力（默认杀手商店）
+            SRERole.MoodType.FAKE, // 假心情
+            Integer.MAX_VALUE, // 无限攀爬体力
+            true // 显示计分板
+    )).setCanSeeCoin(true)
+            .setRoleData(ClimbPoseRoleData::new)
+            .setCanClimbWalls(true)
+            .addFlag("peak")
+            .setSpecialMapRolesCondition((t) -> t.contains(MapSpecialFeatures.PEAK))
+            .setDefaultMax(1)
+            .setDefaultEnableChance(8000)
+            .setCanBeRandomedByOtherRoles(false);
+
+    /**
+     * 童子军队长（警长阵营）
+     * - 彩蛋职业，只在带 {@link MapSpecialFeatures#PEAK} 特性的爬山图刷新
+     * - 警长阵营：{@code setVigilanteTeam(true) + setSpecialVigilante(true)}，可以捡枪
+     * - 体力上限是平民的 3 倍（{@link ScoutCaptainRole#STAMINA_MULTIPLIER}）
+     * - 依然是攀爬职业：{@code setCanClimbWalls(true)} + {@link ScoutCaptainRole}
+     * - 吃东西额外回体力：每次吃完一份食物 +{@link ScoutCaptainRole#EAT_STAMINA_RESTORE}（10*5）
+     * - 任务奖励：完成 2 个任务获得制式左轮（手枪）
+     */
+    public static SRERole SCOUT_CAPTAIN = TMMRoles.registerRole(new ScoutCaptainRole(
+            SCOUT_CAPTAIN_ID, // 角色 ID
+            new Color(52, 110, 74).getRGB(), // 深松绿，比童子军更「队长」
+            true, // isInnocent = 乘客 / 警长阵营
+            false, // canUseKiller = 无杀手能力
+            SRERole.MoodType.REAL, // 真实心情
+            TMMRoles.CIVILIAN.getMaxSprintTime() * ScoutCaptainRole.STAMINA_MULTIPLIER, // 3 倍体力
+            false // 不隐藏计分板
+    )).setCanSeeCoin(true)
+            .addFlag("peak")
+            .setVigilanteTeam(true)
+            .setSpecialVigilante(true)
+            .setCanPickUpRevolver(true)
+            .setRoleData(ClimbPoseRoleData::new)
+            .setCanClimbWalls(true)
+            .setSpecialMapRolesCondition((t) -> t.contains(MapSpecialFeatures.PEAK))
+            // 完成 2 个任务获左轮手枪，只触发一次
+            .setTaskReward(2, 1, new ItemStack(TMMItems.REVOLVER))
+            .setDefaultMax(1)
+            .setSpecialPolice(true)
+            .setDefaultEnableChance(8000)
+            .setCanBeRandomedByOtherRoles(false);
+
+    /**
+     * 大肥鱼（DeepSeek 娘化形象）
+     * - 彩蛋职业 · 偏好中立（与好人一同获胜），全地图刷新（不限制地图）
+     * - 技能：鲸歌（范围声波震慑，冷却 60s）、摆尾冲刺（冲刺 + 撞飞，冷却 25s）
+     * - 被动：浑水鱼（水下呼吸 / 海豚恩惠 / 水下额外回体力）、圆滚滚（抗击退 + 移动时顶开别人）
+     * - 吃东西会投喂团子：周围 6 格内的友军回体力并挂短时再生
+     * - 专属商店：食力架 / 冷静茶 / 肾上腺素 / 防护药剂
+     * - 免疫阴谋家的猜测（被猜中也不会死）
+     * - 皮肤：assets/noellesroles/textures/entity/player/deepseek.png（细手 Alex 模型）
+     */
+    public static SRERole FAT_FISH = TMMRoles.registerRole(new FatFishRole(
+            FAT_FISH_ID, // 角色 ID
+            new Color(70, 130, 200).getRGB(), // 深海蓝
+            RoleTeam.NEUTRAL_INNOCENT, // 偏好中立：随好人一同胜利
+            SRERole.MoodType.REAL, // 真实心情
+            TMMRoles.CIVILIAN.getMaxSprintTime(), // 标准体力
+            false // 不隐藏计分板
+    )).setCanSeeCoin(true)
+            .setSpecialMapRole(MapSpecialFeatures.CAN_JUMP)
+            .setRoleData(FatFishRoleData::new)
+            .setDefaultMax(1)
+            .setDefaultEnableChance(1000) // 彩蛋刷新率 10%
+            .setCanBeRandomedByOtherRoles(false);
+
+    /**
+     * 紫怪：只属于特殊中立阵营。它不属于好人方中立，也不属于杀手方中立。
+     * 事件由 PurpleMonsterRole 按实验室地图和理智条件驱动，职业本身不能自然刷新。
+     */
+    public static SRERole PURPLE_MONSTER = TMMRoles.registerRole(new PurpleMonsterRoleDefinition(
+            PURPLE_MONSTER_ID,
+            new Color(151, 72, 214).getRGB(),
+            RoleType.NEUTRALS,
+            MoodType.FAKE,
+            Integer.MAX_VALUE,
+            true))
+            .setNeutrals(true)
+            .setNeutralForInnocent(false)
+            .setNeutralForKiller(false)
+            .setDefaultMax(0)
+            .setCanBeRandomedByOtherRoles(false)
+            .setSpecialMapRolesCondition(features -> features.contains(MapSpecialFeatures.LAB))
+            // 每局 60% 且在 LAB 地图才启用；触发条件由 PurpleMonsterRole 按需查询 isEventEnabled
+            .setEventEnableChance(6000)
+            // 事件中立：登场由每局开局的随机事件掷骰决定
+            .setEventNeutral(true);
+
+    public static void init() {
+        THRedHouseRoles.init();
+        THMountainRoles.init();
+        THMagicForestRoles.init();
+        THMiscRoles.init();
+        BounsModifiers.init();
+        THLostForestRoles.init();
+        THHumanVillageRoles.init();
+        AnimeRoles.init();
+        registerEvents();
+    }
+
+    public static void registerEvents() {
+        PurpleMonsterRole.registerEvents();
+        AllowPlayerDeathWithKiller.EVENT.register((player, killer, deathReason) -> {
+            SREGameWorldComponent sreGameWorldComponent = SREGameWorldComponent.KEY.get(player.level());
+            if (sreGameWorldComponent.isRole(killer, BounsRoles.CAT_KILLER)) {
+                if (sreGameWorldComponent.isRole(player, BounsRoles.CAT_NECROMANCER)) {
+                    return false;
+                }
+            }
+            return true;
+        });
+
+        // 黑警：黑警时刻触发后，若误杀（击杀非目标阵营的玩家），因悔恨自尽而死
+        AllowPlayerDeathWithKiller.EVENT.register((victim, killer, deathReason) -> {
+            if (killer == null)
+                return true;
+            SREGameWorldComponent gw = SREGameWorldComponent.KEY.get(victim.level());
+            if (!gw.isRunning() || !gw.isRole(killer, BounsRoles.LICENSED_VILLAIN))
+                return true;
+            LicensedVillainRoleData lv = RoleData.getNullable(LicensedVillainRoleData.class, killer);
+            if (lv == null || !lv.momentTriggered)
+                return true;
+            SRERole victimRole = gw.getRole(victim);
+            if (victimRole != null && !lv.isTargetRole(victimRole)) {
+                // 黑警击杀了非目标阵营玩家：悔恨自尽。forcekill 二次触发时 killer=原受害者（非黑警），不会递归惩罚
+                GameUtils.forceKillPlayer(killer, true, victim,
+                        GameConstants.DeathReasons.REGRET_SUICIDE);
+            }
+            return true;
+        });
+
+        // 黑警：每局开局复位黑警时刻的全局触发守卫。
+        // momentTriggeredGuard 是静态字段，触发后不会随对局结束自动清零，
+        // 若不在每局 initializeGame 时复位，第一局触发过之后所有后续对局都无法再进入黑警时刻。
+        GameInitializeEvent.EVENT.register((level, gameWorldComponent, readyPlayerList) -> {
+            LicensedVillainRoleData.resetMomentTriggered();
+        });
+    }
+
+    static {
+        BASEBALL_PLAYER.setAddedVersion("4.1");
+        CREEPER.setAddedVersion("4.1");
+        WRITER.setAddedVersion("3.3");
+        TELEGRAPHER.setAddedVersion("2.x");
+        CAT_KILLER.setAddedVersion("4.1");
+        CAT_NECROMANCER.setAddedVersion("4.1");
+        BEST_VIGILANTE.setAddedVersion("2.x");
+        LENGXIAO.setAddedVersion("4.3");
+        LAO_DA.setAddedVersion("4.4");
+        DISC_MASTER.setAddedVersion("4.4");
+        ANGLER.setAddedVersion("4.4");
+        BEE_QUEEN.setAddedVersion("4.4");
+        BEE_WASP.setAddedVersion("4.4");
+        BEE_WORKER.setAddedVersion("4.4");
+        HENG_XING_TI.setAddedVersion("4.4");
+        SCOUT.setAddedVersion("4.4");
+        SCOUT_CAPTAIN.setAddedVersion("4.4");
+        FOREST_MUSHROOM_ZOMBIE.setAddedVersion("4.4");
+        FAT_FISH.setAddedVersion("4.4");
+        PURPLE_MONSTER.setAddedVersion("4.4");
+        // 森蕈僵尸与童子军绑定生成（分配森蕈僵尸时也会分配童子军）；
+        // 森蕈僵尸为主职业，童子军为关联职业。
+        Harpymodloader.addOccupationRole(FOREST_MUSHROOM_ZOMBIE, SCOUT);
+    }
+}

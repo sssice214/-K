@@ -1,0 +1,27 @@
+{
+  "required": true,
+  "package": "net.exmo.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "plugin": "io.wifi.starrailexpress.mixin.SREMixinPlugin",
+  "mixins": [
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  },
+  "client": [
+    "client.AbstractSelectionListMixin",
+    "client.ConnectScreenMixin",
+    "client.IsNightVisionMixin",
+    "client.JoinMultiplayerScreenMixin",
+    "client.LoadingScreenMixin",
+    "client.VolumeGetMixin",
+    "client.WindowsTitleMixin",
+    "client.side.ClientChunkCacheMixin",
+    "client.side.DefaultChunkRendererMixin",
+    "client.side.DefaultShaderInterfaceMixin",
+    "client.side.RenderSectionManagerMixin",
+    "client.side.ShaderLoaderMixin",
+    "client.side.SodiumShaderMixin",
+    "client.side.SodiumTransformerMixin"
+  ]
+}

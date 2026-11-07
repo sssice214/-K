@@ -1,0 +1,469 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.cca;
+
+import io.wifi.starrailexpress.SRE;
+import io.wifi.starrailexpress.SREConfig;
+import io.wifi.starrailexpress.api.RoleComponent;
+import io.wifi.starrailexpress.game.GameConstants;
+import io.wifi.starrailexpress.game.GameUtils;
+import io.wifi.starrailexpress.game.ShopContent;
+import io.wifi.starrailexpress.index.TMMItems;
+import io.wifi.starrailexpress.index.TMMSounds;
+import io.wifi.starrailexpress.progression.ProgressionDataManager;
+import io.wifi.starrailexpress.util.ShopEntry;
+import net.fabricmc.loader.api.FabricLoader;
+import net.minecraft.ChatFormatting;
+import net.minecraft.core.HolderLookup;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.protocol.game.ClientboundSoundPacket;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.level.Level;
+
+import org.agmas.noellesroles.init.ModEffects;
+import org.agmas.noellesroles.init.NRSounds;
+import org.jetbrains.annotations.NotNull;
+import org.ladysnake.cca.api.v3.component.ComponentKey;
+import org.ladysnake.cca.api.v3.component.ComponentRegistry;
+import org.ladysnake.cca.api.v3.component.tick.ClientTickingComponent;
+import org.ladysnake.cca.api.v3.component.tick.ServerTickingComponent;
+
+import java.util.List;
+
+public class SREPlayerShopComponent implements RoleComponent, ServerTickingComponent, ClientTickingComponent {
+    public static final ComponentKey<SREPlayerShopComponent> KEY = ComponentRegistry.getOrCreate(SRE.id("shop"),
+            SREPlayerShopComponent.class);
+    private final Player player;
+    public int balance = 0;
+    public long grenadeLastPurchaseTime = 0;
+    // 仅服务端存储：
+    public int total_cost = 0;
+
+    public SREPlayerShopComponent(Player player) {
+        this.player = player;
+    }
+
+    @Override
+    public Player getPlayer() {
+        return this.player;
+    }
+
+    public void sync() {
+        KEY.sync(this.player);
+    }
+
+    @Override
+    public void init() {
+        this.balance = 0;
+        this.grenadeLastPurchaseTime = 0;
+        this.total_cost = 0;
+        this.sync();
+    }
+
+    @Override
+    public void clear() {
+        init();
+    }
+
+    /**
+     * 服务端Only
+     */
+    public int getTotalCost() {
+        return this.total_cost;
+    }
+
+    /**
+     * 服务端Only
+     */
+    public int getTotalCostAndClear() {
+        int r = this.total_cost;
+        this.total_cost = 0;
+        return r;
+    }
+
+    @Override
+    public boolean shouldSyncWith(ServerPlayer player) {
+        return this.player == player;
+    }
+
+    public void addToBalance(int amount) {
+        if (tryConvertWizardBalance(amount)) {
+            return;
+        }
+        // 金币账本（会计技能）：所有未分类的余额变动在此兜底记成「其它收入 / 其它支出」。
+        // 已知来源（击杀/任务/被动/扒窃/偷窃/掠夺/存折/商店/售货机/技能）会在改余额前先用
+        // MoneyFlow.recordIncome / recordExpense 认领本刻变动，因此这里不会重复记账。
+        // 性能：每次仅 2 次 HashMap 访问，不遍历、不分配对象。
+        org.agmas.noellesroles.game.economy.MoneyFlow.onBalanceChange(this.player, amount);
+        this.setBalance(this.balance + amount);
+    }
+
+    public void setBalance(int amount) {
+        if (tryConvertWizardBalance(amount)) {
+            return;
+        }
+        if (this.balance != amount) {
+            this.balance = amount;
+            // try{
+            // throw new RuntimeException("Hello!");
+            // }catch(Exception e){
+            // SRE.LOGGER.info("Balance {}",amount,e);
+            // }
+            this.sync();
+        }
+    }
+
+    private boolean tryConvertWizardBalance(int amount) {
+        if (this.player.level().isClientSide) {
+            return false;
+        }
+        SREGameWorldComponent gameWorld = SREGameWorldComponent.KEY.get(this.player.level());
+        if (gameWorld == null) {
+            return false;
+        }
+        var role = gameWorld.getRole(this.player);
+        // 不具有金币系统的职业：金币数始终为 0
+        if (role == null || !role.hasNoCoinSystem()) {
+            return false;
+        }
+        // 巫师专属：正向金额转换为魔素
+        if (role == org.agmas.noellesroles.role.ModRoles.WIZARD && amount > 0) {
+            var wizardData = io.wifi.starrailexpress.api.data.RoleData.getNullable(
+                    org.agmas.noellesroles.role_data.killer.WizardRoleData.class, this.player);
+            if (wizardData != null) {
+                wizardData.addMana(
+                        amount * org.agmas.noellesroles.config.NoellesRolesConfig.HANDLER.instance().wizardManaPerCoin);
+            }
+        }
+        if (this.balance != 0) {
+            this.balance = 0;
+            this.sync();
+        }
+        return true;
+    }
+
+    public void tryBuy(int index) {
+        if (index < 0 || index >= getShopEntries().size())
+            return;
+        ShopEntry entry = getShopEntries().get(index);
+        if (this.player.hasEffect(ModEffects.SAFE_TIME)) {
+            // 安全时间不准买
+            this.player.displayClientMessage(
+                    Component
+                            .translatable("message.tip.purchase_failed_with_reason",
+                                    Component.translatable("message.tip.purchase_failed.safe_time"))
+                            .withStyle(ChatFormatting.DARK_RED),
+                    true);
+            if (this.player instanceof ServerPlayer serverPlayer) {
+                serverPlayer.connection.send(new ClientboundSoundPacket(
+                        BuiltInRegistries.SOUND_EVENT.wrapAsHolder(TMMSounds.UI_SHOP_BUY_FAIL),
+                        SoundSource.PLAYERS, serverPlayer.getX(), serverPlayer.getY(), serverPlayer.getZ(), 1.0f,
+                        0.9f + this.player.getRandom().nextFloat() * 0.2f,
+                        serverPlayer.getRandom().nextLong()));
+            }
+            return;
+        }
+        if (this.player.hasEffect(ModEffects.SHOP_BANNED)) {
+            // 商店被禁止
+            this.player.displayClientMessage(
+                    Component
+                            .translatable("message.tip.purchase_failed_with_reason",
+                                    Component.translatable("message.tip.purchase_failed.shop_banned"))
+                            .withStyle(ChatFormatting.DARK_RED),
+                    true);
+            if (this.player instanceof ServerPlayer serverPlayer) {
+                serverPlayer.connection.send(new ClientboundSoundPacket(
+                        BuiltInRegistries.SOUND_EVENT.wrapAsHolder(TMMSounds.UI_SHOP_BUY_FAIL),
+                        SoundSource.PLAYERS, serverPlayer.getX(), serverPlayer.getY(), serverPlayer.getZ(), 1.0f,
+                        0.9f + this.player.getRandom().nextFloat() * 0.2f,
+                        serverPlayer.getRandom().nextLong()));
+            }
+            return;
+        }
+        // 手榴弹购买冷却检查（可配置，默认30秒）
+        if (entry.stack().is(TMMItems.GRENADE)) {
+            int purchaseCooldownTicks = SREConfig.instance().grenadePurchaseCooldown * 20;
+            long timeSincePurchase = player.level().getGameTime() - this.grenadeLastPurchaseTime;
+            if (timeSincePurchase < purchaseCooldownTicks) {
+                this.player.displayClientMessage(
+                        Component.translatable("message.tip.purchase_cooldown",
+                                (purchaseCooldownTicks - timeSincePurchase) / 20).withStyle(ChatFormatting.DARK_RED),
+                        true);
+                if (this.player instanceof ServerPlayer serverPlayer) {
+                    serverPlayer.connection.send(new ClientboundSoundPacket(
+                            BuiltInRegistries.SOUND_EVENT.wrapAsHolder(TMMSounds.UI_SHOP_BUY_FAIL),
+                            SoundSource.PLAYERS, serverPlayer.getX(), serverPlayer.getY(), serverPlayer.getZ(), 1.0f,
+                            0.9f + this.player.getRandom().nextFloat() * 0.2f,
+                            serverPlayer.getRandom().nextLong()));
+                }
+                return;
+            }
+        }
+        // 动态价格：实际价格由玩家的 DynamicShopComponent 决定（折扣/减价等），默认等于基础价格。
+        // Dynamic price: the effective price is resolved by the player's
+        // DynamicShopComponent
+        // (discounts/reductions/etc.); it defaults to the base price when no modifier
+        // exists.
+        final int price = DynamicShopComponent.KEY.get(this.player).effectivePrice(entry);
+        // 条目货币类型：职业商店条目可指定货币（见 ShopEntry.Currency），默认金币（MONEY）。
+        // 指定为游戏代币（MINIGAME_TOKEN）时，从对应组件余额校验并扣除。
+        final ShopEntry.Currency currency = entry.currency() == null ? ShopEntry.Currency.MONEY : entry.currency();
+        if (FabricLoader.getInstance().isDevelopmentEnvironment() && currency == ShopEntry.Currency.MONEY
+                && this.balance < price)
+            this.balance = price * 10;
+        boolean isOnCooldown = this.player.getCooldowns().isOnCooldown(entry.stack().getItem());
+        boolean haveEnoughBalance = currency.getBalance(this.player) >= price;
+        // 重置错误信息
+        entry.setFailedMessage(null);
+        if (haveEnoughBalance && !isOnCooldown
+                && entry.canDisplay(this.player) && entry.canBuy(this.player) && !entry.isSafeTime(this.player)
+                && entry.onBuy(this.player)) {
+            // 金币消费才计入 total_cost（金币消费统计）；实际扣款统一走 currency.add，避免重复扣费
+            if (currency == ShopEntry.Currency.MONEY) {
+                this.total_cost += price;
+            }
+            ProgressionDataManager.onCurrencySpent(this.player.getUUID(), currency, price);
+            // 金币账本：商店购买支出（带商品名，会计的支出查询优先展示这一条）
+            if (currency == ShopEntry.Currency.MONEY) {
+                org.agmas.noellesroles.game.economy.MoneyFlow.recordExpense(this.player,
+                        org.agmas.noellesroles.game.economy.MoneyFlow.ExpenseType.SHOP, price,
+                        entry.stack().getDisplayName());
+            }
+            currency.add(this.player, -price);
+            // 手榴弹购买后记录购买时间
+            if (entry.stack().is(TMMItems.GRENADE)) {
+                this.grenadeLastPurchaseTime = player.level().getGameTime();
+            }
+            if (this.player instanceof ServerPlayer player) {
+                player.connection.send(
+                        new ClientboundSoundPacket(BuiltInRegistries.SOUND_EVENT.wrapAsHolder(TMMSounds.UI_SHOP_BUY),
+                                SoundSource.PLAYERS, player.getX(), player.getY(), player.getZ(), 1.0f,
+                                0.9f + this.player.getRandom().nextFloat() * 0.2f, player.getRandom().nextLong()));
+                SRE.REPLAY_MANAGER.recordStoreBuy(player.getUUID(),
+                        BuiltInRegistries.ITEM.getKey(entry.stack().getItem()), entry.stack().getCount(),
+                        price);
+            }
+        } else {
+            Component reason = null;
+            if (isOnCooldown) {
+                reason = Component.translatable("message.tip.purchase_failed.cooldown");
+            } else if (!haveEnoughBalance) {
+                reason = Component.translatable(currency == ShopEntry.Currency.MINIGAME_TOKEN
+                        ? "noellesroles.not_enough_minigame_token"
+                        : "message.tip.purchase_failed.not_enough_money");
+            } else {
+                reason = entry.getFailedMessage();
+            }
+            if (reason != null) {
+                this.player.displayClientMessage(
+                        Component.translatable("message.tip.purchase_failed_with_reason", reason)
+                                .withStyle(ChatFormatting.DARK_RED),
+                        true);
+            } else {
+                this.player.displayClientMessage(
+                        Component.translatable("message.tip.purchase_failed").withStyle(ChatFormatting.DARK_RED), true);
+            }
+            if (this.player instanceof ServerPlayer player) {
+                player.connection.send(new ClientboundSoundPacket(
+                        BuiltInRegistries.SOUND_EVENT.wrapAsHolder(TMMSounds.UI_SHOP_BUY_FAIL), SoundSource.PLAYERS,
+                        player.getX(), player.getY(), player.getZ(), 1.0f,
+                        0.9f + this.player.getRandom().nextFloat() * 0.2f, player.getRandom().nextLong()));
+            }
+        }
+        this.sync();
+    }
+
+    private @NotNull List<ShopEntry> getShopEntries() {
+        final var gameWorldComponent = SREGameWorldComponent.KEY.get(player.level());
+        final var role = gameWorldComponent.getRole(player);
+        if (gameWorldComponent != null && role != null && GameUtils.isPlayerAliveAndSurvival(player)) {
+            final var shopEntries = ShopContent.getShopEntries(
+                    role.getIdentifier(), player);
+            if (shopEntries != null && !shopEntries.isEmpty()) {
+                return shopEntries;
+            }
+        }
+        return List.of();
+    }
+
+    @Override
+    public void clientTick() {
+
+    }
+
+    @Override
+    public void serverTick() {
+
+    }
+
+    public static boolean useBlackoutWithMultiplier(@NotNull Player player, double multtiplier) {
+        return useBlackout(player,
+                (int) ((double) SREWorldBlackoutComponent.getMaxDuration(player.level()) * multtiplier));
+    }
+
+    public static void addGlobalBlackoutCooldown(Level world) {
+        final int globalCooldown = GameConstants.getBlackoutCooldownGlobal();
+        for (var p : world.players()) {
+            var cooldowns = p.getCooldowns();
+            if (cooldowns.isOnCooldown(TMMItems.BLACKOUT)) {
+                var cooldownInstance = cooldowns.cooldowns.get(TMMItems.BLACKOUT);
+                if (cooldownInstance != null) {
+                    int leftTicks = cooldownInstance.endTime - cooldowns.tickCount;
+                    if (leftTicks >= globalCooldown)
+                        continue;
+                }
+            }
+            cooldowns.addCooldown(TMMItems.BLACKOUT, globalCooldown);
+        }
+    }
+
+    public static boolean useBlackout(@NotNull Player player, int duration) {
+        SREWorldBlackoutComponent blackCCA = SREWorldBlackoutComponent.KEY.get(player.level());
+        if (blackCCA.blackOutRemainingTicks > 0)
+            return false;
+        boolean triggered = blackCCA.triggerBlackout(true, duration);
+        if (triggered) {
+            // 公共 Cooldown
+            addGlobalBlackoutCooldown(player.level());
+
+            SRE.REPLAY_MANAGER.recordSkillUsed(player.getUUID(), BuiltInRegistries.ITEM.getKey(TMMItems.BLACKOUT));
+            player.getCooldowns().addCooldown(TMMItems.BLACKOUT,
+                    GameConstants.ITEM_COOLDOWNS.getOrDefault(TMMItems.BLACKOUT, 0));
+        }
+        return triggered;
+    }
+
+    public static boolean useMonitorBroken(@NotNull Player player, int duration) {
+        SREMonitorWorldComponent monitorCCA = SREMonitorWorldComponent.KEY.get(player.level());
+        if (monitorCCA.brokenTime > 0)
+            return false;
+        boolean triggered = monitorCCA.triggerBroken(true, duration);
+        if (triggered) {
+            player.level().playSound(null, player.getX(), player.getY(), player.getZ(),
+                    NRSounds.SHORT_CIRCUIT, SoundSource.MASTER, 5.0F, 1.0F);
+
+            // 公共 Cooldown
+            player.level().players().forEach(
+                    p -> {
+                        if (!p.getCooldowns().isOnCooldown(TMMItems.MONITOR_BROKEN))
+                            p.getCooldowns().addCooldown(TMMItems.MONITOR_BROKEN,
+                                    GameConstants.getMonitorBrokenCooldownGlobal());
+                    });
+
+            SRE.REPLAY_MANAGER.recordSkillUsed(player.getUUID(),
+                    BuiltInRegistries.ITEM.getKey(TMMItems.MONITOR_BROKEN));
+            player.getCooldowns().addCooldown(TMMItems.MONITOR_BROKEN,
+                    GameConstants.ITEM_COOLDOWNS.getOrDefault(TMMItems.MONITOR_BROKEN, 0));
+        }
+        return triggered;
+    }
+
+    public static boolean useBlackout(@NotNull Player player) {
+        return useBlackout(player, SREWorldBlackoutComponent.getMaxDuration(player.level()));
+    }
+
+    public static void addGlobalPsychoCooldown(Player player) {
+        var gamecca = SREGameWorldComponent.getInstance(player);
+        for (var p : player.level().players()) {
+            if (GameUtils.isPlayerAliveAndSurvival(p) && gamecca.isKillerTeam(p)) {
+                if (!p.getCooldowns().isOnCooldown(TMMItems.PSYCHO_MODE) && !p.getUUID().equals(player.getUUID())) {
+                    p.getCooldowns().addCooldown(TMMItems.PSYCHO_MODE,
+                            SREConfig.instance().psychoGlobalCooldown * 20);
+                }
+            }
+        }
+    }
+
+    /**
+     * 触发psycho
+     * 
+     * @param player
+     * @param multtiplier 时间倍乘参数
+     * @param armour      护盾层数
+     * @return
+     */
+    public static boolean usePsychoMode(@NotNull Player player, double multtiplier, int armour) {
+        boolean started = SREPlayerPsychoComponent.KEY.get(player).startPsycho(multtiplier, armour, false);
+        if (started) {
+            player.getCooldowns().addCooldown(TMMItems.PSYCHO_MODE,
+                    GameConstants.ITEM_COOLDOWNS.getOrDefault(TMMItems.PSYCHO_MODE, 0));
+            addGlobalPsychoCooldown(player);
+            SRE.REPLAY_MANAGER.recordSkillUsed(player.getUUID(), BuiltInRegistries.ITEM.getKey(TMMItems.PSYCHO_MODE));
+        }
+        return started;
+    }
+
+    /**
+     * 触发psycho
+     * 
+     * @param player
+     * @param time   时间
+     * @param armour 护盾层数
+     * @return
+     */
+    public static boolean usePsychoMode_time(@NotNull Player player, int time, int armour) {
+        player.getCooldowns().addCooldown(TMMItems.PSYCHO_MODE,
+                GameConstants.ITEM_COOLDOWNS.getOrDefault(TMMItems.PSYCHO_MODE, 0));
+        boolean started = SREPlayerPsychoComponent.KEY.get(player).startPsycho_time(time, armour, false);
+        if (started) {
+            SRE.REPLAY_MANAGER.recordSkillUsed(player.getUUID(), BuiltInRegistries.ITEM.getKey(TMMItems.PSYCHO_MODE));
+        }
+        return started;
+    }
+
+    /**
+     * 触发psycho
+     * 
+     * @param player
+     * @param multtiplier 时间倍乘参数
+     * @return
+     */
+    public static boolean usePsychoMode(@NotNull Player player, double multtiplier) {
+        return usePsychoMode(player, multtiplier, 1);
+    }
+
+    /**
+     * 触发psycho
+     * 
+     * @param player
+     * @return
+     */
+    public static boolean usePsychoMode(@NotNull Player player) {
+        return usePsychoMode(player, 1d);
+    }
+
+    @Override
+    public void writeToSyncNbt(@NotNull CompoundTag tag, HolderLookup.Provider registryLookup) {
+        tag.putInt("Balance", this.balance);
+    }
+
+    @Override
+    public void readFromSyncNbt(@NotNull CompoundTag tag, HolderLookup.Provider registryLookup) {
+        this.balance = tag.getInt("Balance");
+    }
+
+    @Override
+    public void writeToNbt(CompoundTag tag, HolderLookup.Provider registryLookup) {
+    }
+
+    @Override
+    public void readFromNbt(CompoundTag tag, HolderLookup.Provider registryLookup) {
+    }
+}

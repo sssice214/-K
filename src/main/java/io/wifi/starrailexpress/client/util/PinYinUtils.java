@@ -1,0 +1,79 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.client.util;
+
+import com.github.promeg.pinyinhelper.Pinyin;
+
+public class PinYinUtils {
+    static {
+        Pinyin.init(null);
+    }
+
+    public static String toSearchablePinyin(String text) {
+        if (text == null || text.isEmpty())
+            return "";
+        StringBuilder sb = new StringBuilder();
+        for (char c : text.toCharArray()) {
+            if (Pinyin.isChinese(c)) {
+                // 汉字转拼音（TinyPinyin 返回全大写）
+                String pinyin = Pinyin.toPinyin(c);
+                sb.append(pinyin.toLowerCase()); // 转小写以便匹配
+            } else {
+                // 英文字母保留，转小写
+                sb.append(c);
+            }
+            // 其他字符（标点、空格等）直接跳过
+        }
+        String result = sb.toString();
+        return result;
+    }
+
+    public static boolean contains(String pattern, String search) {
+        if (search == null || pattern == null)
+            return false;
+        String st = toSearchablePinyin(search).toLowerCase();
+        // SRE.LOGGER.info("[PINYIN] {}.contains({})", st, pattern);
+        if (st.toLowerCase().contains(pattern)) {
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    /**
+     * 拼音首字母缩写：设置 → {@code sz}（汉字取首字母，字母数字原样保留，标点与空格跳过）。
+     *
+     * <p>
+     * 与 {@link #toSearchablePinyin} 配合，让「原文 / 全拼 / 首字母」三种输入都能搜到
+     * （见 {@code AllSettingsModule} 的搜索索引）。
+     */
+    public static String toPinyinInitials(String text) {
+        if (text == null || text.isEmpty())
+            return "";
+        StringBuilder sb = new StringBuilder();
+        for (char c : text.toCharArray()) {
+            if (Pinyin.isChinese(c)) {
+                String pinyin = Pinyin.toPinyin(c);
+                if (!pinyin.isEmpty()) {
+                    sb.append(Character.toLowerCase(pinyin.charAt(0)));
+                }
+            } else if (Character.isLetterOrDigit(c)) {
+                sb.append(Character.toLowerCase(c));
+            }
+        }
+        return sb.toString();
+    }
+}

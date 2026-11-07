@@ -1,0 +1,8 @@
+{
+  "parent": "minecraft:block/orientable",
+  "textures": {
+    "top": "noellesroles:block/incinerator_top",
+    "front": "noellesroles:block/incinerator_front",
+    "side": "noellesroles:block/incinerator_side"
+  }
+}

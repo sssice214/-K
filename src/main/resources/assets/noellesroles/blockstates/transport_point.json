@@ -1,0 +1,6 @@
+{
+  "variants": {
+    "end=false": { "model": "noellesroles:block/transport_point_start" },
+    "end=true":  { "model": "noellesroles:block/transport_point" }
+  }
+}

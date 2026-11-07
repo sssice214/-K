@@ -1,0 +1,146 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.content.item;
+
+import io.wifi.starrailexpress.game.GameUtils;
+import io.wifi.starrailexpress.util.ParticleFx;
+import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.stats.Stats;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResultHolder;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
+import org.agmas.noellesroles.content.entity.HallucinationAreaManager;
+import org.jetbrains.annotations.NotNull;
+
+import java.util.List;
+
+/**
+ * 迷幻瓶物品
+ * - 迷幻师专属道具
+ * - 右键使用，制造大量烟雾
+ * - 20格范围内玩家视野会随机偏离视角
+ * - 迷雾范围：20格
+ * - 持续时间：3秒
+ * - 触发间隔：1秒
+ * - 耐久：2点
+ */
+public class HallucinationBottleItem extends Item {
+    
+    // 迷幻效果半径：20格
+    private static final double HALLUCINATION_RADIUS = 20.0;
+    // 持续时间：3秒 = 60 ticks
+    private static final int HALLUCINATION_DURATION_TICKS = 60;
+    // 触发间隔：1秒 = 20 ticks
+    private static final int TRIGGER_INTERVAL_TICKS = 20;
+    
+    public HallucinationBottleItem(Properties settings) {
+        super(settings);
+    }
+    
+    @Override
+    public InteractionResultHolder<ItemStack> use(@NotNull Level world, @NotNull Player user, InteractionHand hand) {
+        ItemStack itemStack = user.getItemInHand(hand);
+        
+        // 播放使用音效
+        world.playSound(null, user.getX(), user.getY(), user.getZ(), 
+                SoundEvents.GLASS_BREAK, SoundSource.PLAYERS, 
+                1.0F, 0.8F + (world.random.nextFloat() - 0.5f) / 5f);
+        
+        if (!world.isClientSide && world instanceof ServerLevel serverWorld) {
+            // 创建迷幻烟雾区域
+            Vec3 center = user.position();
+            
+            // 初始烟雾粒子爆发 - 大量粒子（烟雾弹的2倍 = 3000个）
+            spawnInitialSmokeParticles(serverWorld, center);
+            
+            // 创建持续的迷幻区域
+            HallucinationAreaManager.createHallucinationArea(
+                serverWorld, 
+                center, 
+                HALLUCINATION_RADIUS, 
+                HALLUCINATION_DURATION_TICKS,
+                TRIGGER_INTERVAL_TICKS,
+                user
+            );
+            
+            // 立即对范围内玩家应用视角偏移
+            applyInitialHallucinationEffect(serverWorld, user, center);
+        }
+        
+        user.awardStat(Stats.ITEM_USED.get(this));
+        
+        // 消耗耐久
+        if (itemStack.isDamageableItem()) {
+            itemStack.hurtAndBreak(1, user, hand == InteractionHand.MAIN_HAND 
+                    ? net.minecraft.world.entity.EquipmentSlot.MAINHAND 
+                    : net.minecraft.world.entity.EquipmentSlot.OFFHAND);
+        }
+        
+        return InteractionResultHolder.sidedSuccess(itemStack, world.isClientSide());
+    }
+    
+    /**
+     * 生成初始烟雾粒子 - 数量是烟雾弹的2倍
+     */
+    private void spawnInitialSmokeParticles(ServerLevel world, Vec3 center) {
+        // 三种粒子各一个包（原实现 100 次循环 × 3 类 ≈ 300 个包）
+        double spread = HALLUCINATION_RADIUS * 0.5;
+        ParticleFx.burst(world, ParticleTypes.DRAGON_BREATH,
+                center.x, center.y + 2.0, center.z, 200, spread, 2.0, spread, 0.02);
+
+        ParticleFx.burst(world, ParticleTypes.CAMPFIRE_COSY_SMOKE,
+                center.x, center.y + 2.0, center.z, 100, spread, 2.0, spread, 0.04);
+
+        ParticleFx.burst(world, ParticleTypes.WITCH,
+                center.x, center.y + 2.0, center.z, 25, spread, 2.0, spread, 0.03);
+    }
+    
+    /**
+     * 对范围内玩家应用初始迷幻效果
+     */
+    private void applyInitialHallucinationEffect(ServerLevel world, Player user, Vec3 center) {
+        AABB area = new AABB(
+                center.x - HALLUCINATION_RADIUS, center.y - 5, center.z - HALLUCINATION_RADIUS,
+                center.x + HALLUCINATION_RADIUS, center.y + 10, center.z + HALLUCINATION_RADIUS
+        );
+        
+        List<ServerPlayer> players = world.getEntitiesOfClass(
+                ServerPlayer.class, area,
+                player -> GameUtils.isPlayerAliveAndSurvival(player) && player != user
+        );
+        
+        for (ServerPlayer player : players) {
+            // 检查玩家是否在球形范围内
+            double distance = player.position().distanceTo(center);
+            if (distance <= HALLUCINATION_RADIUS) {
+                player.addEffect(new MobEffectInstance(MobEffects.BLINDNESS, HALLUCINATION_DURATION_TICKS));
+                // 发送视角偏移效果（使用客户端网络包）
+                HallucinationAreaManager.applyHallucinationToPlayer(player);
+            }
+        }
+    }
+}

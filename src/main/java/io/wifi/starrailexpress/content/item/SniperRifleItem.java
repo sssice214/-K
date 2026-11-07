@@ -1,0 +1,252 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.content.item;
+
+import io.wifi.StarRailExpressID;
+import io.wifi.starrailexpress.client.SREClient;
+import io.wifi.starrailexpress.client.gui.ScopeOverlayRenderer;
+import io.wifi.starrailexpress.client.particle.HandParticle;
+import io.wifi.starrailexpress.client.render.TMMRenderLayers;
+import io.wifi.starrailexpress.compat.CrosshairaddonsCompat;
+import io.wifi.starrailexpress.content.item.api.SREItemProperties.HeldLikeRevolver;
+import io.wifi.starrailexpress.game.GameUtils;
+import io.wifi.starrailexpress.index.SREDataComponentTypes;
+import io.wifi.starrailexpress.index.TMMItems;
+import io.wifi.starrailexpress.network.original.SniperShootPayload;
+import io.wifi.starrailexpress.util.SniperProjectileUtil;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+import net.minecraft.network.chat.Component;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResultHolder;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.TooltipFlag;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.EntityHitResult;
+import net.minecraft.world.phys.HitResult;
+import org.agmas.noellesroles.content.entity.RainbowHorseEntity;
+import org.agmas.noellesroles.content.entity.CanyuesaHorseEntity;
+import org.agmas.noellesroles.content.entity.SuperPigHorseEntity;
+import org.jetbrains.annotations.NotNull;
+
+import java.util.List;
+
+public class SniperRifleItem extends Item implements HeldLikeRevolver {
+    public static final String SCOPE_ATTACHED_KEY = "ScopeAttached";
+    public static final String AMMO_COUNT_KEY = "AmmoCount";
+    public static final int MAX_AMMO = 2;
+
+    public SniperRifleItem(Properties settings) {
+        super(settings.stacksTo(1));
+    }
+
+    @Override
+    public InteractionResultHolder<ItemStack> use(@NotNull Level world, @NotNull Player user, InteractionHand hand) {
+        return InteractionResultHolder.consume(user.getItemInHand(hand));
+    }
+
+    /** 从按键绑定触发射击（客户端） */
+    public static void tryShootFromKeybind(Player user) {
+        ItemStack stack = user.getMainHandItem();
+        if (!stack.is(TMMItems.SNIPER_RIFLE)) return;
+        if (user.isSpectator()) return;
+        if (user.getCooldowns().isOnCooldown(stack.getItem())) return;
+
+        final var gameComponent = SREClient.gameComponent;
+        if (gameComponent != null) {
+            final var role = gameComponent.getRole(user);
+            if (role != null && !role.onUseGun(user)) return;
+        }
+
+        int currentAmmo = getAmmoCount(stack);
+        if (currentAmmo <= 0) {
+            ScopeOverlayRenderer.setInScopeView(false);
+            return;
+        }
+        shoot(user.level(), user, stack);
+        ScopeOverlayRenderer.setInScopeView(false);
+    }
+
+    /** 从按键绑定触发装弹（客户端） */
+    public static void tryReloadFromKeybind(Player user) {
+        ItemStack stack = user.getMainHandItem();
+        if (!stack.is(TMMItems.SNIPER_RIFLE)) return;
+        if (user.getCooldowns().isOnCooldown(stack.getItem())) return;
+
+        int currentAmmo = getAmmoCount(stack);
+        if (currentAmmo >= MAX_AMMO) return;
+
+        boolean hasBullet = false;
+        for (int i = 0; i < user.getInventory().getContainerSize(); i++) {
+            if (user.getInventory().getItem(i).is(TMMItems.MAGNUM_BULLET)) {
+                hasBullet = true;
+                break;
+            }
+        }
+        if (!hasBullet) return;
+
+        net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking.send(
+                new SniperShootPayload(SniperShootPayload.Action.RELOAD, user.getId()));
+        user.getCooldowns().addCooldown(TMMItems.SNIPER_RIFLE, 100);
+    }
+
+    private static void shoot(Level world, Player user, ItemStack stack) {
+        if (world.isClientSide) {
+            HitResult collision = getGunTarget(user);
+            if (collision instanceof EntityHitResult entityHitResult) {
+                Entity target = entityHitResult.getEntity();
+                ClientPlayNetworking.send(new SniperShootPayload(SniperShootPayload.Action.SHOOT, target.getId()));
+                CrosshairaddonsCompat.arrowHit();
+                spawnSmokeTrail(world, user, collision.getLocation());
+            } else if (collision instanceof BlockHitResult blockHit) {
+                ClientPlayNetworking.send(new SniperShootPayload(SniperShootPayload.Action.SHOOT, -1, blockHit.getBlockPos()));
+                spawnSmokeTrail(world, user, collision.getLocation());
+            } else {
+                ClientPlayNetworking.send(new SniperShootPayload(SniperShootPayload.Action.SHOOT, -1));
+                spawnSmokeTrail(world, user, collision.getLocation());
+            }
+            user.setXRot(user.getXRot() - 4);
+            spawnHandParticle();
+            if (!user.isCreative()) {
+                user.getCooldowns().addCooldown(stack.getItem(), 80);
+            }
+        }
+    }
+
+    public static void spawnHandParticle() {
+        HandParticle handParticle = new HandParticle()
+                .setTexture(StarRailExpressID.watheId("textures/particle/gunshot.png"))
+                .setPos(0.1f, 0.275f, -0.2f)
+                .setMaxAge(3)
+                .setSize(0.5f)
+                .setVelocity(0f, 0f, 0f)
+                .setLight(15, 15)
+                .setAlpha(1f, 0.1f)
+                .setRenderLayer(TMMRenderLayers::additive);
+        SREClient.handParticleManager.spawn(handParticle);
+    }
+
+    /**
+     * 在子弹路径上生成 SMOKE 粒子轨迹（从玩家眼睛出发）
+     */
+    public static void spawnSmokeTrail(Level world, Player user, net.minecraft.world.phys.Vec3 hitPos) {
+        spawnSmokeTrail(world, user.getEyePosition(), hitPos);
+    }
+
+    /**
+     * 在子弹路径上生成 SMOKE 粒子轨迹
+     *
+     * <p>
+     * 供狙击枪自身与自定义枪械的「狙击枪射线」样式共用。
+     */
+    public static void spawnSmokeTrail(Level world, net.minecraft.world.phys.Vec3 startPos,
+            net.minecraft.world.phys.Vec3 hitPos) {
+        // 计算从起点到终点的向量
+        net.minecraft.world.phys.Vec3 direction = hitPos.subtract(startPos);
+        double distance = direction.length();
+
+        // 归一化方向向量
+        direction = direction.normalize();
+
+        // 每隔一定距离生成一个粒子
+        double stepSize = 0.5; // 每 0.5 格生成一个粒子
+        int particleCount = (int) (distance / stepSize);
+
+        for (int i = 0; i < particleCount; i++) {
+            double ratio = (double) i / particleCount;
+            net.minecraft.world.phys.Vec3 particlePos = startPos.add(
+                    direction.x * distance * ratio,
+                    direction.y * distance * ratio,
+                    direction.z * distance * ratio);
+
+            // 添加随机偏移，使烟雾更自然
+            double offsetX = (world.random.nextDouble() - 0.5) * 0.2;
+            double offsetY = (world.random.nextDouble() - 0.5) * 0.2;
+            double offsetZ = (world.random.nextDouble() - 0.5) * 0.2;
+
+            world.addParticle(
+                    net.minecraft.core.particles.ParticleTypes.SMOKE,
+                    particlePos.x + offsetX,
+                    particlePos.y + offsetY,
+                    particlePos.z + offsetZ,
+                    0, 0.02, 0 // 缓慢上升的速度
+            );
+        }
+    }
+
+    public static HitResult getGunTarget(Player user) {
+        return SniperProjectileUtil.getSniperHitResult(user,
+                entity -> entity instanceof Player player && GameUtils.isPlayerAliveAndSurvival(player)
+                        || entity instanceof RainbowHorseEntity
+                        || entity instanceof CanyuesaHorseEntity
+                        || entity instanceof SuperPigHorseEntity
+                        || org.agmas.noellesroles.game.command_block.CommandBlockCracks.isCrack(entity), 200F);
+    }
+
+    // 倍镜相关方法
+    public static boolean hasScopeAttached(ItemStack stack) {
+        return stack.getOrDefault(SREDataComponentTypes.SCOPE_ATTACHED, false);
+    }
+
+    public static void setScopeAttached(ItemStack stack, boolean attached) {
+        stack.set(SREDataComponentTypes.SCOPE_ATTACHED, attached);
+    }
+
+    // 子弹相关方法
+    public static int getAmmoCount(ItemStack stack) {
+        return stack.getOrDefault(SREDataComponentTypes.AMMO_COUNT, 0);
+    }
+
+    public static void setAmmoCount(ItemStack stack, int count) {
+        stack.set(SREDataComponentTypes.AMMO_COUNT, Math.min(count, MAX_AMMO));
+    }
+
+    public static void consumeAmmo(ItemStack stack) {
+        int currentAmmo = getAmmoCount(stack);
+        setAmmoCount(stack, Math.max(0, currentAmmo - 1));
+    }
+
+    @Override
+    public void appendHoverText(@NotNull ItemStack stack, @NotNull TooltipContext context,
+            @NotNull List<Component> tooltip, @NotNull TooltipFlag flag) {
+        int ammo = getAmmoCount(stack);
+        boolean hasScope = hasScopeAttached(stack);
+        tooltip.add(Component.translatable("item.starrailexpress.sniper_rifle.ammo", ammo, MAX_AMMO));
+        tooltip.add(Component.translatable("item.starrailexpress.sniper_rifle.scope",
+                hasScope ? Component.translatable("item.starrailexpress.sniper_rifle.scope.installed")
+                        : Component.translatable("item.starrailexpress.sniper_rifle.scope.not_installed")));
+        super.appendHoverText(stack, context, tooltip, flag);
+    }
+
+    @Override
+    public boolean isBarVisible(@NotNull ItemStack stack) {
+        return true;
+    }
+
+    @Override
+    public int getBarWidth(@NotNull ItemStack stack) {
+        int ammo = getAmmoCount(stack);
+        return (int) ((double) ammo / MAX_AMMO * 13);
+    }
+
+    @Override
+    public int getBarColor(@NotNull ItemStack stack) {
+        return 0xFF5500;
+    }
+}

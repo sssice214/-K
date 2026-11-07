@@ -1,0 +1,59 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.content.command;
+
+import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.StringArgumentType;
+import io.wifi.starrailexpress.backpack.BackpackManager;
+import io.wifi.starrailexpress.backpack.BackpackManager.ActivateResult;
+import io.wifi.starrailexpress.backpack.FactionCardCooldown;
+import io.wifi.starrailexpress.progression.ProgressionState;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.commands.Commands;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerPlayer;
+
+public final class ProgressionCommand {
+    private ProgressionCommand() {
+    }
+
+    public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
+        dispatcher.register(Commands.literal("sre:pass")
+                .then(Commands.literal("activate")
+                        .then(Commands.argument("type", StringArgumentType.word())
+                                .executes(context -> activate(
+                                        context.getSource().getPlayerOrException(),
+                                        StringArgumentType.getString(context, "type"))))));
+    }
+
+    private static int activate(ServerPlayer player, String rawType) {
+        ProgressionState.FactionCardType type = ProgressionState.FactionCardType.fromString(rawType);
+        ActivateResult result = BackpackManager.activateCardResult(player, type);
+        if (result == ActivateResult.SUCCESS) {
+            return 1;
+        }
+        Component message = switch (result) {
+            case ON_COOLDOWN -> Component.translatable("message.sre.progression.faction_card_on_cooldown",
+                    Component.translatable(type.displayName),
+                    FactionCardCooldown.formatRemaining(BackpackManager.remainingCooldownMs(player, type)));
+            case ALREADY_ACTIVE -> Component.translatable("message.sre.progression.faction_card_already_active");
+            case INVALID, SUCCESS -> Component.translatable("message.sre.progression.faction_card_activate_failed",
+                    Component.translatable(type.displayName));
+        };
+        player.displayClientMessage(message, true);
+        return 0;
+    }
+}

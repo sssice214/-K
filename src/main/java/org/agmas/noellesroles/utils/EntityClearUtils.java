@@ -1,0 +1,194 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.utils;
+
+import io.wifi.starrailexpress.content.entity.GrenadeEntity;
+import io.wifi.starrailexpress.content.entity.NoteEntity;
+import io.wifi.starrailexpress.content.entity.PlayerBodyEntity;
+import io.wifi.starrailexpress.content.entity.no_water_influenced.NoHeavyWaterInfluencedThrowableProjectile;
+import io.wifi.starrailexpress.event.OnGameEnd;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.AreaEffectCloud;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.animal.Pig;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.projectile.ThrownTrident;
+import net.minecraft.world.entity.vehicle.Boat;
+import net.minecraft.world.entity.vehicle.Minecart;
+
+import org.agmas.harpymodloader.events.GameInitializeEvent;
+import org.agmas.noellesroles.content.block_entity.DevilRouletteTableEntity;
+import org.agmas.noellesroles.content.entity.*;
+import org.agmas.noellesroles.init.ModEntities;
+import org.agmas.noellesroles.game.roles.neutral.cuckoo.CuckooEggData;
+import org.agmas.noellesroles.role_data.innocence.CakeMakerRoleData;
+import org.agmas.noellesroles.handler.utils.THYukariPortalManager;
+import org.agmas.noellesroles.role.touhou.roles.THIbarakiKasenRole;
+
+import pro.fazeclan.river.stupid_express.role.necromancer.cca.NecromancerComponent;
+
+public class EntityClearUtils {
+    public static void registerResetEvent() {
+        GameInitializeEvent.EVENT.register((serverLevel, gameWorldComponent, players) -> {
+            LockEntityManager.getInstance().resetLockEntities();
+            clearCuckooEggs(serverLevel);
+            CuckooEggData.reset();
+        });
+        OnGameEnd.EVENT.register((world, gameWorldComponent) -> {
+            var component = NecromancerComponent.KEY.get(world);
+            component.reset();
+            LockEntityManager.getInstance().resetLockEntities();
+            // 先清除蛋实体，再重置蛋数据（顺序很重要！）
+            clearCuckooEggs(world);
+            CuckooEggData.reset();
+            // 清除蛋糕师烟熏炉实体和蛋糕实体
+            CakeMakerRoleData.removeAllSmokerEntities(world);
+            CakeMakerRoleData.removeAllCakeEntities(world);
+            // 清除竹子投掷实体（含钉在墙上的）与竹枪延伸体
+            clearBambooEntities(world);
+        });
+    }
+
+    /** 游戏结束时清除竹子投掷实体（含钉在墙上的）与竹枪延伸体。 */
+    private static void clearBambooEntities(ServerLevel world) {
+        try {
+            for (ThrownBambooEntity bamboo : world.getEntities(ModEntities.THROWN_BAMBOO, entity -> true)) {
+                bamboo.remove(Entity.RemovalReason.DISCARDED);
+            }
+            for (BambooSpearEntity spear : world.getEntities(ModEntities.BAMBOO_SPEAR, entity -> true)) {
+                spear.remove(Entity.RemovalReason.DISCARDED);
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    /** 换图 / 清场时应当被清除的游戏残留实体（上一局的尸体、掉落物、投掷物、彩虹马等）。 */
+    public static boolean shouldClearOnReset(Entity entity) {
+        if (THIbarakiKasenRole.isWolf(entity)) {
+            return true;
+        }
+        if (THYukariPortalManager.isPortal(entity)) {
+            return true;
+        }
+        if (entity instanceof LockEntity ||
+                entity instanceof Pig ||
+                entity instanceof CanyuesaHorseEntity ||
+                entity instanceof SuperPigHorseEntity ||
+                entity instanceof Minecart ||
+                entity instanceof SREMinecart ||
+                entity instanceof Boat ||
+                entity instanceof MummyEntity ||
+                entity instanceof GrenadeEntity ||
+                entity instanceof SmokeGrenadeEntity ||
+                entity instanceof ThrowingKnifeEntity ||
+                entity instanceof ThrownBambooEntity ||
+                entity instanceof BambooSpearEntity ||
+                entity instanceof ChlorineBombEntity ||
+                entity instanceof PurifyBombEntity ||
+                entity instanceof PoisonGasTankEntity ||
+                entity instanceof PoisonGasCloudEntity ||
+                entity instanceof MudTrapEntity ||
+                entity instanceof TrapperNetEntity ||
+                entity instanceof TripwireTrapEntity ||
+                entity instanceof PuppeteerBodyEntity ||
+                entity instanceof FlashGrenadeEntity ||
+                entity instanceof FlareEntity ||
+                entity instanceof DecoyGrenadeEntity ||
+                entity instanceof SilenceTotemEntity ||
+                entity instanceof ThrownTrident ||
+                entity instanceof AreaEffectCloud ||
+                entity instanceof ItemEntity ||
+                entity instanceof PlayerBodyEntity ||
+                entity instanceof WheelchairEntity ||
+                entity instanceof AnglerRodMountEntity ||
+                entity instanceof RainbowHorseEntity ||
+                entity instanceof SnowballRollEntity ||
+                entity instanceof io.wifi.starrailexpress.content.entity.AbstractPurpleMonsterEntity ||
+                entity instanceof KuiXiPuppetEntity ||
+                entity instanceof NoteEntity ||
+                entity instanceof NoHeavyWaterInfluencedThrowableProjectile ||
+                entity instanceof DevilRouletteTableEntity.TableTextDisplay ||
+                entity instanceof DevilRouletteTableEntity.TableItemDisplay ||
+                (entity instanceof net.minecraft.world.entity.Display.BlockDisplay bd
+                        && (bd.getTags().contains(CakeMakerRoleData.SMOKER_ENTITY_TAG)
+                                || bd.getTags().contains(CakeMakerRoleData.CAKE_ENTITY_TAG)))
+                ||
+                (entity instanceof net.minecraft.world.entity.Interaction inter
+                        && (inter.getTags().contains(CakeMakerRoleData.SMOKER_ENTITY_TAG)
+                                || inter.getTags().contains(CakeMakerRoleData.CAKE_ENTITY_TAG)))) {
+            return true;
+        }
+        // 仅清理摄影师放置的照片框
+        if (entity instanceof io.github.mortuusars.exposure.world.entity.PhotographFrameEntity
+                && entity instanceof org.agmas.noellesroles.game.roles.innocence.photographer.SrePhotographerFrame frame
+                && frame.sre$isPhotographerPlaced())
+            return true;
+        return false;
+    }
+
+    public static void clearAllEntities(ServerLevel world) {
+        // 先清除所有锁实体及其映射
+        try {
+
+            // // 清除玩家属性
+            // for (var pl : world.players()) {
+            // RoleUtils.RemoveAllPlayerAttributes(pl);
+            // }
+
+            // 收集需要删除的实体列表，避免在遍历过程中修改集合
+            java.util.List<net.minecraft.world.entity.Entity> entitiesToRemove = new java.util.ArrayList<>();
+
+            world.getAllEntities().forEach((entity) -> {
+                if (shouldClearOnReset(entity)) {
+                    entitiesToRemove.add(entity);
+                }
+            });
+            // 安全地删除收集到的实体
+            for (net.minecraft.world.entity.Entity entity : entitiesToRemove) {
+                if (!entity.isRemoved()) { // 双重检查确保实体未被其他地方删除
+                    entity.remove(net.minecraft.world.entity.Entity.RemovalReason.DISCARDED);
+                }
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    /** 在reset之前清除所有布谷鸟蛋实体 */
+    private static void clearCuckooEggs(ServerLevel world) {
+        try {
+            java.util.List<net.minecraft.world.entity.Entity> eggsToRemove = new java.util.ArrayList<>();
+            world.getAllEntities().forEach((entity) -> {
+                if (isCuckooEggDisplayEntity(entity)) {
+                    eggsToRemove.add(entity);
+                }
+            });
+            for (net.minecraft.world.entity.Entity egg : eggsToRemove) {
+                if (!egg.isRemoved()) {
+                    egg.remove(net.minecraft.world.entity.Entity.RemovalReason.DISCARDED);
+                }
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private static boolean isCuckooEggDisplayEntity(net.minecraft.world.entity.Entity entity) {
+        if (!(entity instanceof net.minecraft.world.entity.Display.BlockDisplay blockDisplay)) {
+            return false;
+        }
+        return CuckooEggData.isCuckooEgg(entity)
+                || blockDisplay.getBlockState().is(net.minecraft.world.level.block.Blocks.SNIFFER_EGG);
+    }
+}

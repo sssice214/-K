@@ -1,0 +1,1728 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.client;
+
+import static org.agmas.noellesroles.init.ModEventsRegister.canThrowItems;
+
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.OptionalInt;
+import java.util.Random;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Predicate;
+
+import org.agmas.harpymodloader.component.WorldModifierComponent;
+import org.agmas.noellesroles.client.ClientSkincrawlerState;
+import org.agmas.noellesroles.client.NoellesrolesClient;
+import org.agmas.noellesroles.client.hud.MapStatusBarClientState;
+import org.agmas.noellesroles.client.utils.InstinctManager;
+import org.agmas.noellesroles.component.DeathPenaltyComponent;
+import org.agmas.noellesroles.content.entity.PuppeteerBodyEntity;
+import org.agmas.noellesroles.game.modes.fourthroom.network.FourthRoomStatePayload;
+import org.agmas.noellesroles.game.modes.fourthroom.network.FourthRoomTableEffectsPayload;
+import org.agmas.noellesroles.game.modes.fourthroom.network.OpenFourthRoomPeekDeckPayload;
+import org.agmas.noellesroles.game.roles.neutral.monokuma.YinYangSwordItem;
+import org.agmas.noellesroles.init.SREFumoBlocks;
+import org.agmas.noellesroles.utils.MCItemsUtils;
+import org.lwjgl.glfw.GLFW;
+import org.slf4j.LoggerFactory;
+import com.mojang.blaze3d.platform.InputConstants;
+import com.mojang.text2speech.Narrator;
+
+import dev.doctor4t.ratatouille.client.util.ambience.AmbienceUtil;
+import dev.doctor4t.ratatouille.client.util.ambience.BackgroundAmbience;
+import io.wifi.ConfigCompact.ClientConfigEvents;
+import io.wifi.rhythm.client.RhythmMapManager;
+import io.wifi.rhythm.client.utils.OggPlayer;
+import io.wifi.starrailexpress.SRE;
+import io.wifi.starrailexpress.SREClientConfig;
+import io.wifi.starrailexpress.SREConfig;
+import io.wifi.starrailexpress.api.SRERole;
+import io.wifi.starrailexpress.cca.AreasWorldComponent;
+import io.wifi.starrailexpress.cca.SREAbilityPlayerComponent;
+import io.wifi.starrailexpress.cca.SREGameTimeComponent;
+import io.wifi.starrailexpress.cca.SREGameWorldComponent;
+import io.wifi.starrailexpress.cca.SREPlayerMoodComponent;
+import io.wifi.starrailexpress.cca.SREPlayerPsychoComponent;
+import io.wifi.starrailexpress.cca.SRETrainWorldComponent;
+import io.wifi.starrailexpress.client.command.NetworkStatsClientCommand;
+import io.wifi.starrailexpress.client.commandmacro.CommandMacroExecutor;
+import io.wifi.starrailexpress.client.data.ClientPlayerDataCache;
+import io.wifi.starrailexpress.client.fourthroom.FourthRoomCameraDirector;
+import io.wifi.starrailexpress.client.fourthroom.FourthRoomClientState;
+import io.wifi.starrailexpress.client.fourthroom.FourthRoomTableHud;
+import io.wifi.starrailexpress.client.gui.HudStoreRenderer;
+import io.wifi.starrailexpress.client.gui.RoleAnnouncementTexts;
+import io.wifi.starrailexpress.client.gui.RoundTextRenderer;
+import io.wifi.starrailexpress.client.gui.ScopeOverlayRenderer;
+import io.wifi.starrailexpress.client.gui.SecurityCameraHUD;
+import io.wifi.starrailexpress.client.gui.StoreRenderer;
+import io.wifi.starrailexpress.client.gui.TimeRenderer;
+import io.wifi.starrailexpress.client.gui.screen.MapVoteScreen;
+import io.wifi.starrailexpress.client.gui.screen.PlayerStatsScreen;
+import io.wifi.starrailexpress.client.gui.screen.ProgressionPassScreen;
+import io.wifi.starrailexpress.client.gui.screen.SkinManagementScreen;
+import io.wifi.starrailexpress.client.gui.screen.WaypointHUD;
+import io.wifi.starrailexpress.client.gui.screen.gamemode.role_rotation.RoleRotationScreen;
+import io.wifi.starrailexpress.client.model.GeneralModelLoadingPlugin;
+import io.wifi.starrailexpress.client.model.TMMModelLayers;
+import io.wifi.starrailexpress.client.render.block_entity.FourthRoomTableBlockEntityRenderer;
+import io.wifi.starrailexpress.client.render.block_entity.PlaneSmallDoorBlockEntityRenderer;
+import io.wifi.starrailexpress.client.render.block_entity.PlateBlockEntityRenderer;
+import io.wifi.starrailexpress.client.render.block_entity.SmallDoorBlockEntityRenderer;
+import io.wifi.starrailexpress.client.render.block_entity.UpSmallDoorBlockEntityRenderer;
+import io.wifi.starrailexpress.client.render.block_entity.WheelBlockEntityRenderer;
+import io.wifi.starrailexpress.client.render.block_entity.ZiplineBlockEntityRenderer;
+import io.wifi.starrailexpress.client.render.entity.FirecrackerEntityRenderer;
+import io.wifi.starrailexpress.client.render.entity.HornBlockEntityRenderer;
+import io.wifi.starrailexpress.client.render.entity.NoteEntityRenderer;
+import io.wifi.starrailexpress.client.stats.ClientPlayerStatsCache;
+import io.wifi.starrailexpress.client.util.ClientScheduler;
+import io.wifi.starrailexpress.client.util.ClientSkinCache;
+import io.wifi.starrailexpress.client.util.TMMItemTooltips;
+import io.wifi.starrailexpress.compat.TrainVoicePlugin;
+import io.wifi.starrailexpress.content.entity.FirecrackerEntity;
+import io.wifi.starrailexpress.content.entity.NoteEntity;
+import io.wifi.starrailexpress.content.entity.PlayerBodyEntity;
+import io.wifi.starrailexpress.content.item.GrenadeItem;
+import io.wifi.starrailexpress.content.item.KnifeItem;
+import io.wifi.starrailexpress.content.vote.client.RoleRotationCache;
+import io.wifi.starrailexpress.content.vote.client.RoleRotationClientReceiver;
+import io.wifi.starrailexpress.content.vote.client.VolunteerModeClientReceiver;
+import io.wifi.starrailexpress.content.vote.client.VoteClientReceiver;
+import io.wifi.starrailexpress.event.AllowItemShowInHand;
+import io.wifi.starrailexpress.event.AllowOtherCameraType;
+import io.wifi.starrailexpress.event.ClientHeldItemSwitchEvent;
+import io.wifi.starrailexpress.event.client.OnGameFinishedClient;
+import io.wifi.starrailexpress.event.client.OnGameStartedClient;
+import io.wifi.starrailexpress.game.GameConstants;
+import io.wifi.starrailexpress.game.GameUtils;
+import io.wifi.starrailexpress.game.data.MapStatusBarType;
+import io.wifi.starrailexpress.index.SREDataComponentTypes;
+import io.wifi.starrailexpress.index.SREDisplayBlocks;
+import io.wifi.starrailexpress.index.SREDoorBlocks;
+import io.wifi.starrailexpress.index.TMMBlockEntities;
+import io.wifi.starrailexpress.index.TMMBlocks;
+import io.wifi.starrailexpress.index.TMMEntities;
+import io.wifi.starrailexpress.index.TMMItems;
+import io.wifi.starrailexpress.index.TMMParticles;
+import io.wifi.starrailexpress.index.TMMSounds;
+import io.wifi.starrailexpress.morph.MorphApiClient;
+import io.wifi.starrailexpress.network.BreakArmorPayload;
+import io.wifi.starrailexpress.network.CloseUiPayload;
+import io.wifi.starrailexpress.network.IsLobbyConfigPayload;
+import io.wifi.starrailexpress.network.JoinSpecGroupPayload;
+import io.wifi.starrailexpress.network.MapVotingResultsPayload;
+import io.wifi.starrailexpress.network.NetworkStatistics;
+import io.wifi.starrailexpress.network.OnGameFinishedPayload;
+import io.wifi.starrailexpress.network.OnGameStartedPayload;
+import io.wifi.starrailexpress.network.OpenProgressionScreenPayload;
+import io.wifi.starrailexpress.network.OpenSkinScreenPaylod;
+import io.wifi.starrailexpress.network.PlayerDataPartSyncPayload;
+import io.wifi.starrailexpress.network.PlayerDeathPayload;
+import io.wifi.starrailexpress.network.PlayerStatsSyncPayload;
+import io.wifi.starrailexpress.network.RemoveStatusBarPayload;
+import io.wifi.starrailexpress.network.SecurityCameraModePayload;
+import io.wifi.starrailexpress.network.ShowSelectedMapUIPayload;
+import io.wifi.starrailexpress.network.ShowStatsPayload;
+import io.wifi.starrailexpress.network.SyncMapConfigPayload;
+import io.wifi.starrailexpress.network.TriggerScreenEdgeEffectPayload;
+import io.wifi.starrailexpress.network.TriggerStatusBarPayload;
+import io.wifi.starrailexpress.network.original.AnnounceEndingPayload;
+import io.wifi.starrailexpress.network.original.AnnounceWelcomePayload;
+import io.wifi.starrailexpress.network.original.GunDropPayload;
+import io.wifi.starrailexpress.network.original.ShootMuzzleS2CPayload;
+import io.wifi.starrailexpress.network.original.SniperScopeStateS2CPayload;
+import io.wifi.starrailexpress.network.original.TaskCompletePayload;
+import io.wifi.starrailexpress.network.packet.CustomNarratorPacket;
+import io.wifi.starrailexpress.network.packet.StaminaS2CPacket;
+import io.wifi.starrailexpress.network.packet.SyncRoomToPlayerPayload;
+import io.wifi.starrailexpress.network.packet.SyncSpecificWaypointVisibilityPacket;
+import io.wifi.starrailexpress.network.packet.SyncWaypointVisibilityPacket;
+import io.wifi.starrailexpress.network.packet.SyncWaypointsPacket;
+import io.wifi.starrailexpress.rules.ChatHudRules;
+import io.wifi.starrailexpress.scenery.client.SceneAssetClient;
+import io.wifi.starrailexpress.scenery.network.SceneAssetNetwork;
+import io.wifi.starrailexpress.util.HPManager;
+import io.wifi.starrailexpress.util.MatrixParticleManager;
+import io.wifi.starrailexpress.util.PlayerStaminaGetter;
+import io.wifi.starrailexpress.util.PoisonComponentUtils;
+import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
+import net.exmo.sre.EXSREClient;
+import net.exmo.sre.loading.FrameAnimationRenderer;
+import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.blockrenderlayer.v1.BlockRenderLayerMap;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.item.v1.ItemTooltipCallback;
+import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
+import net.fabricmc.fabric.api.client.model.loading.v1.ModelLoadingPlugin;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+import net.fabricmc.fabric.api.client.rendering.v1.BuiltinItemRendererRegistry;
+import net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry;
+import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
+import net.minecraft.ChatFormatting;
+import net.minecraft.client.CameraType;
+import net.minecraft.client.KeyMapping;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.blockentity.BlockEntityRenderers;
+import net.minecraft.client.renderer.entity.NoopRenderer;
+import net.minecraft.client.renderer.entity.ThrownItemRenderer;
+import net.minecraft.client.resources.model.ModelResourceLocation;
+import net.minecraft.client.resources.model.UnbakedModel;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.util.Mth;
+import net.minecraft.world.entity.Display;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.phys.Vec3;
+import pro.fazeclan.river.stupid_express.modifier.refugee.cca.RefugeeComponent;
+
+public class SREClient implements ClientModInitializer {
+    private static float soundLevel = 0f;
+    public static boolean hasCustomSkinLoaderAndNeedToWarn = false;
+    public static HPManager handParticleManager;
+    public static Map<Player, Vec3> particleMap;
+    /** 副手单独一份枪口位置，避免副手的枪覆盖主手记录。 */
+    public static Map<Player, Vec3> offhandParticleMap;
+    public static Map<UUID, OptionalInt> cachedHighLightMap = new ConcurrentHashMap<>();
+    private static boolean previousMyTurn = false;
+    private static boolean prevGameRunning;
+    public static SREGameWorldComponent gameComponent;
+    public static WorldModifierComponent modifierComponent;
+    public static AreasWorldComponent areaComponent;
+    public static SRETrainWorldComponent trainComponent;
+    public static SREGameTimeComponent timeComponent;
+    public static SREPlayerMoodComponent moodComponent;
+    public static int intervalTime = 0;
+    public static boolean isInLobby = false;
+    public static Player cached_player = null;
+    public static Narrator narrator = Narrator.getNarrator();
+    // HUD/API 缓存：在 END_CLIENT_TICK 统一更新，在渲染 mixin 中仅做读取，避免渲染流程重复判断。
+    private static boolean cachedPlayerAliveAndInSurvival;
+    private static boolean cachedPlayerSpectatingOrCreative;
+    private static boolean cachedPlayerCreative;
+    private static boolean cachedPlayerSpectator;
+    private static boolean cachedKiller;
+    private static boolean cachedUseTrainHud;
+    private static boolean cachedCanRenderChatHud = true;
+    private static boolean cachedShowDebugHud;
+    private static boolean cachedRenderVanillaHud;
+    private static boolean cachedLooseEndPenalty = false;
+    private static SRERole cachedPlayerRole;
+    public static boolean hideLocalMainHandItemInLayer = false;
+    public static boolean hideLocalOffHandItemInLayer = false;
+    public static final Map<UUID, Boolean> PLAYER_PSYCHO_CACHE = new ConcurrentHashMap<>();
+    public static boolean localPlayerPsychoActive = false;
+    private static ItemStack prevMainHandSnapshot = ItemStack.EMPTY;
+    private static ItemStack prevOffHandSnapshot = ItemStack.EMPTY;
+    private static int prevSelectedHotbarSlot = -1;
+
+    public static KeyMapping instinctKeybind;
+    public static KeyMapping statsKeybind; // 新增统计面板热键
+    public static KeyMapping skinsKeybind; // 新增皮肤管理热键
+    public static KeyMapping manageWaypointsKeybind; // 路径点管理 GUI 热键（默认未绑定）
+    public static KeyMapping deleteLookedWaypointKeybind; // 看向删除路径点热键（默认未绑定）
+    public static boolean isInstinctToggleEnabled = false; // 新增变量用于跟踪切换状态
+    public static boolean prevInstinctKeyDown = false; // 用于检测按键按下事件
+    public static float prevInstinctLightLevel = -.04f;
+    public static float instinctLightLevel = -.04f;
+
+    public static boolean canSeeBarrier() {
+        Minecraft client = Minecraft.getInstance();
+        if (client.player != null) {
+            if (client.player.isCreative() && NoellesrolesClient.isTaskInstinctEnabled) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static boolean shouldDisableHudAndDebug() {
+        Minecraft client = Minecraft.getInstance();
+        return (client == null
+                || (client.player != null && !client.player.isCreative() && !client.player.isSpectator()));
+    }
+
+    public static boolean checkCustomSkinLoader() {
+        final String customSkinLoaderClassName = "customskinloader.CustomSkinLoader";
+        boolean result = isClassPresent(customSkinLoaderClassName);
+        hasCustomSkinLoaderAndNeedToWarn = result;
+        return result;
+    }
+
+    private static boolean isClassPresent(String className) {
+        try {
+            Class.forName(className, false, SRE.class.getClassLoader());
+            return true;
+        } catch (ClassNotFoundException e) {
+            return false;
+        }
+    }
+
+    public static boolean isPlayerCreative() {
+        return cachedPlayerCreative;
+    }
+
+    /**
+     * 客户端侧网络统计：注册 {@code /tmm:netstatsc}，并给统计内核补上只有客户端才知道的两件事——
+     * 编码载荷时用的注册表访问，以及本地玩家名（用于按玩家归集）。数据留在客户端本地，
+     * 导出到 {@code .minecraft/netstats/}，与服务端的 /tmm:netstats 完全独立。
+     */
+    private static void initNetworkStatisticsClient() {
+        NetworkStatistics clientStats = NetworkStatistics.getClientInstance();
+        clientStats.setRegistryAccessSupplier(() -> {
+            LocalPlayer player = Minecraft.getInstance().player;
+            return player != null ? player.level().registryAccess() : null;
+        });
+        clientStats.setLocalPlayerSupplier(() -> Minecraft.getInstance().player);
+        NetworkStatsClientCommand.register();
+    }
+
+    @Override
+    public void onInitializeClient() {
+        io.wifi.starrailexpress.settlement.client.SettlementClient.register();
+        LetterNewspaperBuilder.init();
+        RhythmMapManager.registerEvents();
+        SceneAssetClient.initialize();
+        SceneAssetNetwork.registerClientReceivers();
+        ClientScheduler.init();
+        ClientSkinCache.init();
+        MorphApiClient.registerClient();
+        io.wifi.starrailexpress.client.disguise.EntityDisguiseClient.registerClient();
+        io.wifi.starrailexpress.hat.HatEquipmentApi.registerDefaultOwnerResolvers();
+        io.wifi.starrailexpress.client.pet.PetClientDriver.register();
+        // 皮肤页「仅显示 3D 皮肤」的资源探测兜底：附属模组会自己显式登记，
+        // 但主模组 / 其它内容模组自带的 geo 皮肤没人登记，这里扫一遍
+        // assets/*/geo/**.geo.json 把文件名当皮肤 ID 收集起来。
+        // 必须挂在资源重载之后：启动期资源还没就绪，扫描会得到空集。
+        net.fabricmc.fabric.api.resource.ResourceManagerHelper.get(
+                net.minecraft.server.packs.PackType.CLIENT_RESOURCES)
+                .registerReloadListener(new net.fabricmc.fabric.api.resource.SimpleSynchronousResourceReloadListener() {
+                    @Override
+                    public net.minecraft.resources.ResourceLocation getFabricId() {
+                        return net.minecraft.resources.ResourceLocation.fromNamespaceAndPath(
+                                "starrailexpress", "skin_3d_probe");
+                    }
+
+                    @Override
+                    public void onResourceManagerReload(
+                            net.minecraft.server.packs.resources.ResourceManager manager) {
+                        io.wifi.starrailexpress.util.ItemSkin3dRegistry.probeGeoResources(manager);
+                    }
+                });
+        net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents.DISCONNECT
+                .register((handler, client) -> {
+                    io.wifi.starrailexpress.client.hat.ClientHatEquipmentCache.clear();
+                    io.wifi.starrailexpress.client.morph.ClientMorphCache.clear();
+                    io.wifi.starrailexpress.client.plush.ClientPlushEquipmentCache.clear();
+                });
+        io.wifi.starrailexpress.client.mirror.MirrorReflectionManager.init();
+        ClientConfigEvents.register();
+        initNetworkStatisticsClient();
+        new EXSREClient().onInitializeClient();
+        // ModVersionPacket
+        checkCustomSkinLoader();
+        // Initialize ScreenParticle
+        handParticleManager = new HPManager();
+        particleMap = new HashMap<>();
+        offhandParticleMap = new HashMap<>();
+        // Custom Baked Models
+        ModelLoadingPlugin.register(new GeneralModelLoadingPlugin());
+        // 自定义列车物品「模型地址」指向的模型（资源包里没被引用的模型默认不会烘焙）
+        ModelLoadingPlugin.register(new io.wifi.starrailexpress.client.model.CustomItemModelPlugin());
+        // Register particle factories
+        TMMParticles.registerFactories();
+        // 自定义Plush Renderer
+        BuiltinItemRendererRegistry.INSTANCE.register(
+                SREFumoBlocks.CUSTOM_PLAYER_PLUSH.asItem(),
+                new io.wifi.starrailexpress.client.render.item.CustomPlayerPlushItemRenderer());
+        // 自定义列车物品 Renderer（同一个物品按物品数据渲染不同贴图）
+        BuiltinItemRendererRegistry.INSTANCE.register(
+                io.wifi.starrailexpress.index.DevItems.CUSTOM_ITEM,
+                new io.wifi.starrailexpress.client.render.item.CustomItemRenderer());
+        // 自定义列车物品的图集来源：把配置里的贴图注册进方块图集（食用 / 破碎粒子、模型自带贴图要用）
+        io.wifi.starrailexpress.client.texture.CustomItemSpriteSource.register();
+        // 自定义方块物品 Renderer（与放置后的方块共用同一套外观来源）
+        BuiltinItemRendererRegistry.INSTANCE.register(
+                io.wifi.starrailexpress.index.SREBlocks.CUSTOM_BLOCK.asItem(),
+                new io.wifi.starrailexpress.client.render.item.CustomBlockItemRenderer());
+        // Entity renderer registration
+        EntityRendererRegistry.register(TMMEntities.SEAT, NoopRenderer::new);
+        EntityRendererRegistry.register(TMMEntities.FIRECRACKER, FirecrackerEntityRenderer::new);
+        EntityRendererRegistry.register(TMMEntities.GRENADE, ThrownItemRenderer::new);
+        EntityRendererRegistry.register(TMMEntities.STICKY_GRENADE, ThrownItemRenderer::new);
+        EntityRendererRegistry.register(TMMEntities.TIMED_GRENADE, ThrownItemRenderer::new);
+        EntityRendererRegistry.register(TMMEntities.CUSTOM_THROWABLE, ThrownItemRenderer::new);
+        EntityRendererRegistry.register(TMMEntities.NOTE, NoteEntityRenderer::new);
+        EntityRendererRegistry.register(TMMEntities.ZIPLINE_RIDER, NoopRenderer::new);
+        EntityRendererRegistry.register(TMMEntities.CRASH_PLANE,
+                net.exmo.sre.planecrash.client.CrashPlaneEntityRenderer::new);
+        EntityRendererRegistry.register(TMMEntities.PURPLE_MONSTER,
+                io.wifi.starrailexpress.client.render.entity.PurpleMonsterRenderer::new);
+        EntityRendererRegistry.register(TMMEntities.PURPLE_MONSTER_SECOND,
+                io.wifi.starrailexpress.client.render.entity.PurpleMonsterSecondRenderer::new);
+        EntityRendererRegistry.register(io.wifi.starrailexpress.traindummy.TrainDummyEntity.TYPE,
+                context -> new io.wifi.starrailexpress.client.render.entity.TrainDummyRenderer(context, false));
+        net.exmo.sre.planecrash.client.PlaneCrashFakeFlames.register();
+
+        // Register entity model layers
+        TMMModelLayers.initialize();
+
+        // Block render layers
+        BlockRenderLayerMap.INSTANCE.putBlocks(RenderType.cutout(),
+                TMMBlocks.STAINLESS_STEEL_VENT_HATCH,
+                TMMBlocks.DARK_STEEL_VENT_HATCH,
+                TMMBlocks.TARNISHED_GOLD_VENT_HATCH,
+                TMMBlocks.METAL_SHEET_WALKWAY,
+                TMMBlocks.STAINLESS_STEEL_LADDER,
+                TMMBlocks.COCKPIT_DOOR,
+                TMMBlocks.METAL_SHEET_DOOR,
+                TMMBlocks.GOLDEN_GLASS_PANEL,
+                TMMBlocks.CULLING_GLASS,
+                TMMBlocks.STAINLESS_STEEL_WALKWAY,
+                TMMBlocks.DARK_STEEL_WALKWAY,
+                TMMBlocks.PANEL_STRIPES,
+                TMMBlocks.RAIL_BEAM,
+                TMMBlocks.TRIMMED_RAILING_POST,
+                TMMBlocks.DIAGONAL_TRIMMED_RAILING,
+                TMMBlocks.TRIMMED_RAILING,
+                TMMBlocks.TRIMMED_EBONY_STAIRS,
+                TMMBlocks.WHITE_LOUNGE_COUCH,
+                TMMBlocks.WHITE_OTTOMAN,
+                TMMBlocks.WHITE_TRIMMED_BED,
+                TMMBlocks.BLUE_LOUNGE_COUCH,
+                TMMBlocks.GREEN_LOUNGE_COUCH,
+                TMMBlocks.BAR_STOOL,
+                TMMBlocks.WALL_LAMP,
+                TMMBlocks.SMALL_BUTTON,
+                TMMBlocks.ELEVATOR_BUTTON,
+                TMMBlocks.STAINLESS_STEEL_SPRINKLER,
+                TMMBlocks.GOLD_SPRINKLER,
+                TMMBlocks.GOLD_ORNAMENT,
+                TMMBlocks.WHEEL,
+                TMMBlocks.RUSTED_WHEEL,
+                TMMBlocks.BARRIER_PANEL,
+                TMMBlocks.FOOD_PLATTER,
+                TMMBlocks.DRINK_TRAY,
+                TMMBlocks.LIGHT_BARRIER,
+                TMMBlocks.HORN);
+        BlockRenderLayerMap.INSTANCE.putBlocks(RenderType.translucent(),
+                TMMBlocks.RHOMBUS_GLASS,
+                TMMBlocks.PRIVACY_GLASS_PANEL,
+                TMMBlocks.CULLING_BLACK_HULL,
+                TMMBlocks.CULLING_WHITE_HULL,
+                TMMBlocks.HULL_GLASS,
+                TMMBlocks.RHOMBUS_HULL_GLASS);
+
+        // Custom block models
+        CustomModelProvider customModelProvider = new CustomModelProvider();
+        ModelLoadingPlugin.register(customModelProvider);
+
+        // Block Entity Renderers
+        // 自定义方块（外观由方块实体渲染器按配置绘制）
+        BlockEntityRenderers.register(
+                io.wifi.starrailexpress.index.SREBlocks.CUSTOM_BLOCK_ENTITY,
+                io.wifi.starrailexpress.client.render.block.CustomBlockRenderer::new);
+        // 门
+        // 自动注册的自定义材质门
+        for (final var entry : SREDoorBlocks.DOOR_BLOCK_AND_ENTITIES.values()) {
+            BlockEntityRenderers.register(
+                    entry.blockEntity,
+                    ctx -> new SmallDoorBlockEntityRenderer(entry.texture, ctx));
+        }
+        // wathe 门
+        BlockEntityRenderers.register(
+                TMMBlockEntities.SMALL_GLASS_DOOR,
+                ctx -> new SmallDoorBlockEntityRenderer(SRE.watheId("textures/entity/small_glass_door.png"), ctx));
+        BlockEntityRenderers.register(
+                TMMBlockEntities.SMALL_WOOD_DOOR,
+                ctx -> new SmallDoorBlockEntityRenderer(SRE.watheId("textures/entity/small_wood_door.png"), ctx));
+        BlockEntityRenderers.register(
+                TMMBlockEntities.ANTHRACITE_STEEL_DOOR,
+                ctx -> new SmallDoorBlockEntityRenderer(SRE.watheId("textures/entity/anthracite_steel_door.png"), ctx));
+        BlockEntityRenderers.register(
+                TMMBlockEntities.KHAKI_STEEL_DOOR,
+                ctx -> new SmallDoorBlockEntityRenderer(SRE.watheId("textures/entity/khaki_steel_door.png"), ctx));
+        BlockEntityRenderers.register(
+                TMMBlockEntities.MAROON_STEEL_DOOR,
+                ctx -> new SmallDoorBlockEntityRenderer(SRE.watheId("textures/entity/maroon_steel_door.png"), ctx));
+        BlockEntityRenderers.register(
+                TMMBlockEntities.MUNTZ_STEEL_DOOR,
+                ctx -> new SmallDoorBlockEntityRenderer(SRE.watheId("textures/entity/muntz_steel_door.png"), ctx));
+        BlockEntityRenderers.register(
+                TMMBlockEntities.NAVY_STEEL_DOOR,
+                ctx -> new SmallDoorBlockEntityRenderer(SRE.watheId("textures/entity/navy_steel_door.png"), ctx));
+        BlockEntityRenderers.register(
+                TMMBlockEntities.WHEEL,
+                ctx -> new WheelBlockEntityRenderer(SRE.watheId("textures/entity/wheel.png"), ctx));
+        BlockEntityRenderers.register(
+                TMMBlockEntities.RUSTED_WHEEL,
+                ctx -> new WheelBlockEntityRenderer(SRE.watheId("textures/entity/rusted_wheel.png"), ctx));
+        BlockEntityRenderers.register(
+                TMMBlockEntities.BEVERAGE_PLATE,
+                PlateBlockEntityRenderer::new);
+
+        // PLANE DOORS
+        // Block Entity Renderers
+        BlockEntityRenderers.register(
+                TMMBlockEntities.PLANE_GLASS_DOOR,
+                ctx -> new PlaneSmallDoorBlockEntityRenderer(SRE.watheId("textures/entity/small_glass_door.png"), ctx));
+        BlockEntityRenderers.register(
+                TMMBlockEntities.PLANE_WOOD_DOOR,
+                ctx -> new PlaneSmallDoorBlockEntityRenderer(SRE.watheId("textures/entity/small_wood_door.png"), ctx));
+        BlockEntityRenderers.register(
+                TMMBlockEntities.PLANE_STEEL_DOOR,
+                ctx -> new PlaneSmallDoorBlockEntityRenderer(SRE.id("textures/item/doors/up_steel_door.png"), ctx));
+        // UP DOORS
+        // Block Entity Renderers
+        BlockEntityRenderers.register(
+                TMMBlockEntities.UP_GLASS_DOOR,
+                ctx -> new UpSmallDoorBlockEntityRenderer(SRE.watheId("textures/entity/small_glass_door.png"), ctx));
+        BlockEntityRenderers.register(
+                TMMBlockEntities.UP_WOOD_DOOR,
+                ctx -> new UpSmallDoorBlockEntityRenderer(SRE.watheId("textures/entity/small_wood_door.png"), ctx));
+        BlockEntityRenderers.register(
+                TMMBlockEntities.UP_STEEL_DOOR,
+                ctx -> new UpSmallDoorBlockEntityRenderer(SRE.id("textures/item/doors/up_steel_door.png"), ctx));
+        // OTHERS
+        BlockEntityRenderers.register(TMMBlockEntities.HORN, HornBlockEntityRenderer::new);
+        BlockEntityRenderers.register(TMMBlockEntities.ZIPLINE, ZiplineBlockEntityRenderer::new);
+        BlockEntityRenderers.register(TMMBlockEntities.FOURTH_ROOM_TABLE, FourthRoomTableBlockEntityRenderer::new);
+        // 展示方块：方块本体不渲染，内容全部由这两个渲染器按原版展示实体的规则画
+        BlockEntityRenderers.register(SREDisplayBlocks.TEXT_DISPLAY_BLOCK_ENTITY,
+                io.wifi.starrailexpress.client.render.block_entity.TextDisplayBlockEntityRenderer::new);
+        BlockEntityRenderers.register(SREDisplayBlocks.BLOCK_DISPLAY_BLOCK_ENTITY,
+                io.wifi.starrailexpress.client.render.block_entity.BlockDisplayBlockEntityRenderer::new);
+        BlockEntityRenderers.register(SREDisplayBlocks.ITEM_DISPLAY_BLOCK_ENTITY,
+                io.wifi.starrailexpress.client.render.block_entity.ItemDisplayBlockEntityRenderer::new);
+        BlockEntityRenderers.register(SREDisplayBlocks.ENTITY_DISPLAY_BLOCK_ENTITY,
+                io.wifi.starrailexpress.client.render.block_entity.EntityDisplayBlockEntityRenderer::new);
+
+        AmbienceUtil.registerBackgroundAmbience(
+                new BackgroundAmbience(TMMSounds.AMBIENT_PSYCHO_DRONE,
+                        player -> gameComponent != null && gameComponent.isPsychoActive(), 20));
+
+        // ───── 场景背景音效系统 ─────
+        // 列车内部（看不到天空时，仅 train 类型生效）
+        OutsideSoundManager.registerEvents();
+        // 音乐盒：装配后在地图无背景音、非命令方块事件局时循环播放
+        MusicBoxAmbientSound.register();
+
+        // Caching components
+        ClientTickEvents.START_WORLD_TICK.register(clientWorld -> {
+            gameComponent = SREGameWorldComponent.KEY.get(clientWorld);
+            modifierComponent = WorldModifierComponent.KEY.get(clientWorld);
+            areaComponent = AreasWorldComponent.KEY.get(clientWorld);
+            trainComponent = SRETrainWorldComponent.KEY.get(clientWorld);
+            timeComponent = SREGameTimeComponent.KEY.get(clientWorld);
+            moodComponent = SREPlayerMoodComponent.KEY.get(Minecraft.getInstance().player);
+        });
+
+        ClientPlayConnectionEvents.DISCONNECT.register((a, b) -> {
+            gameComponent = null;
+            modifierComponent = null;
+            areaComponent = null;
+            trainComponent = null;
+            moodComponent = null;
+            timeComponent = null;
+            io.wifi.starrailexpress.anticheat.ClickAntiCheatClient.clear();
+        });
+        // 公平性选项由 LockedOptionInstanceMixin 在构造、读写与按钮层统一锁定。
+        // 不再向已被屏蔽的 Ratatouille OptionLocker 注册无效规则。
+        if (net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("sodium")) {
+            SodiumOptionsEnforcer.register();
+        }
+        if (net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("sodium-extra")) {
+            SodiumExtraOptionsEnforcer.register();
+        }
+
+        // 客户端接收器 (在客户端初始化中调用)
+        VoteClientReceiver.register();
+        StreamingSpectatorClient.register();
+        ClientPlayNetworking.registerGlobalReceiver(SecurityCameraModePayload.ID,
+                new SecurityCameraModePayload.ClientReceiver());
+        ClientPlayNetworking.registerGlobalReceiver(StaminaS2CPacket.ID, (payload, context) -> {
+            float value = payload.stamina();
+            if (context.player() instanceof PlayerStaminaGetter stam) {
+                stam.starrailexpress$setStamina((float) value);
+            }
+        });
+        ClientPlayNetworking.registerGlobalReceiver(
+                io.wifi.starrailexpress.network.packet.MobRiotStateS2CPacket.ID,
+                (payload, context) -> context.client().execute(() ->
+                        io.wifi.starrailexpress.client.gui.MobRiotHudRenderer.update(payload)));
+        ClientPlayNetworking.registerGlobalReceiver(io.wifi.starrailexpress.network.ClickLockoutPayload.TYPE,
+                (payload, context) -> io.wifi.starrailexpress.anticheat.ClickAntiCheatClient
+                        .applyLockout(payload.remainingMillis()));
+        ClientPlayNetworking.registerGlobalReceiver(IsLobbyConfigPayload.ID, (payload, context) -> {
+            SREClient.isInLobby = payload.isLobby();
+            SRE.isLobby = payload.isLobby();
+            LoggerFactory.getLogger(this.getClass())
+                    .info("Is Lobby status: " + (SREClient.isInLobby ? "Yes" : "No"));
+        });
+        // 自定义形状粒子：服务端只说"在哪、播哪条、多久"，形状由客户端按 id 生成
+        ClientPlayNetworking.registerGlobalReceiver(
+                io.wifi.starrailexpress.network.packet.CustomParticleS2CPayload.ID,
+                (payload, context) -> context.client().execute(
+                        () -> io.wifi.starrailexpress.client.particle.CustomParticleHandlers.dispatch(payload)));
+
+        // Item tooltips
+        TMMItemTooltips.addTooltips();
+        AllowOtherCameraType.EVENT.register((original, localPlayer) -> {
+            if (SecurityCameraClientState.isInSecurityMode()) {
+                return AllowOtherCameraType.ReturnCameraType.THIRD_PERSON_BACK;
+            }
+            return AllowOtherCameraType.ReturnCameraType.NO_CHANGE;
+        });
+        ClientHeldItemSwitchEvent.EVENT.register((player, mainHand, offHand) -> {
+            hideLocalMainHandItemInLayer = isHandHiddenByEvent(player, mainHand, true);
+            hideLocalOffHandItemInLayer = isHandHiddenByEvent(player, offHand, false);
+        });
+        ItemTooltipCallback.EVENT.register(
+                (itemStack, tooltipContext, tooltipFlag, list) -> {
+                    if (canThrowItems.contains(itemStack.getItem())) {
+                        list.add(Component.translatable("starrailexpress.tip.can_thrown"));
+                    }
+                    if (TMMItems.INVISIBLE_ITEMS.contains(itemStack.getItem())) {
+                        list.add(
+                                Component.translatable("starrailexpress.tip.invisible").withStyle(ChatFormatting.GRAY));
+                    }
+                });
+        ClientTickEvents.START_WORLD_TICK.register(clientWorld -> {
+            final var client = Minecraft.getInstance();
+            if (client == null || client.player == null
+                    || SREClient.gameComponent == null) {
+                return;
+            }
+            final LocalPlayer player = client.player;
+            {
+                if (SecurityCameraClientState.isInSecurityMode()) {
+
+                    boolean keycode = Minecraft.getInstance().options.keyShift.isDown();
+                    if (client.screen != null || keycode) {
+                        SecurityCameraClientState.setSecurityMode(false);
+                        Minecraft.getInstance().options.setCameraType(CameraType.FIRST_PERSON);
+                    }
+                }
+            }
+
+            prevInstinctLightLevel = instinctLightLevel;
+            // 检测按键按下事件，只在按键状态从释放变为按下时切换
+            boolean isKeyDown = instinctKeybind.isDown();
+            if (isKeyDown && !prevInstinctKeyDown) {
+                isInstinctToggleEnabled = !isInstinctToggleEnabled; // 切换状态
+                updateInstinctCache(Minecraft.getInstance());
+            }
+            prevInstinctKeyDown = isKeyDown;
+
+            // instinct night vision - 现在基于切换状态而不是按键按下来判断
+            if (SREClient.isInstinctEnabled() && SREClient.hasInstinctNightVision()) {
+                instinctLightLevel += .2f;
+            } else {
+                instinctLightLevel -= .2f;
+            }
+            float maxLightLevel = 0.75f;
+            if (player.isCreative())
+                maxLightLevel = 1f;
+            instinctLightLevel = Mth.clamp(instinctLightLevel, -.04f, maxLightLevel);
+            if (gameComponent == null)
+                return;
+            if (!prevGameRunning && gameComponent.isRunning()) {
+                Minecraft.getInstance().player.getInventory().selected = 8;
+            }
+            // 游戏结束时清除高级相机轨道
+            if (prevGameRunning && !gameComponent.isRunning()) {
+                net.exmo.sre.camera.client.AdvancedCameraDirector.clear();
+                net.exmo.sre.planecrash.client.PlaneCrashClientEffects.clear();
+            }
+            prevGameRunning = gameComponent.isRunning();
+
+            // Fade sound with game start / stop fade
+            SREGameWorldComponent component = SREGameWorldComponent.KEY.get(clientWorld);
+            if (component.getFade() > 0) {
+                Minecraft.getInstance().getSoundManager().updateSourceVolume(SoundSource.MASTER,
+                        Mth.map(component.getFade(), 0, GameConstants.FADE_TIME, soundLevel, 0));
+            } else {
+                Minecraft.getInstance().getSoundManager().updateSourceVolume(SoundSource.MASTER, soundLevel);
+                soundLevel = Minecraft.getInstance().options.getSoundSourceVolume(SoundSource.MASTER);
+            }
+
+            if (player != null) {
+                StoreRenderer.tick();
+                HudStoreRenderer.tick();
+                TimeRenderer.tick();
+                StaminaRenderer.tick();
+            }
+
+            // // 全息展示方块客户端tick
+            // for (var blockEntity : clientWorld.getbl.values()) {
+            // if (blockEntity instanceof HologramDisplayBlockEntity hologramEntity) {
+            // hologramEntity.clientTick();
+            // }
+            // }
+
+        });
+        intervalTime = new Random().nextInt(0, 200);
+        ClientTickEvents.END_CLIENT_TICK.register((client) -> {
+            {
+                OggPlayer.checker(Minecraft.getInstance().screen);
+            }
+            if (client.level == null || gameComponent == null)
+                return;
+            FrameAnimationRenderer.setInWorld(client != null && client.level != null);
+            LocalPlayer player = client.player;
+            cached_player = player;
+            if (player == null) {
+                localPlayerPsychoActive = false;
+                PLAYER_PSYCHO_CACHE.clear();
+                prevMainHandSnapshot = ItemStack.EMPTY;
+                prevOffHandSnapshot = ItemStack.EMPTY;
+                prevSelectedHotbarSlot = -1;
+                hideLocalMainHandItemInLayer = false;
+                hideLocalOffHandItemInLayer = false;
+            } else {
+                int INTERVAL = 5;
+                if (SREConfig.isUltraPerfMode())
+                    INTERVAL = 20;
+                if (client.level.getGameTime() % INTERVAL == 0) {
+                    updateInstinctCache(client);
+                }
+                updateHudApiCache(client);
+                localPlayerPsychoActive = SREPlayerPsychoComponent.KEY.get(player).getPsychoTicks() > 0;
+                PLAYER_PSYCHO_CACHE.put(player.getUUID(), localPlayerPsychoActive);
+                if (client.level != null) {
+                    for (Player levelPlayer : client.level.players()) {
+                        PLAYER_PSYCHO_CACHE.put(levelPlayer.getUUID(),
+                                SREPlayerPsychoComponent.KEY.get(levelPlayer).getPsychoTicks() > 0);
+                    }
+                }
+                ItemStack mainHand = player.getMainHandItem();
+                ItemStack offHand = player.getOffhandItem();
+                int selectedHotbarSlot = player.getInventory().selected;
+                boolean mainHandChanged = selectedHotbarSlot != prevSelectedHotbarSlot
+                        || !ItemStack.isSameItemSameComponents(mainHand, prevMainHandSnapshot);
+                boolean offHandChanged = !ItemStack.isSameItemSameComponents(offHand, prevOffHandSnapshot);
+                if (mainHandChanged || offHandChanged) {
+                    prevMainHandSnapshot = mainHand.copy();
+                    prevOffHandSnapshot = offHand.copy();
+                    prevSelectedHotbarSlot = selectedHotbarSlot;
+                    ClientHeldItemSwitchEvent.EVENT.invoker().onSwitch(player, mainHand, offHand);
+                }
+            }
+
+            if (gameComponent != null) {
+                if (gameComponent.isRunning()) {
+                    if (client != null && client.player != null) {
+                        if (GameUtils.isPlayerSpectator(client.player)) {
+                            intervalTime++;
+                            if (intervalTime >= 30 * 10) { // 30s
+                                if (TrainVoicePlugin.CLIENT_API != null) {
+                                    if (!TrainVoicePlugin.CLIENT_API.isDisconnected()) {
+                                        if (TrainVoicePlugin.CLIENT_API.getGroup() == null) {
+                                            ClientPlayNetworking.send(new JoinSpecGroupPayload(true));
+                                        }
+                                    }
+                                }
+                                intervalTime = 0;
+                            }
+                        }
+                    }
+
+                }
+            }
+            SREClient.handParticleManager.tick();
+            RoundTextRenderer.tick();
+            net.exmo.sre.subtitle.client.SubtitleHUD.INSTANCE.tick();
+        });
+        SyncMapConfigPayload.registerReceiver();
+        // 商店价格同步：握手（哈希）+ 完整数据 / Shop price sync: handshake (hash) + full data
+        ClientPlayNetworking.registerGlobalReceiver(
+                io.wifi.starrailexpress.shop.network.ShopPriceHandshakeS2CPayload.TYPE, (payload, context) -> {
+                    String hash = payload.hash();
+                    context.client().execute(() -> {
+                        if (!io.wifi.starrailexpress.shop.client.ShopPriceClientCache.handleHandshake(hash)) {
+                            ClientPlayNetworking
+                                    .send(new io.wifi.starrailexpress.shop.network.ShopPriceRequestC2SPayload(hash));
+                        }
+                    });
+                });
+        ClientPlayNetworking.registerGlobalReceiver(
+                io.wifi.starrailexpress.shop.network.ShopPriceDataS2CPayload.TYPE, (payload, context) -> {
+                    String hash = payload.hash();
+                    byte[] data = payload.data();
+                    context.client().execute(
+                            () -> io.wifi.starrailexpress.shop.client.ShopPriceClientCache.handleData(hash, data));
+                });
+        FourthRoomStatePayload.registerReceiver();
+        FourthRoomTableEffectsPayload.registerReceiver();
+        ClientPlayNetworking.registerGlobalReceiver(CustomNarratorPacket.ID, (payload, context) -> {
+            Component content1 = payload.content();
+            String content = content1.getString();
+            boolean shouldInterrupt = payload.shouldInterrupt();
+            if (narrator == null)
+                return;
+
+            if (!content.isBlank()) {
+                narrator.say(content, shouldInterrupt);
+            } else {
+                if (narrator.active()) {
+                    narrator.clear();
+                }
+            }
+        });
+        ClientPlayNetworking.registerGlobalReceiver(OpenFourthRoomPeekDeckPayload.ID,
+                (payload, context) -> context.client().execute(() -> {
+                    var client = context.client();
+                    if (client.level == null || client.player == null) {
+                        return;
+                    }
+                    if (!FourthRoomClientState.snapshot().active()
+                            || FourthRoomClientState.snapshot().viewer().peekCards().isEmpty()) {
+                        return;
+                    }
+                    if (client.screen instanceof io.wifi.starrailexpress.client.gui.screen.ingame.FourthRoomPeekDeckScreen) {
+                        return;
+                    }
+                    client.setScreen(new io.wifi.starrailexpress.client.gui.screen.ingame.FourthRoomPeekDeckScreen(
+                            client.screen));
+                }));
+        // 连接刚建立（还没登录、没收到服务端任何数据）就清一次：严格意义上的「进服前」，
+        // 保证上一台服务器 / 单机残留的自定义内容不会参与这次连接的渲染与判定
+        ClientPlayConnectionEvents.INIT.register((handler, client) -> {
+            ClientPlayerDataCache.clear();
+            clearCustomContentCaches();
+        });
+        ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
+            FourthRoomClientState.clear();
+            FourthRoomCameraDirector.clear();
+            io.wifi.starrailexpress.client.gui.OpeningPresentationCoordinator.clear();
+            // 进入世界时再清一次（与 INIT 同一段逻辑）：服务的握手在这之后才会到，
+            // 所以不会把马上要同步下来的内容清掉
+            clearCustomContentCaches();
+        });
+        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> client.execute(() -> {
+            FourthRoomClientState.clear();
+            FourthRoomCameraDirector.clear();
+            net.exmo.sre.camera.client.AdvancedCameraDirector.clear();
+            net.exmo.sre.planecrash.client.PlaneCrashClientEffects.clear();
+            ClientSkincrawlerState.clearAll();
+            net.exmo.sre.subtitle.client.SubtitleHUD.INSTANCE.clear();
+            SceneAssetClient.clearRuntime();
+            ClientPlayerStatsCache.clear();
+            ClientPlayerDataCache.clear();
+            RoleRotationCache.clear();
+            io.wifi.starrailexpress.client.gui.OpeningPresentationCoordinator.clear();
+            // 清理自定义内容（职业 / 修饰符 / 列车物品 / 方块）客户端缓存，
+            // 与进服前走同一段逻辑，保证两边不会漏项
+            clearCustomContentCaches();
+            // 清理 OpenAL 语音特效资源
+            org.agmas.noellesroles.voice.VoiceEffectsOpenALPlugin.cleanupAll();
+        }));
+        TriggerScreenEdgeEffectPayload.registerReceiver();
+        RemoveStatusBarPayload.registerReceiver();
+        TriggerStatusBarPayload.registerReceiver();
+        io.wifi.starrailexpress.client.network.CustomItemCooldownClientNetwork.register();
+
+        // 注册自定义职业同步接收器（客户端）
+        io.wifi.starrailexpress.client.network.CustomRoleClientNetwork.register();
+
+        // 注册自定义修饰符同步接收器（客户端）
+        io.wifi.starrailexpress.client.network.CustomModifierClientNetwork.register();
+
+        // 自定义修饰符「死亡后倒计时」HUD（含倒计时状态接收器）
+        io.wifi.starrailexpress.custommodifier.client.CustomModifierCountdownHud.register();
+
+        // 注册自定义列车物品同步接收器（客户端）
+        io.wifi.starrailexpress.client.network.CustomItemClientNetwork.register();
+
+        // 自定义内容同步（握手 + 按需下载 + 磁盘缓存，多个自定义内容系统共用）
+        io.wifi.starrailexpress.client.network.ContentSyncClient.register();
+        // 自定义方块客户端通道（注册内容应用回调）
+        io.wifi.starrailexpress.client.network.CustomBlockClientNetwork.register();
+
+        // 注册自定义职业 HUD（技能名称 / 切换提示）
+        io.wifi.starrailexpress.customrole.CustomRoleHud.register();
+
+        ClientPlayNetworking.registerGlobalReceiver(ShootMuzzleS2CPayload.ID, (payload, context) -> {
+            Minecraft client = context.client();
+            client.execute(() -> {
+                if (client.level == null || client.player == null)
+                    return;
+                Entity entity = client.level.getEntity(payload.shooterId());
+                if (!(entity instanceof Player shooter))
+                    return;
+
+                if (shooter.getId() == client.player.getId()
+                        && client.options.getCameraType() == CameraType.FIRST_PERSON)
+                    return;
+                Vec3 muzzlePos = MatrixParticleManager.muzzlePosForPlayer$get(shooter);
+                if (muzzlePos != null)
+                    client.level.addParticle(TMMParticles.GUNSHOT, muzzlePos.x, muzzlePos.y, muzzlePos.z, 0, 0, 0);
+            });
+
+        });
+        ClientPlayNetworking.registerGlobalReceiver(SniperScopeStateS2CPayload.TYPE, (payload, context) -> {
+            context.client().execute(() -> {
+                // 如果倍镜被卸下，退出开镜状态
+                if (!payload.scopeAttached()) {
+                    ScopeOverlayRenderer.forceClose();
+                }
+            });
+        });
+        ClientPlayNetworking.registerGlobalReceiver(PoisonComponentUtils.PoisonOverlayPayload.ID,
+                new PoisonComponentUtils.PoisonOverlayPayload.Receiver());
+        ClientPlayNetworking.registerGlobalReceiver(GunDropPayload.ID, new GunDropPayload.Receiver());
+        ClientPlayNetworking.registerGlobalReceiver(AnnounceWelcomePayload.ID, (payload, context) -> {
+            if (payload.role() == null)
+                return;
+            var res = ResourceLocation.tryParse(payload.role());
+
+            var announcementText = RoleAnnouncementTexts.getFromName(res.getPath());
+            if (announcementText == null) {
+                LoggerFactory.getLogger(this.getClass())
+                        .error("Unable to get announcement Text for '" + res.getPath() + "' (" + res
+                                + "). Available: ");
+                return;
+            }
+            RoundTextRenderer.startWelcome(announcementText, payload.killers(), payload.targets());
+        });
+        ClientPlayNetworking.registerGlobalReceiver(AnnounceEndingPayload.ID, (payload, context) -> {
+            RoundTextRenderer.startEnd();
+            final var gameComponent = SREClient.gameComponent;
+            if (gameComponent != null) {
+                RoundTextRenderer.lastRole.putAll(gameComponent.getRoles());
+            }
+        });
+        ClientPlayNetworking.registerGlobalReceiver(TaskCompletePayload.ID, new TaskCompletePayload.Receiver());
+        ClientPlayNetworking.registerGlobalReceiver(PlayerStatsSyncPayload.ID, (payload, context) -> context.client()
+                .execute(() -> ClientPlayerStatsCache.update(payload.playerUuid(), payload.json())));
+        ClientPlayNetworking.registerGlobalReceiver(PlayerDataPartSyncPayload.ID,
+                (payload, context) -> context.client().execute(() -> ClientPlayerDataCache.update(payload.playerUuid(),
+                        payload.part(), payload.json(), payload.updatedAt())));
+        ClientPlayNetworking.registerGlobalReceiver(io.wifi.starrailexpress.network.ProgressionQuestToastPayload.ID,
+                (payload, context) -> context.client().execute(
+                        () -> io.wifi.starrailexpress.client.hud.ProgressionQuestToastHud.push(payload)));
+        ClientPlayNetworking.registerGlobalReceiver(io.wifi.starrailexpress.network.SkillCastAnnouncePayload.ID,
+                (payload, context) -> context.client().execute(
+                        () -> io.wifi.starrailexpress.client.hud.SkillCastAnnounceHud.push(payload)));
+        ClientPlayNetworking.registerGlobalReceiver(io.wifi.starrailexpress.network.HatEquipmentSyncPayload.ID,
+                (payload, context) -> context.client()
+                        .execute(() -> io.wifi.starrailexpress.client.hat.ClientHatEquipmentCache.applySync(payload)));
+        ClientPlayNetworking.registerGlobalReceiver(io.wifi.starrailexpress.network.MorphSyncPayload.ID,
+                (payload, context) -> context.client()
+                        .execute(() -> io.wifi.starrailexpress.client.morph.ClientMorphCache.applySync(payload)));
+        ClientPlayNetworking.registerGlobalReceiver(io.wifi.starrailexpress.network.PlushEquipmentSyncPayload.ID,
+                (payload, context) -> context.client()
+                        .execute(() -> io.wifi.starrailexpress.client.plush.ClientPlushEquipmentCache.applySync(payload)));
+        ClientPlayNetworking.registerGlobalReceiver(io.wifi.starrailexpress.network.PetSyncPayload.ID,
+                (payload, context) -> context.client()
+                        .execute(() -> io.wifi.starrailexpress.client.pet.ClientPetCache.applySync(payload)));
+        ClientPlayNetworking.registerGlobalReceiver(ShowStatsPayload.ID, (payload, context) -> {
+            UUID targetPlayerUuid = payload.targetPlayerUuid();
+            context.client().execute(() -> {
+                if (SREClient.gameComponent.fade <= 0) {
+                    context.client().execute(() -> {
+                        context.client().setScreen(new PlayerStatsScreen(targetPlayerUuid));
+                    });
+                }
+            });
+        });
+        ClientPlayNetworking.registerGlobalReceiver(OnGameFinishedPayload.TYPE, (payload, context) -> {
+            MapStatusBarClientState.set(MapStatusBarType.NONE, 20, 20);
+            io.wifi.starrailexpress.client.gui.OpeningPresentationCoordinator.clear();
+            io.wifi.starrailexpress.client.gui.MobRiotHudRenderer.reset();
+            OnGameFinishedClient.EVENT.invoker().gameFinished();
+        });
+        ClientPlayNetworking.registerGlobalReceiver(OnGameStartedPayload.TYPE, (payload, context) -> {
+            MapStatusBarClientState.set(MapStatusBarType.NONE, 20, 20);
+            context.client().execute(() -> {
+                // Always refresh map metadata: direct tmm:start must receive the same briefing
+                // as tmm:votemap.
+                io.wifi.starrailexpress.client.gui.screen.mapui.MapIntroClientCache.beginRefresh();
+                ClientPlayNetworking.send(new io.wifi.starrailexpress.network.MapIntroRequestPayload());
+                io.wifi.starrailexpress.client.gui.OpeningPresentationCoordinator.onGameStarted(payload.mapId());
+            });
+            OnGameStartedClient.EVENT.invoker().gameStarted();
+        });
+        ClientPlayNetworking.registerGlobalReceiver(SyncRoomToPlayerPayload.ID, (payload, context) -> {
+            Map<UUID, Integer> data = payload.data();
+            if (Minecraft.getInstance().isSingleplayer()) {
+                SRE.LOGGER.info("Singleplayer. No need to sync info.");
+                return;
+            } else {
+                SRE.LOGGER.info("Sync RoomToPlayer info from server.");
+            }
+            GameUtils.roomToPlayer.clear();
+            GameUtils.roomToPlayer.putAll(data);
+        });
+        // 紧急会议：客户端摄像机导演 + HUD
+        net.exmo.sre.meeting.client.MeetingClientHandler.register();
+        net.exmo.sre.meeting.client.MeetingHud.register();
+        // 瞄准尸体按键上报会议：按键 + 准星提示
+        net.exmo.sre.meeting.client.MeetingReportClientHandler.register();
+
+        ClientPlayNetworking.registerGlobalReceiver(ShowSelectedMapUIPayload.ID, (payload, context) -> {
+            // 候选只有 id；地图展示数据来自 MapIntroSyncPayload（MapIntroClientCache）
+            io.wifi.starrailexpress.client.gui.screen.mapui.MapIntroClientCache
+                    .setCandidateIds(payload.candidateIds());
+            context.client().execute(() -> {
+                io.wifi.starrailexpress.content.vote.client.VoteFlowTransition.beginIfArmed();
+                context.client().setScreen(MapVoteScreen.create());
+            });
+        });
+        ClientPlayNetworking.registerGlobalReceiver(MapVotingResultsPayload.TYPE, (payload, context) -> {
+            context.client().execute(() -> {
+                io.wifi.starrailexpress.client.gui.OpeningPresentationCoordinator.queueMap(payload.result);
+                if (context.client().screen instanceof MapVoteScreen mapVoteScreen) {
+                    mapVoteScreen.showResult(payload.result);
+                } else {
+                    context.client().setScreen(
+                            new io.wifi.starrailexpress.client.gui.screen.MapVoteResultScreen(payload.result));
+                }
+            });
+        });
+        // 服务端无法"发车"（如玩家人数不足）时，关闭地图投票结果页的铺黑显示，避免卡黑屏
+        ClientPlayNetworking.registerGlobalReceiver(io.wifi.starrailexpress.network.MapDepartCancelPayload.TYPE,
+                (payload, context) -> context.client().execute(() -> {
+                    if (context.client().screen instanceof MapVoteScreen) {
+                        context.client().setScreen(null);
+                    }
+                }));
+        ClientPlayNetworking.registerGlobalReceiver(OpenSkinScreenPaylod.ID, (payload, context) -> {
+
+            context.client().execute(() -> {
+                context.client().setScreen(new SkinManagementScreen());
+            });
+        });
+        ClientPlayNetworking.registerGlobalReceiver(OpenProgressionScreenPayload.ID, (payload, context) -> {
+            context.client().execute(() -> context.client().setScreen(new ProgressionPassScreen()));
+        });
+        ClientPlayNetworking.registerGlobalReceiver(io.wifi.starrailexpress.network.OpenBackpackScreenPayload.ID,
+                (payload, context) -> context.client().execute(() -> context.client()
+                        .setScreen(new io.wifi.starrailexpress.client.gui.screen.BackpackScreen((Screen) null))));
+        ClientPlayNetworking.registerGlobalReceiver(io.wifi.starrailexpress.network.RoleRosterSyncPayload.ID,
+                (payload, context) -> io.wifi.starrailexpress.client.data.ClientRoleRosterCache.update(payload.json()));
+        ClientPlayNetworking.registerGlobalReceiver(io.wifi.starrailexpress.sponsor.SponsorListPayload.ID,
+                (payload, context) -> io.wifi.starrailexpress.client.data.ClientSponsorCache.update(payload.names()));
+        ClientPlayNetworking.registerGlobalReceiver(io.wifi.starrailexpress.network.OpenRoleRosterScreenPayload.ID,
+                (payload, context) -> context.client().execute(() -> context.client().setScreen(payload.admin()
+                        ? new io.wifi.starrailexpress.client.gui.screen.roster.RoleRosterEditScreen()
+                        : new io.wifi.starrailexpress.client.gui.screen.roster.RoleRosterViewScreen())));
+        // 邮箱客户端接收器已移除：邮箱系统迁移至网站端。
+        // ClientPlayNetworking.registerGlobalReceiver(
+        // io.wifi.starrailexpress.network.OpenRoleUnlockScreenPayload.ID, (payload,
+        // context) -> {
+        // context.client().execute(() -> {
+        // io.wifi.starrailexpress.unlock.RoleUnlockManager.getInstance()
+        // .updateClientData(payload.globalGamesPlayed(), payload.forceUnlockedRoles());
+        // context.client().setScreen(
+        // new io.wifi.starrailexpress.client.gui.screen.RoleUnlockProgressScreen());
+        // });
+        // });
+        // ClientPlayNetworking.registerGlobalReceiver(
+        // io.wifi.starrailexpress.network.RoleUnlockedHudPayload.ID, (payload, context)
+        // -> {
+        // context.client().execute(() ->
+        // io.wifi.starrailexpress.client.gui.RoleUnlockHudRenderer
+        // .enqueue(payload.globalGamesPlayed(), payload.unlockedRoleIds()));
+        // });
+        ClientPlayNetworking.registerGlobalReceiver(CloseUiPayload.ID, (payload, context) -> {
+            context.client().execute(() -> {
+                if (io.wifi.starrailexpress.client.gui.OpeningPresentationCoordinator.shouldHoldVoteGui()) {
+                    return;
+                }
+                context.client().setScreen(null);
+            });
+        });
+        ClientPlayNetworking.registerGlobalReceiver(PlayerDeathPayload.ID, (payload, context) -> {
+            int slot = MCItemsUtils.getHotbarNotKnifeSlot(context.client().player);
+            if (slot >= 0 && slot < 9) {
+                context.client().player.getInventory().selected = slot;
+            }
+            NoellesrolesClient.isTaskInstinctEnabled = false;
+            // isInstinctToggleEnabled = false;
+        });
+        // 注册实体交互方块的客户端网络接收器
+        io.wifi.starrailexpress.client.network.EntityInteractionBlockClientNetwork.register();
+        // 注册展示方块（文本展示 / 方块展示）的客户端网络接收器
+        io.wifi.starrailexpress.client.network.DisplayBlockClientNetwork.register();
+        // 注册小游戏任务点的客户端网络接收器
+        io.wifi.starrailexpress.client.network.MinigameQuestClientNetwork.register();
+        io.wifi.starrailexpress.client.network.TicketOfficeClientNetwork.register();
+        io.wifi.starrailexpress.client.network.EffectGeneratorClientNetwork.register();
+
+        // 注册职业轮选网络包
+        RoleRotationClientReceiver.register();
+        VolunteerModeClientReceiver.register();
+        // 志愿海选模式网络包
+        io.wifi.starrailexpress.content.vote.client.VolunteerOpenClientReceiver.register();
+        // Chat Dialogue
+        ClientPlayNetworking.registerGlobalReceiver(
+                net.exmo.sre.client.chat.OpenChatDialoguePayload.ID, (payload, context) -> {
+                    context.client().execute(() -> {
+                        net.exmo.sre.client.chat.ChatDialogueData data = net.exmo.sre.client.chat.ChatDialogueData.GSON
+                                .fromJson(
+                                        payload.dialogueJson(),
+                                        net.exmo.sre.client.chat.ChatDialogueData.class);
+                        context.client().setScreen(
+                                new net.exmo.sre.client.chat.ChatDialogueScreen(
+                                        data, payload.targetEntityId()));
+                    });
+                });
+
+        // 高级相机轨道
+        ClientPlayNetworking.registerGlobalReceiver(
+                net.exmo.sre.camera.AdvancedCameraPayload.ID, (payload, context) -> {
+                    context.client().execute(() -> {
+                        if (payload.clear()) {
+                            net.exmo.sre.camera.client.AdvancedCameraDirector.clear();
+                        } else {
+                            net.exmo.sre.camera.client.AdvancedCameraDirector.play(payload.json());
+                        }
+                    });
+                });
+        ClientPlayNetworking.registerGlobalReceiver(
+                net.exmo.sre.planecrash.PlaneCrashIntroPayload.ID, (payload, context) -> {
+                    context.client().execute(() -> net.exmo.sre.camera.client.AdvancedCameraDirector
+                            .startEntityFocus(payload.entityId(), payload.durationTicks(), true));
+                });
+        ClientPlayNetworking.registerGlobalReceiver(
+                net.exmo.sre.planecrash.PlaneCrashTremorPayload.ID, (payload, context) -> {
+                    context.client().execute(() -> {
+                        if (payload.warning()) {
+                            net.exmo.sre.planecrash.client.PlaneCrashClientEffects
+                                    .startWarning(payload.tiltYaw(), payload.durationTicks());
+                        } else {
+                            net.exmo.sre.planecrash.client.PlaneCrashClientEffects
+                                    .startTremor(payload.tiltYaw(), payload.durationTicks());
+                        }
+                    });
+                });
+
+        // Subtitle 字幕报幕
+        ClientPlayNetworking.registerGlobalReceiver(
+                net.exmo.sre.subtitle.SubtitleS2CPayload.ID, (payload, context) -> {
+                    context.client().execute(() -> {
+                        net.exmo.sre.subtitle.client.SubtitleHUD.INSTANCE.enqueueFromPacket(
+                                payload.mainText(),
+                                payload.subText(),
+                                payload.durationTicks(),
+                                payload.color(),
+                                payload.typewriter(),
+                                payload.screenPosition(),
+                                payload.showBackground());
+                    });
+                });
+
+        // Instinct keybind
+        instinctKeybind = KeyBindingHelper.registerKeyBinding(new KeyMapping(
+                "key.starrailexpress.instinct",
+                InputConstants.Type.KEYSYM,
+                GLFW.GLFW_KEY_LEFT_ALT,
+                "category.starrailexpress.keybinds"));
+
+        // Register stats keybind
+        statsKeybind = KeyBindingHelper.registerKeyBinding(new KeyMapping(
+                "key.starrailexpress.stats",
+                InputConstants.Type.KEYSYM,
+                GLFW.GLFW_KEY_O, // 默认热键 'O'
+                "category.starrailexpress.keybinds"));
+
+        // Register skins keybind
+        skinsKeybind = KeyBindingHelper.registerKeyBinding(new KeyMapping(
+                "key.starrailexpress.skins",
+                InputConstants.Type.KEYSYM,
+                GLFW.GLFW_KEY_N, // 默认热键 'N'
+                "category.starrailexpress.keybinds"));
+
+        // 路径点管理 GUI（默认未绑定，OP 在按键设置里自行绑定）
+        manageWaypointsKeybind = KeyBindingHelper.registerKeyBinding(new KeyMapping(
+                "key.starrailexpress.manage_waypoints",
+                InputConstants.Type.KEYSYM,
+                GLFW.GLFW_KEY_UNKNOWN,
+                "category.starrailexpress.keybinds"));
+
+        // 看向删除路径点（默认未绑定）
+        deleteLookedWaypointKeybind = KeyBindingHelper.registerKeyBinding(new KeyMapping(
+                "key.starrailexpress.delete_looked_waypoint",
+                InputConstants.Type.KEYSYM,
+                GLFW.GLFW_KEY_UNKNOWN,
+                "category.starrailexpress.keybinds"));
+        // Initialize Command UI system
+        // TMMCommandUI.init();
+        // KeyPressHandler.register();
+        InputHandler.initialize();
+        CommandMacroExecutor.initialize();
+
+        // Register HUD rendering for security camera
+        HudRenderCallback.EVENT.register((guiGraphics, deltaTick) -> {
+            boolean suppressGameplayHud = io.wifi.starrailexpress.client.gui.OpeningPresentationCoordinator
+                    .shouldSuppressGameplayHud();
+            if (!suppressGameplayHud) {
+                SecurityCameraHUD.render(guiGraphics, Minecraft.getInstance().getWindow().getGuiScaledWidth(),
+                        Minecraft.getInstance().getWindow().getGuiScaledHeight());
+                SecurityCameraHUD.renderCameraFeed(guiGraphics,
+                        Minecraft.getInstance().getWindow().getGuiScaledWidth(),
+                        Minecraft.getInstance().getWindow().getGuiScaledHeight());
+                ScopeOverlayRenderer.renderScopeOverlay(guiGraphics, deltaTick);
+                WaypointHUD.renderHUD(guiGraphics, deltaTick.getRealtimeDeltaTicks());
+                AFKRenderer.renderAFKEffects(guiGraphics, deltaTick.getRealtimeDeltaTicks());
+                FourthRoomTableHud.render(guiGraphics);
+
+                // Subtitle 字幕报幕
+                net.exmo.sre.subtitle.client.SubtitleHUD.INSTANCE.render(guiGraphics,
+                        deltaTick.getGameTimeDeltaPartialTick(false));
+
+                org.agmas.noellesroles.client.hud.MapStatusBarHudRenderer.render(guiGraphics);
+            }
+            FourthRoomCameraDirector.renderOverlay(guiGraphics);
+            net.exmo.sre.camera.client.AdvancedCameraDirector.renderOverlay(guiGraphics);
+            // 亡命徒登场演出：与运镜同步的血色滤镜
+            org.agmas.noellesroles.client.RefugeeDesperadoClientFx.renderOverlay(guiGraphics, deltaTick);
+        });
+        // Run map rules inside the project's frame lifecycle so text remains visible
+        // while a Letter is held.
+        net.fabricmc.fabric.api.client.screen.v1.ScreenEvents.AFTER_INIT.register((client, screen, width,
+                height) -> net.fabricmc.fabric.api.client.screen.v1.ScreenEvents.afterRender(screen).register(
+                        (renderedScreen, graphics, mouseX, mouseY,
+                                partialTick) -> io.wifi.starrailexpress.client.gui.OpeningPresentationCoordinator
+                                        .renderScreenOverlay(
+                                                renderedScreen, graphics, partialTick)));
+        io.wifi.utils.client.betterrender.FakeHudRenderCallback.EVENT.register((guiGraphics, deltaTick) -> {
+            io.wifi.starrailexpress.client.gui.OpeningPresentationCoordinator.render(
+                    guiGraphics, deltaTick.getGameTimeDeltaPartialTick(false));
+            if (!io.wifi.starrailexpress.client.gui.OpeningPresentationCoordinator.shouldSuppressGameplayHud()) {
+                io.wifi.starrailexpress.client.hud.TimedGrenadeHUD.render(guiGraphics,
+                        deltaTick.getRealtimeDeltaTicks());
+            }
+        });
+        ClientTickEvents.START_CLIENT_TICK.register(client -> {
+            if (io.wifi.starrailexpress.client.gui.OpeningPresentationCoordinator.isRulesVisible()) {
+                while (client.options.keySwapOffhand.consumeClick()) {
+                    io.wifi.starrailexpress.client.gui.OpeningPresentationCoordinator.skip();
+                }
+            }
+        });
+        ClientPlayNetworking.registerGlobalReceiver(SyncWaypointsPacket.ID, SyncWaypointsPacket::handle);
+        ClientPlayNetworking.registerGlobalReceiver(SyncWaypointVisibilityPacket.ID,
+                SyncWaypointVisibilityPacket::handle);
+        ClientPlayNetworking.registerGlobalReceiver(SyncSpecificWaypointVisibilityPacket.ID,
+                SyncSpecificWaypointVisibilityPacket::handle);
+        ClientPlayNetworking.registerGlobalReceiver(BreakArmorPayload.ID, (payload, context) -> {
+            LocalPlayer player = context.player();
+            if (player != null && player.level() != null) {
+                player.level().playLocalSound(payload.x(), payload.y(), payload.z(),
+                        TMMSounds.ITEM_PSYCHO_ARMOUR, SoundSource.MASTER, 5.0F, 1.0F, false);
+            }
+        });
+        ClientTickEvents.END_WORLD_TICK.register((world) -> {
+            SREClientWarningTickEvents.tick(world);
+        });
+        // Register client tick event for stats keybind
+        ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            if (gameComponent == null || client.level == null)
+                return;
+            FourthRoomCameraDirector.tick(client);
+            net.exmo.sre.camera.client.AdvancedCameraDirector.tick(client);
+            net.exmo.sre.planecrash.client.PlaneCrashClientEffects.tick();
+            io.wifi.starrailexpress.client.gui.OpeningPresentationCoordinator.tick(client);
+            if (SREClient.gameComponent == null)
+                return;
+
+            if (statsKeybind.consumeClick()) {
+
+                if (SREClient.gameComponent.fade <= 0) {
+                    if (client.screen instanceof PlayerStatsScreen) {
+                        client.setScreen(null);
+                    } else {
+                        client.setScreen(new PlayerStatsScreen(client.player.getUUID()));
+                    }
+                }
+
+            }
+
+            if (skinsKeybind.consumeClick()) {
+                if (client.screen instanceof SkinManagementScreen) {
+                    client.setScreen(null);
+                } else {
+                    client.setScreen(new SkinManagementScreen());
+                }
+            }
+
+            // 路径点管理 GUI：开关式切换
+            while (manageWaypointsKeybind.consumeClick()) {
+                if (client.screen instanceof io.wifi.starrailexpress.client.gui.screen.WaypointManageScreen) {
+                    client.setScreen(null);
+                } else if (client.screen == null) {
+                    client.setScreen(new io.wifi.starrailexpress.client.gui.screen.WaypointManageScreen());
+                }
+            }
+
+            // 看向删除路径点
+            while (deleteLookedWaypointKeybind.consumeClick()) {
+                io.wifi.starrailexpress.client.gui.screen.WaypointHUD.WaypointMarker marker = io.wifi.starrailexpress.client.gui.screen.WaypointHUD
+                        .getLookedAtWaypoint();
+                if (marker != null && client.player != null) {
+                    ClientPlayNetworking.send(
+                            new io.wifi.starrailexpress.network.packet.WaypointDeleteC2SPayload(
+                                    marker.path, marker.name, false));
+                    io.wifi.starrailexpress.client.gui.screen.WaypointHUD.removeWaypoint(marker.path, marker.name);
+                    client.player.displayClientMessage(
+                            net.minecraft.network.chat.Component.literal(
+                                    "已请求删除路径点: " + marker.path + "/" + marker.name),
+                            true);
+                }
+            }
+
+            // 职业轮选 / 志愿海选 GUI - 综合管理：声音、关闭、重新打开
+            boolean volunteerOpen = io.wifi.starrailexpress.content.vote.client.VolunteerOpenCache
+                    .isVolunteerOpenMode();
+            boolean currentMyTurn = volunteerOpen
+                    ? io.wifi.starrailexpress.content.vote.client.VolunteerOpenCache.canSelect()
+                    : RoleRotationCache.getWasMyTurn();
+            boolean isRotationActive = RoleRotationCache.canReOpen()
+                    || io.wifi.starrailexpress.content.vote.client.VolunteerOpenCache.canReOpen();
+
+            // 检测轮到自己选职业的音效
+            // 志愿海选不在这里播：那边由服务端在推进分组时给该组所有成员统一下发，
+            // 若这里再按 canSelect 上升沿播一次会变成双响，且上升沿仍会因包延迟而漏播。
+            if (!volunteerOpen && !previousMyTurn && currentMyTurn && client.player != null) {
+                client.player.playSound(SoundEvents.VILLAGER_YES, 1.0f, 1.0f);
+            }
+            previousMyTurn = currentMyTurn;
+
+            // 志愿海选：开局运镜（地图开场动画）期间不抢屏，已经在播运镜时把界面收掉
+            boolean canShowRoleSelect = io.wifi.starrailexpress.client.gui.screen.gamemode.role_rotation.RoleSelectionScreenFactory
+                    .canShowNow();
+            if (volunteerOpen && !canShowRoleSelect
+                    && client.screen instanceof io.wifi.starrailexpress.client.gui.screen.gamemode.role_rotation.VolunteerOpenSelectScreen) {
+                client.setScreen(null);
+            }
+
+            // 轮选结束，关闭界面
+            if (!isRotationActive) {
+                if (client.screen instanceof RoleRotationScreen
+                        || client.screen instanceof io.wifi.starrailexpress.client.gui.screen.gamemode.role_rotation.VolunteerOpenSelectScreen) {
+                    client.setScreen(null);
+                }
+            }
+
+            // 职业轮选 / 志愿海选GUI - 若无UI则5tick强制打开一次
+            if (client.screen == null && client.level != null && client.level.getGameTime() % 5 == 0
+                    && isRotationActive && canShowRoleSelect) {
+                // 排除职业介绍页面，查看职业介绍时不应该强制跳转回轮选页面
+                boolean isViewingRoleIntro = client.screen instanceof org.agmas.noellesroles.client.screen.RoleIntroduceScreen;
+                if (!isViewingRoleIntro) {
+                    client.setScreen(
+                            io.wifi.starrailexpress.client.gui.screen.gamemode.role_rotation.RoleSelectionScreenFactory
+                                    .create());
+                }
+            }
+
+            // 志愿海选：界面确实已经显示了（开局动画早已播完）才告诉服务端可以开始一阶段计时。
+            // 服务端要等所有玩家的这个上报，因此玩家在看开场动画 / 发车黑幕时不会白白消耗 8 秒。
+            // 必须同时检查 canShowRoleSelect：飞机坠毁等开场运镜的镜头包比本模式的同步包
+            // 晚几 tick 到达，存在「界面先打开、运镜才开始」的竞态窗口——此时界面马上会被
+            // 上面的逻辑收掉，等运镜播完后重新打开，届时才上报，服务端才开始志愿倒计时。
+            if (volunteerOpen
+                    && canShowRoleSelect
+                    && client.screen instanceof io.wifi.starrailexpress.client.gui.screen.gamemode.role_rotation.VolunteerOpenSelectScreen
+                    && io.wifi.starrailexpress.content.vote.client.VolunteerOpenCache.markUiReported()) {
+                ClientPlayNetworking.send(
+                        new io.wifi.starrailexpress.network.packet.VolunteerOpenReadyC2SPacket());
+            }
+        });
+        SREClientEvents.registerClientEvents();
+    }
+
+    public static boolean hasInstinctNightVision() {
+        if (cachedPlayerSpectatingOrCreative) {
+            return true;
+        }
+        if (cachedPlayerRole != null && cached_player != null) {
+            return cachedPlayerRole.haveInstinctNightVision(cached_player);
+        }
+        return false;
+    }
+
+    /**
+     * 清空「自定义内容」（自定义职业 / 修饰符 / 列车物品 / 方块）在客户端的一切缓存。
+     *
+     * <p>
+     * <b>进服前与离服后都要调用</b>：配置是按服务器同步的，上一条连接残留的索引（以及编辑器、
+     * 渲染器里按配置生成的贴图 / 模型缓存）会串到下一台服务器；反过来离服时若只清了索引、
+     * 漏了渲染缓存，回到单机也会用到别人服务器的贴图。
+     *
+     * <p>
+     * 这里清的都是「本地运行时缓存」：磁盘上的哈希缓存（{@code config/sre_sync_cache}）保留，
+     * 那是下次加入同一台服务器时零流量同步的前提。config 目录里那份同步副本会被删掉，
+     * 避免它被单机 / 编辑器当成自己的配置读走。
+     */
+    public static void clearCustomContentCaches() {
+        // 索引 + config 目录副本 + 各自的渲染缓存
+        io.wifi.starrailexpress.client.network.CustomRoleClientNetwork.clearCache();
+        io.wifi.starrailexpress.client.network.CustomModifierClientNetwork.clearCache();
+        io.wifi.starrailexpress.client.network.CustomItemClientNetwork.clearCache();
+        io.wifi.starrailexpress.client.network.CustomBlockClientNetwork.clearCache();
+        io.wifi.starrailexpress.client.render.item.CustomItemRenderer.clearCache();
+        io.wifi.starrailexpress.client.render.block.CustomBlockAppearance.clearCache();
+        io.wifi.starrailexpress.client.render.item.CustomBlockItemRenderer.clearCache();
+        // 自定义列车物品的运行时状态（自动开火窗口 / 命中计数 / 蓄力记录）
+        io.wifi.starrailexpress.customitem.CustomItemRuntime.clearAll();
+        // 同步会话状态（已应用哈希 / 未收完的分块）；磁盘缓存不动
+        io.wifi.starrailexpress.client.network.ContentSyncClient.clearSession();
+    }
+
+    private static void updateInstinctCache(Minecraft client) {
+        HashSet<UUID> toRemove = new HashSet<>();
+        for (var entry : cachedHighLightMap.entrySet()) {
+            Entity entity = client.level.getEntities().get(entry.getKey());
+            if (entity == null) {
+                toRemove.add(entry.getKey());
+                continue;
+            }
+            cachedHighLightMap.put(entity.getUUID(), getInstinctHighlight(entity));
+        }
+        for (var it : toRemove) {
+            cachedHighLightMap.remove(it);
+        }
+    }
+
+    public static SRETrainWorldComponent getTrainComponent() {
+        return trainComponent;
+    }
+
+    public static float getTrainSpeed() {
+        return trainComponent != null ? trainComponent.getSpeed() : 0f;
+    }
+
+    public static boolean isTrainMoving() {
+        return gameComponent != null && gameComponent.isRunning() && trainComponent != null
+                && trainComponent.getSpeed() > 0;
+    }
+
+    public static boolean needsChunkOffset() {
+        return isTrainMoving();
+    }
+
+    public static class CustomModelProvider implements ModelLoadingPlugin {
+
+        private final Map<ResourceLocation, UnbakedModel> modelIdToBlock = new Object2ObjectOpenHashMap<>();
+        private final Set<ResourceLocation> withInventoryVariant = new HashSet<>();
+
+        public void register(Block block, UnbakedModel model) {
+            this.register(BuiltInRegistries.BLOCK.getKey(block), model);
+        }
+
+        public void register(ResourceLocation id, UnbakedModel model) {
+            this.modelIdToBlock.put(id, model);
+        }
+
+        public void markInventoryVariant(Block block) {
+            this.markInventoryVariant(BuiltInRegistries.BLOCK.getKey(block));
+        }
+
+        public void markInventoryVariant(ResourceLocation id) {
+            this.withInventoryVariant.add(id);
+        }
+
+        @Override
+        public void onInitializeModelLoader(Context ctx) {
+            ctx.modifyModelOnLoad().register((model, context) -> {
+                ModelResourceLocation topLevelId = context.topLevelId();
+                if (topLevelId == null) {
+                    return model;
+                }
+                ResourceLocation id = topLevelId.id();
+                if (topLevelId.getVariant().equals("inventory") && !this.withInventoryVariant.contains(id)) {
+                    return model;
+                }
+                if (this.modelIdToBlock.containsKey(id)) {
+                    return this.modelIdToBlock.get(id);
+                }
+                return model;
+            });
+        }
+    }
+
+    public static boolean isPlayerAliveAndInSurvivalIgnoreShitSplit() {
+        return cachedPlayerAliveAndInSurvivalIgnoreShitSplit;
+    }
+
+    public static boolean isPlayerAliveAndInSurvival() {
+        return cachedPlayerAliveAndInSurvival;
+    }
+
+    public static boolean isPlayerSpectatingOrCreative() {
+        return cachedPlayerSpectatingOrCreative;
+    }
+
+    public static boolean isKiller() {
+        return cachedKiller;
+    }
+
+    public static boolean isRole(SRERole role) {
+        return cachedPlayerRole != null
+                && role != null
+                && cachedPlayerRole.identifier().equals(role.identifier());
+    }
+
+    public static SRERole getCachedPlayerRole() {
+        return cachedPlayerRole;
+    }
+
+    public static boolean isPlayerSpectator() {
+        return cachedPlayerSpectator;
+    }
+
+    public static boolean shouldUseTrainHud() {
+        return cachedUseTrainHud;
+    }
+
+    public static boolean canRenderChatHud() {
+        return cachedCanRenderChatHud;
+    }
+
+    public static boolean shouldShowDebugHud() {
+        return cachedShowDebugHud;
+    }
+
+    public static boolean shouldRenderVanillaHud() {
+        return cachedRenderVanillaHud;
+    }
+
+    public static boolean getLooseEndPenalty() {
+        return cachedLooseEndPenalty;
+    }
+
+    public static OptionalInt getCachedInstinctHighlight(Entity target) {
+        OptionalInt cached = cachedHighLightMap.get(target.getUUID());
+        if (cached != null) {
+            return cached;
+        }
+        if (!isInstinctHighlightCandidate(target)) {
+            return OptionalInt.empty();
+        }
+        OptionalInt color = getInstinctHighlight(target);
+        cachedHighLightMap.put(target.getUUID(), color);
+        return color;
+    }
+
+    private static boolean isInstinctHighlightCandidate(Entity target) {
+        return target instanceof NoteEntity
+                || target instanceof Player
+                || target instanceof PlayerBodyEntity
+                || target instanceof ItemEntity
+                || target instanceof PuppeteerBodyEntity
+                || target instanceof FirecrackerEntity
+                || target instanceof Display.BlockDisplay;
+    }
+
+    /**
+     * 获取本人的死亡惩罚状态
+     * 
+     * @param self
+     * @return 0: 无; 1: 普通惩罚; 2: 限制更多
+     */
+    public static int getDeathPenaltyType(Player self) {
+        if (!self.isSpectator())
+            return 0;
+        var deathPenalty = org.agmas.noellesroles.component.ModComponents.DEATH_PENALTY.get(self);
+        if (deathPenalty.hasPenalty()) {
+            if (!deathPenalty.chatEnabled)
+                return 2;
+            return 1;
+        }
+        return 0;// 无
+    }
+
+    /**
+     * 使用新的OptionalInt.empty()代替-1，避免白色==-1的问题
+     * 
+     * @param target
+     * @return
+     */
+    public static OptionalInt getInstinctHighlight(Entity target) {
+        return InstinctManager.getInstinctHighlight(target);
+    }
+
+    static Predicate<Player> isHoldSpecialItem = (player) -> {
+        if (player.getMainHandItem().getItem() instanceof KnifeItem)
+            return true;
+        if (player.getMainHandItem().getItem() instanceof GrenadeItem)
+            return true;
+        if (player.getMainHandItem().getItem() instanceof YinYangSwordItem)
+            return true;
+        return false;
+    };
+    private static boolean cachedPlayerAliveAndInSurvivalIgnoreShitSplit = false;
+    public static boolean cachedCanSeeTime = false;
+    public static float playerHUDScale = 0.6f;
+    public static float bodyHUDScale = 0.6f;
+
+    public static boolean isInstinctEnabled() {
+        boolean canUseInstinct = isKiller();
+        final var player = Minecraft.getInstance().player;
+        if (SREClient.gameComponent != null) {
+            var role = SREClient.gameComponent.getRole(player);
+            if (role != null) {
+                canUseInstinct = role.canUseInstinct(player);
+            }
+        }
+        boolean t = isHoldSpecialItem.test(player);
+        if (player.isSpectator() || player.isCreative())
+            t = false;
+        return (isInstinctToggleEnabled
+                && ((canUseInstinct && isPlayerAliveAndInSurvival()) || isPlayerSpectatingOrCreative()))
+                || (canUseInstinct && t);
+    }
+
+    public static Object getLockedRenderDistance(boolean ultraPerfMode) {
+        return null;
+    }
+
+    private static boolean isHandHiddenByEvent(LocalPlayer player, ItemStack stack, boolean isMainHand) {
+        ItemStack eventRes = AllowItemShowInHand.EVENT.invoker().allowShowInHand(player, stack, isMainHand);
+        return eventRes != null && eventRes.isEmpty();
+    }
+
+    private static void updateHudApiCache(Minecraft client) {
+        if (gameComponent == null)
+            return;
+        if (client.level == null)
+            return;
+        playerHUDScale = SREClientConfig.instance().playerHudScale;
+        bodyHUDScale = SREClientConfig.instance().bodyHudScale;
+        if (playerHUDScale <= 0)
+            playerHUDScale = 0.1f;
+        if (bodyHUDScale <= 0)
+            bodyHUDScale = 0.1f;
+        cachedLooseEndPenalty = gameComponent.isRunning() && RefugeeComponent.KEY.get(client.level).isAnyRevivals
+                && DeathPenaltyComponent.KEY.get(client.player).hasPenalty();
+        LocalPlayer player = client.player;
+        cachedPlayerAliveAndInSurvival = GameUtils.isPlayerAliveAndSurvival(player);
+        cachedCanSeeTime = SREClient.gameComponent.getGameMode().canAllPeopleSeeTime();
+        cachedPlayerAliveAndInSurvivalIgnoreShitSplit = GameUtils.isPlayerAliveAndSurvivalIgnoreShitSplit(player);
+        cachedPlayerSpectatingOrCreative = GameUtils.isPlayerSpectatingOrCreative(player);
+        cachedPlayerCreative = player != null && player.isCreative();
+        cachedPlayerSpectator = player != null && player.isSpectator();
+        cachedPlayerRole = gameComponent != null && player != null ? gameComponent.getRole(player) : null;
+        cachedUseTrainHud = !isInLobby && trainComponent != null && trainComponent.hasHud();
+        cachedKiller = gameComponent != null && player != null && gameComponent.canUseKillerFeatures(player);
+        cachedShowDebugHud = isInLobby || (cachedPlayerCreative);
+        cachedRenderVanillaHud = false;
+
+        boolean canRender = true;
+        if (isInLobby)
+            canRender = true;
+        if (gameComponent.isRunning()) {
+            canRender = false;
+        }
+        if (player != null && !isInLobby && gameComponent.isRunning()) {
+            if (ChatHudRules.cantUseChatHud.stream().anyMatch(pre -> pre.test(player))) {
+                canRender = false;
+                cachedRenderVanillaHud = false;
+            } else if (!cachedPlayerAliveAndInSurvival) {
+                canRender = true;
+                cachedRenderVanillaHud = true;
+            } else {
+                canRender = ChatHudRules.canUseChatHudPlayer.stream().anyMatch(predicate -> predicate.test(player))
+                        || (cachedPlayerRole != null
+                                && ChatHudRules.canUseChatHud.stream()
+                                        .anyMatch(predicate -> predicate.test(cachedPlayerRole)));
+            }
+        }
+        cachedCanRenderChatHud = canRender;
+        cachedRenderVanillaHud = cachedRenderVanillaHud || isInLobby || player.isCreative();
+    }
+
+    public static void stalkerKnifeInventoryTick(ItemStack itemStack, Level level, Entity entity, int i, boolean b) {
+        Integer i1 = itemStack.get(SREDataComponentTypes.WEAPON_USED_TIME);
+        if (!((LocalPlayer) entity).isCrouching() || (i1 == null || i1 != 3))
+            return;
+        Entity crosshairPickEntity = Minecraft.getInstance().crosshairPickEntity;
+        // distance <=4
+        if (crosshairPickEntity != null && entity.distanceToSqr(crosshairPickEntity) > 16) {
+            return;
+        }
+        if (crosshairPickEntity instanceof Player && ((LocalPlayer) entity).getTicksUsingItem() > 3) {
+            ((LocalPlayer) entity).releaseUsingItem();
+        }
+    }
+
+    public static boolean isInLobby() {
+        if (Minecraft.getInstance().player == null)
+            return true;
+        if (isInLobby)
+            return true;
+        return false;
+    }
+
+    public static SREAbilityPlayerComponent getAbilityComponent(Player player) {
+        if (player == null)
+            return null;
+        return SREAbilityPlayerComponent.KEY.get(player);
+    }
+
+    public static SREAbilityPlayerComponent getAbilityComponent() {
+        var player = Minecraft.getInstance().player;
+        return getAbilityComponent(player);
+    }
+
+    public static boolean isGameRunning() {
+        if (gameComponent != null)
+            return gameComponent.isRunning();
+        return false;
+    }
+
+    public static long getTicksFromGameStart() {
+        if (timeComponent == null)
+            return 0;
+        return timeComponent.getTicksFromGameStart();
+    }
+
+    public static boolean hasPenalty() {
+        if (cached_player == null)
+            return false;
+        return DeathPenaltyComponent.hasPenalty(cached_player);
+    }
+
+    public static Player getMinecraftPlayer() {
+        if (cached_player == null) {
+            cached_player = Minecraft.getInstance().player;
+        }
+        return cached_player;
+    }
+
+    public static Level getMinecraftLevel() {
+        return Minecraft.getInstance().level;
+    }
+}

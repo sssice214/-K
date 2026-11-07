@@ -1,0 +1,281 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.content.block;
+
+import com.mojang.serialization.MapCodec;
+import io.wifi.starrailexpress.cca.SRERoleWorldComponent;
+import io.wifi.starrailexpress.content.block.api.TaskInstinctShowableInterface;
+import io.wifi.starrailexpress.content.block_entity.SecurityMonitorBlockEntity;
+import io.wifi.starrailexpress.network.PacketTracker;
+import io.wifi.starrailexpress.network.SecurityCameraModePayload;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.minecraft.ChatFormatting;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.network.chat.Component;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.context.BlockPlaceContext;
+import net.minecraft.world.level.BlockGetter;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.BaseEntityBlock;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.RenderShape;
+import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.entity.BlockEntityTicker;
+import net.minecraft.world.level.block.entity.BlockEntityType;
+import net.minecraft.world.level.block.state.BlockBehaviour;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.StateDefinition;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.minecraft.world.level.block.state.properties.DirectionProperty;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.shapes.CollisionContext;
+import net.minecraft.world.phys.shapes.VoxelShape;
+import org.agmas.noellesroles.init.ModItems;
+import org.agmas.noellesroles.role.ModRoles;
+import org.jetbrains.annotations.Nullable;
+
+import java.awt.*;
+import java.util.List;
+
+public class SecurityMonitorBlock extends BaseEntityBlock implements TaskInstinctShowableInterface {
+    public static final DirectionProperty FACING = BlockStateProperties.HORIZONTAL_FACING;
+    protected static final VoxelShape SHAPE = Block.box(0.0D, 0.0D, 0.0D, 16.0D, 12.0D, 16.0D);
+
+    // 服务端监控会话状态。客户端侧的监控状态见 io.wifi.starrailexpress.client.SecurityCameraClientState，
+    // 两者彻底隔离：局域网/开放服务器下服务端与主机客户端共享同一个 JVM，
+    // 如果客户端状态存在这里，其他玩家点击监视器会污染主机客户端的渲染/输入逻辑。
+    private static BlockPos currentCameraPos = null;
+    private static BlockPos currentCameraOffset = null;
+
+    private static BlockPos currentMonitorPos = null; // 当前监控控制台的位置
+    public static float currentYaw = 0.0f; // 记录当前视角的yaw偏移量
+    // public static float currentPitch = 0.0f; // 记录当前视角的pitch偏移量
+
+    public static int lastCameraId = -1;
+
+    public SecurityMonitorBlock(BlockBehaviour.Properties settings) {
+        super(settings);
+        this.registerDefaultState(this.stateDefinition.any().setValue(FACING, Direction.NORTH));
+    }
+
+    private static final MapCodec<SecurityMonitorBlock> CODEC = simpleCodec(SecurityMonitorBlock::new);
+
+    /**
+     * 根据方向获取基础偏航角
+     * 
+     * @param direction 摄像头方向
+     * @return 对应的基础偏航角
+     */
+    private static float getBaseYawFromDirection(Direction direction) {
+        switch (direction) {
+            case SOUTH: // -Z方向
+                return 180.0f;
+            case NORTH: // +Z方向
+                return 0.0f;
+            case EAST: // -X方向
+                return 90.0f;
+            case WEST: // +X方向
+                return -90.0f;
+            default:
+                return 0.0f;
+        }
+    }
+
+    @Override
+    protected MapCodec<? extends BaseEntityBlock> codec() {
+        return CODEC;
+    }
+
+    @Override
+    public VoxelShape getShape(BlockState state, BlockGetter world, BlockPos pos, CollisionContext context) {
+        return SHAPE;
+    }
+
+    @Nullable
+    @Override
+    public BlockState getStateForPlacement(BlockPlaceContext ctx) {
+        return this.defaultBlockState().setValue(FACING, ctx.getHorizontalDirection().getOpposite());
+    }
+
+    @Override
+    protected void createBlockStateDefinition(StateDefinition.Builder<Block, BlockState> builder) {
+        builder.add(FACING);
+    }
+
+    @Override
+    public BlockEntity newBlockEntity(BlockPos pos, BlockState state) {
+        return new SecurityMonitorBlockEntity(pos, state);
+    }
+
+    @Override
+    public RenderShape getRenderShape(BlockState state) {
+        return RenderShape.MODEL;
+    }
+
+    @Override
+    public InteractionResult useWithoutItem(BlockState state, Level world, BlockPos pos, Player player,
+            BlockHitResult hit) {
+        ItemStack stack = player.getItemInHand(InteractionHand.MAIN_HAND);
+        if (stack.is(ModItems.MONITORING_TERMINAL)) {
+            return InteractionResult.PASS; // 传递给物品处理
+        }
+        if (world.isClientSide) {
+            return InteractionResult.SUCCESS; // 客户端直接返回，主要逻辑在服务端
+        }
+        // 检查玩家是否按下了Shift键
+        if (player.isShiftKeyDown()) {
+            // 退出监控模式
+            exitSecurityMode((net.minecraft.server.level.ServerPlayer) player);
+            return InteractionResult.SUCCESS;
+        } else {
+            if (player instanceof net.minecraft.server.level.ServerPlayer serverPlayer) {
+                openMonitorRemotely(serverPlayer, pos);
+            }
+            return InteractionResult.SUCCESS;
+        }
+    }
+
+    public static boolean openMonitorRemotely(net.minecraft.server.level.ServerPlayer player, BlockPos monitorPos) {
+        Level world = player.level();
+        BlockEntity blockEntity = world.getBlockEntity(monitorPos);
+        if (!(blockEntity instanceof SecurityMonitorBlockEntity monitorEntity)) {
+            player.displayClientMessage(Component.literal("绑定的监控器不存在或已损坏").withStyle(ChatFormatting.RED), true);
+            return false;
+        }
+
+        List<BlockPos> cameraPositions = monitorEntity.getCameraPositions();
+        if (cameraPositions.isEmpty()) {
+            player.displayClientMessage(Component.literal("此监控器未连接任何摄像头").withStyle(ChatFormatting.RED), true);
+            return false;
+        }
+
+        currentMonitorPos = monitorPos;
+        cycleToNextCamera(player, cameraPositions);
+        enterSecurityMode(player);
+        return true;
+    }
+
+    public static void cycleToNextCamera(Player player, List<BlockPos> cameraPositions) {
+        if (cameraPositions.isEmpty())
+            return;
+
+        int currentIndex = -1;
+        if (currentCameraOffset != null) {
+            currentIndex = cameraPositions.indexOf(currentCameraOffset);
+        }
+
+        int nextIndex = (currentIndex + 1) % cameraPositions.size();
+        currentCameraOffset = cameraPositions.get(nextIndex);
+        currentCameraPos = AddBlockPosOffset(currentMonitorPos, currentCameraOffset);
+        lastCameraId = nextIndex;
+        // 重置视角为新摄像头的初始视角
+        currentYaw = 0.0f;
+        // currentPitch = 0.0f;
+
+        // 获取摄像头的朝向信息
+        if (player.level() != null) {
+            var blockState = player.level().getBlockState(currentCameraPos);
+            if (blockState.getBlock() instanceof CameraBlock) {
+                Direction cameraFacing = blockState.getValue(CameraBlock.FACING);
+                player.displayClientMessage(Component.literal("切换到摄像头 " + (nextIndex + 1) +
+                        ": X=" + currentCameraPos.getX() + ", Y=" + currentCameraPos.getY() +
+                        ", Z=" + currentCameraPos.getZ() + ", 方向=" + cameraFacing.getName())
+                        .withStyle(ChatFormatting.AQUA),
+                        true);
+                currentYaw = getBaseYawFromDirection(cameraFacing);
+            } else {
+                player.displayClientMessage(Component.literal("切换到摄像头 " + (nextIndex + 1) +
+                        ": X=" + currentCameraPos.getX() + ", Y=" + currentCameraPos.getY() +
+                        ", Z=" + currentCameraPos.getZ()).withStyle(ChatFormatting.AQUA), true);
+            }
+        }
+
+    }
+
+    private static BlockPos AddBlockPosOffset(BlockPos pos, BlockPos add) {
+        var x1 = pos.getX();
+        var y1 = pos.getY();
+        var z1 = pos.getZ();
+        var addx = add.getX();
+        var addy = add.getY();
+        var addz = add.getZ();
+        return new BlockPos(x1 + addx, y1 + addy, z1 + addz);
+    }
+
+    private static void enterSecurityMode(net.minecraft.server.level.ServerPlayer player) {
+        BlockPos monitorPos = getCurrentMonitorPos();
+        var level = player.level();
+        if (level != null && monitorPos != null) {
+            BlockState monitorState = level.getBlockState(getCurrentCameraPos());
+            if (monitorState.getBlock() instanceof CameraBlock) {
+                Direction monitorFacing = monitorState.getValue(FACING);
+
+                // 根据监控控制台方向计算基础旋转角度
+                float baseYaw = getBaseYawFromDirection(monitorFacing);
+                currentYaw = baseYaw;
+            }
+        }
+        // currentPitch = 0f;
+        player.displayClientMessage(Component.literal("已进入监控模式").withStyle(ChatFormatting.GREEN), true);
+        // 发送网络包到客户端以更新视角
+        ServerPlayNetworking.send(player,
+                new SecurityCameraModePayload(true, currentCameraPos, currentYaw, lastCameraId));
+    }
+
+    public static void exitSecurityMode(net.minecraft.server.level.ServerPlayer player) {
+        currentCameraPos = null;
+        currentCameraOffset = null;
+        currentMonitorPos = null; // 清除监控控制台位置
+        // 重置视角参数
+        currentYaw = 0.0f;
+        player.displayClientMessage(Component.literal("已退出监控模式").withStyle(ChatFormatting.RED), true);
+
+        // 发送网络包到客户端以更新视角
+        PacketTracker.sendToClient(player,
+                new SecurityCameraModePayload(false, BlockPos.ZERO, currentYaw, -1));
+    }
+
+    @Nullable
+    @Override
+    public <T extends BlockEntity> BlockEntityTicker<T> getTicker(Level level, BlockState state,
+            BlockEntityType<T> type) {
+        return null;
+    }
+
+    // 提供公共方法供其他类使用
+    public static BlockPos getCurrentCameraPos() {
+        return currentCameraPos;
+    }
+
+    public static BlockPos getCurrentMonitorPos() {
+        return currentMonitorPos;
+    }
+
+    @Override
+    public boolean shouldRenderTaskInstinct(Level level, BlockState state, BlockPos pos, Player player) {
+        var roleCCA = SRERoleWorldComponent.KEY.get(level);
+        return roleCCA.isRole(player, ModRoles.DELAYER);
+    }
+
+    @Override
+    public Color taskInstinctRenderColor(BlockState state, BlockPos pos, Player player) {
+        return java.awt.Color.WHITE;
+    }
+}

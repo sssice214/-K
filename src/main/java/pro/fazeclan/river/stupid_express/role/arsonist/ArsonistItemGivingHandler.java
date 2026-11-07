@@ -1,0 +1,39 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package pro.fazeclan.river.stupid_express.role.arsonist;
+
+import org.agmas.harpymodloader.events.ModdedRoleAssigned;
+import pro.fazeclan.river.stupid_express.constants.SEItems;
+import pro.fazeclan.river.stupid_express.constants.SERoles;
+import pro.fazeclan.river.stupid_express.role.arsonist.ArsonistRoleData;
+
+public class ArsonistItemGivingHandler {
+
+    public static void init() {
+        ModdedRoleAssigned.EVENT.register(((player, role) -> {
+            if (role.equals(SERoles.ARSONIST)) {
+                player.addItem(SEItems.JERRY_CAN.getDefaultInstance());
+                player.addItem(SEItems.LIGHTER.getDefaultInstance());
+                ArsonistRoleData arsonist = ArsonistRoleData.of(player);
+                if (arsonist != null) {
+                    arsonist.dousedCount = 0;
+                    arsonist.sync();
+                }
+            }
+        }));
+    }
+
+}

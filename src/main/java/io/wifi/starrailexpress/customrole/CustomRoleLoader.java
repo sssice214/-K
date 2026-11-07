@@ -1,0 +1,2139 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.customrole;
+
+import io.wifi.starrailexpress.SRE;
+import io.wifi.starrailexpress.SREConfig;
+import io.wifi.starrailexpress.api.InstinctType;
+import io.wifi.starrailexpress.api.RoleSkill;
+import io.wifi.starrailexpress.api.SRERole;
+import io.wifi.starrailexpress.api.TMMRoles;
+import io.wifi.starrailexpress.api.AreasSettingUtils.MapSpecialFeatures;
+import io.wifi.starrailexpress.api.AreasSettings;
+import io.wifi.starrailexpress.cca.DynamicShopComponent;
+import io.wifi.starrailexpress.cca.SREAbilityPlayerComponent;
+import io.wifi.starrailexpress.cca.SREGameRoundEndComponent;
+import io.wifi.starrailexpress.cca.SREGameWorldComponent;
+import io.wifi.starrailexpress.cca.SREMonitorWorldComponent;
+import io.wifi.starrailexpress.cca.SREPlayerShopComponent;
+import io.wifi.starrailexpress.cca.SREPlayerTaskComponent;
+import io.wifi.starrailexpress.cca.SREWorldBlackoutComponent;
+import io.wifi.starrailexpress.customrole.CustomRoleData.EffectEntry;
+import io.wifi.starrailexpress.customrole.CustomRoleData.InstinctModeData;
+import io.wifi.starrailexpress.event.OnGameEnd;
+import io.wifi.starrailexpress.game.GameConstants;
+import io.wifi.starrailexpress.game.GameUtils;
+import io.wifi.starrailexpress.game.GameUtils.WinStatus;
+import io.wifi.starrailexpress.game.KillerKnifeShopEntry;
+import io.wifi.starrailexpress.game.ServerTaskInfoClasses;
+import io.wifi.starrailexpress.game.ShopContent;
+import io.wifi.starrailexpress.util.ShopEntry;
+import io.wifi.starrailexpress.util.TrueFalseAndCustomResult;
+import net.fabricmc.api.EnvType;
+import net.fabricmc.loader.api.FabricLoader;
+import net.minecraft.ChatFormatting;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import org.agmas.harpymodloader.Harpymodloader;
+import org.agmas.harpymodloader.modifiers.HMLModifiers;
+import org.agmas.harpymodloader.modifiers.SREModifier;
+import org.agmas.noellesroles.client.RoleInstinctRegister;
+import org.agmas.noellesroles.init.ModItems;
+import org.agmas.noellesroles.role.ModRoles;
+import org.agmas.noellesroles.utils.FlagUtils;
+import org.agmas.noellesroles.utils.RoleUtils;
+import org.jetbrains.annotations.NotNull;
+import pro.fazeclan.river.stupid_express.modifier.lovers.LoversWinCheckEvent;
+
+import java.util.*;
+import java.util.function.BiPredicate;
+import java.util.function.Function;
+
+/**
+ * 自定义职业加载器
+ * 负责从 CustomRoleConfig 读取配置并注册为 SRERole
+ */
+public class CustomRoleLoader {
+
+    private static final Map<String, CustomRoleData> loadedRoles = new HashMap<>();
+    private static final Map<String, SRERole> registeredRoles = new HashMap<>();
+    // 自定义职业的本能透视配置
+    private static final Map<String, Integer> instinctMaxRanges = new HashMap<>(); // englishId -> maxBlocksSquared（看别人）
+    private static final Map<String, Integer> instinctBeSeenMaxRanges = new HashMap<>(); // englishId ->
+                                                                                         // maxBlocksSquared（被别人看）
+    private static final Map<String, Boolean> instinctSameColor = new HashMap<>(); // englishId -> sameColorFrame
+    private static final Map<String, Boolean> instinctUnlimitedTeammate = new HashMap<>(); // englishId ->
+                                                                                           // unlimitedTeammate
+    // 技能 id -> 模块显示名（注册时写入，HUD 反查用，保证与释放/切换用的是同一个技能）
+    private static final Map<ResourceLocation, String> skillDisplayNames = new HashMap<>();
+    // 新版直觉模式存储：englishRoleId -> 模式列表
+    private static final Map<String, List<InstinctModeData>> instinctModeDataMap = new HashMap<>();
+    // 技能初始冷却配置：roleIdentifier -> initialCooldownTicks
+    private static final Map<ResourceLocation, Integer> initialCooldownMap = new HashMap<>();
+    private static boolean initialCooldownHandlerRegistered = false;
+    private static boolean instinctHandlerRegistered = false;
+    private static boolean gameEndHandlerRegistered = false;
+    private static boolean factionFriendlyFireHandlerRegistered = false;
+
+    // 游戏结束时自动执行的指令：englishRoleId -> 指令列表
+    private static final Map<String, List<String>> gameEndCommandsByRoleId = new HashMap<>();
+
+    // 自定义胜利条件数据：englishRoleId -> CustomRoleData（用于运行时的胜利判定）
+    private static final Map<String, CustomRoleData> customWinDataMap = new HashMap<>();
+
+    /**
+     * 重新加载所有自定义职业
+     */
+    public static void reload(MinecraftServer server) {
+        // 清除旧数据
+        initialCooldownMap.clear();
+        gameEndCommandsByRoleId.clear();
+        customWinDataMap.clear();
+        // 先清除旧的自定义职业
+        List<SRERole> toRemove = new ArrayList<>();
+        for (var entry : TMMRoles.ROLES.entrySet()) {
+            if (entry.getValue() instanceof CustomNormalRole || "customrole".equals(entry.getKey().getNamespace())) {
+                toRemove.add(entry.getValue());
+                // 同时清除已注册的技能，避免 re-register 时报 "already registered"
+                RoleSkill.unregister(entry.getKey());
+                // 清除 INITIAL_ITEMS_MAP 中的条目
+                org.agmas.noellesroles.init.RoleInitialItems.INITIAL_ITEMS_MAP.remove(entry.getValue());
+            }
+        }
+        // 在移除旧自定义职业前，先清理其它职业/修饰符对它的关联引用，
+        // 否则重载后旧 SRERole 实例会残留在 relatedRoles/opposingRoles/occupationRoles 中，
+        // 导致 postInit 重新绑定时出现重复，表现为“其它相关职业”出现两个相同的自定义职业。
+        for (var entry : toRemove) {
+            {
+                removeRoleReferences(entry);
+            }
+        }
+        for (SRERole key : toRemove) {
+            TMMRoles.unregisterCustomRole(key);
+        }
+        registeredRoles.clear();
+        loadedRoles.clear();
+        instinctMaxRanges.clear();
+        instinctBeSeenMaxRanges.clear();
+        instinctSameColor.clear();
+        instinctUnlimitedTeammate.clear();
+        instinctModeDataMap.clear();
+        skillDisplayNames.clear();
+
+        // 从服务器世界目录加载配置
+        var level = server.overworld();
+        var worldPath = level.getServer().getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT);
+        CustomRoleConfig config = CustomRoleConfig.loadFromFile(worldPath);
+
+        // world 存档目录没有配置时，使用空配置（不从 config 目录回退）
+        if (config == null || config.roles == null || config.roles.isEmpty()) {
+            config = new CustomRoleConfig();
+            config.roles = new java.util.ArrayList<>();
+        }
+
+        for (CustomRoleData data : config.roles) {
+            try {
+                SRERole role = createRole(data);
+                var result = TMMRoles.registerCustomRole(role);
+                if (result == null) {
+                    server.getPlayerList().broadcastSystemMessage(
+                            Component.translatable("sre.custom_role.error.duplicated", data.displayName, data.englishId)
+                                    .withStyle(ChatFormatting.RED),
+                            false);
+                    continue;
+                }
+                registeredRoles.put(data.englishId, role);
+                loadedRoles.put(data.englishId, data);
+
+                SRE.LOGGER.info("[CustomRole] Registered custom role: {}", data.englishId);
+            } catch (Exception e) {
+                SRE.LOGGER.error("[CustomRole] Failed to register custom role: {}", data.englishId, e);
+            }
+        }
+        TMMRoles.refreshVersionTags();
+        HMLModifiers.refreshVersionTags();
+
+        // 注册本能透视事件处理器（仅客户端，通过内部类避免服务端加载客户端类，仅首次注册）
+        registerClientInstinctHandler();
+
+        // 处理互斥、绑定生成、地图限制等（postInit 需要所有角色已注册）
+        postInit();
+
+        SRE.LOGGER.info("[CustomRole] Loaded {} custom roles", config.roles.size());
+    }
+
+    /**
+     * 客户端重载自定义职业（从本地 config 目录读取）
+     * 在收到服务端同步包并写入本地文件后调用
+     */
+    public static void reloadClient() {
+        removeClientCache();
+
+        // 职业的初始物品 / 任务奖励 / 商店条目在注册时按 id 查自定义物品索引：索引空着
+        // （物品内容还没应用 / 内存索引还没加载）就会解析不出自定义物品。这里先补一次本地副本。
+        io.wifi.starrailexpress.customitem.CustomItemLoader.ensureClientIndexLoaded();
+
+        // 从客户端本地 config 目录加载（网络同步写入的）
+        CustomRoleConfig config = CustomRoleConfig.loadFromDefaultPath();
+        for (CustomRoleData data : config.roles) {
+            try {
+                SRERole role = createRole(data);
+                var result = TMMRoles.registerCustomRole(role);
+                if (result == null) {
+                    continue;
+                }
+                loadedRoles.put(data.englishId, data);
+                registeredRoles.put(data.englishId, role);
+
+                // 自定义角色可能因重载而修改 mafiaTeam 状态，先清掉该角色上一次重载残留的
+                // OBSERVER_HIGHLIGHT_EVENT / TARGET_HIGHLIGHT_EVENT 处理器（含家族本能 / instinctModes），
+                io.wifi.starrailexpress.event.client.RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT
+                        .removeConsumer(role.identifier());
+                io.wifi.starrailexpress.event.client.RoleInstinctEvents.TARGET_HIGHLIGHT_EVENT
+                        .removeConsumer(role.identifier());
+                // 若该自定义角色是 mafia 家族职业，为其注册家族本能，使其能互相看到特殊框。
+                // 必须在此处（registerModeEvents 之前）注册，以保证在事件分发中优先于模式处理器生效。
+                if (role.isMafiaTeam()) {
+                    RoleInstinctRegister.registerGodFamilyInstinct(role);
+                }
+
+                // 注册报幕文本（客户端），确保欢迎报到能显示自定义职业
+                try {
+                    io.wifi.starrailexpress.client.gui.RoleAnnouncementTexts.registerRoleAnnouncementText(
+                            role.identifier(),
+                            new io.wifi.starrailexpress.client.gui.RoleAnnouncementTexts.RoleAnnouncementText(
+                                    role.identifier(), role.getColor()));
+                } catch (Throwable ignored) {
+                }
+
+                // 为拥有 instinctModes 的职业注册直觉模式事件处理器
+                if (!data.instinctModes.isEmpty()) {
+                    ClientInstinctHandler.registerModeEvents(data, role);
+                }
+            } catch (Exception e) {
+                SRE.LOGGER.error("[CustomRole-Client] Failed to register: {}", data.englishId, e);
+            }
+        }
+
+        TMMRoles.refreshVersionTags();
+        HMLModifiers.refreshVersionTags();
+
+        // 注册本能透视事件处理器（客户端，仅首次）
+        registerClientInstinctHandler();
+
+        postInit();
+        SRE.LOGGER.info("[CustomRole-Client] Reloaded {} custom roles from local config", config.roles.size());
+    }
+
+    public static void removeClientCache() {
+        // 清除旧的客户端注册的自定义职业（包括技能注册，避免 re-register 抛异常）
+        List<SRERole> toRemove = new ArrayList<>();
+        List<SRERole> removedRoles = new ArrayList<>();
+        for (var entry : TMMRoles.ROLES.entrySet()) {
+            if (entry.getValue() instanceof CustomNormalRole || "customrole".equals(entry.getKey().getNamespace())) {
+                toRemove.add(entry.getValue());
+                removedRoles.add(entry.getValue());
+                RoleSkill.unregister(entry.getKey());
+                org.agmas.noellesroles.init.RoleInitialItems.INITIAL_ITEMS_MAP.remove(entry.getValue());
+            }
+        }
+        // 同时清除 registeredRoles 中的旧角色技能（TMMRoles.ROLES 可能已被 clearCache 清空）
+        for (var entry : registeredRoles.entrySet()) {
+            ResourceLocation roleId = ResourceLocation.fromNamespaceAndPath("customrole", entry.getKey());
+            RoleSkill.unregister(roleId);
+        }
+        // 在移除旧自定义职业前，先清理其它职业/修饰符对它的关联引用，
+        // 否则重载后旧 SRERole 实例会残留在 relatedRoles/opposingRoles/occupationRoles 中，
+        // 导致 postInit 重新绑定时出现重复，表现为“其它相关职业”出现两个相同的自定义职业。
+        for (SRERole oldRole : removedRoles) {
+            removeRoleReferences(oldRole);
+        }
+        toRemove.forEach(role -> TMMRoles.unregisterCustomRole(role));
+        registeredRoles.clear();
+        loadedRoles.clear();
+        instinctMaxRanges.clear();
+        instinctBeSeenMaxRanges.clear();
+        instinctSameColor.clear();
+        instinctUnlimitedTeammate.clear();
+        instinctModeDataMap.clear();
+        skillDisplayNames.clear();
+    }
+
+    /**
+     * 从所有其它职业与修饰符的关联集合中移除指定（即将被卸载的）职业引用。
+     * <p>
+     * 自定义职业重载时会创建新的 {@link SRERole} 实例，而旧实例此前可能已被加入其它职业的
+     * {@code relatedRoles}/{@code opposingRoles}/{@code occupationRoles}（例如通过
+     * {@code bindWithRoles}/{@code twoWayOpposingJobs} 在 {@link #postInit()}
+     * 中建立绑定）。
+     * 若只从 {@link TMMRoles#ROLES} 移除旧实例而不清理这些引用，重载后旧实例仍会残留，
+     * 导致职业介绍的“其它相关职业”中出现两个相同的自定义职业。
+     */
+    private static void removeRoleReferences(SRERole oldRole) {
+        for (SRERole other : TMMRoles.ROLES.values()) {
+            other.relatedRoles.remove(oldRole);
+            other.opposingRoles.remove(oldRole);
+            other.occupationRoles.remove(oldRole);
+        }
+        for (SREModifier modifier : HMLModifiers.MODIFIERS) {
+            modifier.relatedRoles.remove(oldRole);
+        }
+    }
+
+    public static CustomRoleData getCustomRoleData(String englishId) {
+        var result = loadedRoles.get(englishId);
+        if (result != null)
+            return result;
+        // 回退：尝试从 world 存档加载（服务端）
+        try {
+            if (io.wifi.starrailexpress.SRE.SERVER != null) {
+                var cfg = CustomRoleConfig.loadPreferWorldPath(io.wifi.starrailexpress.SRE.SERVER);
+                var found = cfg.findRole(englishId);
+                if (found != null)
+                    return found;
+            }
+        } catch (Exception ignored) {
+        }
+
+        if (FabricLoader.getInstance().getEnvironmentType().equals(EnvType.CLIENT)) {
+            // 客户端回退：尝试从本地 config 目录（网络同步写入的）
+            try {
+                var cfg = CustomRoleConfig.loadFromDefaultPath();
+                var found = cfg.findRole(englishId);
+                if (found != null)
+                    return found;
+            } catch (Exception ignored) {
+            }
+            // 最终回退：尝试从客户端内存中的网络同步数据
+            try {
+                var cd = io.wifi.starrailexpress.client.network.CustomRoleClientNetwork.getSyncedRole(englishId);
+                if (cd != null)
+                    return cd;
+            } catch (Throwable ignored) {
+            }
+        }
+
+        return null;
+    }
+
+    public static SRERole getRegisteredRole(String englishId) {
+        return registeredRoles.get(englishId);
+    }
+
+    /**
+     * 获取技能 id 对应的模块显示名（注册时写入）。
+     * 用于 HUD 精确显示当前选中的技能名，保证与释放/切换用的是同一个技能。
+     */
+    public static String getSkillDisplayName(ResourceLocation skillId) {
+        String name = skillDisplayNames.get(skillId);
+        return name == null ? "" : name;
+    }
+
+    /**
+     * 根据配置创建 SRERole 实例
+     */
+    private static SRERole createRole(CustomRoleData data) {
+        data.englishId = data.englishId.toLowerCase(); // 兜底：确保英文id全小写
+        ResourceLocation id = ResourceLocation.fromNamespaceAndPath("customrole", data.englishId);
+        
+        // 解析颜色
+        int color = (data.colorR << 16) | (data.colorG << 8) | data.colorB;
+
+        // 解析心情类型
+        SRERole.MoodType mood = "FAKE".equalsIgnoreCase(data.moodType)
+                ? SRERole.MoodType.FAKE
+                : SRERole.MoodType.REAL;
+
+        // 解析体力
+        int maxSprintTime;
+        if (data.infiniteSprint) {
+            maxSprintTime = -1; // 无限
+        } else {
+            int civilianSprint = io.wifi.starrailexpress.api.TMMRoles.CIVILIAN.getMaxSprintTime();
+            maxSprintTime = (int) (civilianSprint * data.sprintMultiplier);
+        }
+
+        // 解析初始药水效果 (EffectEntry with amplifier)
+        ArrayList<MobEffectInstance> effects = new ArrayList<>();
+        if (!data.initialEffects.isEmpty()) {
+            for (EffectEntry effEntry : data.initialEffects) {
+                String cleaned = effEntry.effectId.trim();
+                if (cleaned.isEmpty())
+                    continue;
+                try {
+                    ResourceLocation effectRL = ResourceLocation.parse(cleaned);
+                    var effectHolder = BuiltInRegistries.MOB_EFFECT.getHolder(effectRL);
+                    if (effectHolder.isPresent()) {
+                        effects.add(new MobEffectInstance(effectHolder.get(),
+                                -1, effEntry.amplifier, false, false, false));
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+        }
+
+        // 创建商店
+        List<ShopEntry> shop = createShopEntries(data);
+
+        // 创建角色（使用 CustomNormalRole 以支持自定义商店）
+        SRERole role = new CustomNormalRole(id, color, data.isInnocent, data.canUseKiller,
+                mood, maxSprintTime, data.canSeeTime,
+                effects.isEmpty() ? new ArrayList<>() : effects, shop);
+
+        // 心情值(san)上限：默认 1.0，setMaxMood 内部已夹取为 >= 0
+        role.setMaxMood(data.moodMax);
+
+        // === 高级定义 ===
+        role.setCanSeeCoin(data.canSeeCoin);
+        role.addFlag("inner.custom_role");
+        // 作者自定义标签：挂成 flags，介绍页的分类筛选与 inner.* 语义都跟着生效
+        FlagUtils.applyCustomFlags(role, data.tags);
+        if (data.canUseInstinct) {
+            role.setCanUseInstinctAndNightVision(true);
+
+            // 新版直觉模式优先
+            if (!data.instinctModes.isEmpty()) {
+                // 将模式 0 的默认值应用到 SRERole（静态配置作为兜底）
+                InstinctModeData mode0 = data.instinctModes.get(0);
+                if (mode0.factionEnabled) {
+                    // 启用「同阵营」分类后，基础「看别人」不再生效（改由同阵营自定义本能接管）；
+                    // 「被别人看」不受影响，照常应用。
+                    role.setInstinctType(InstinctType.DEFAULT, InstinctType.DEFAULT);
+                } else {
+                    role.setInstinctType(
+                            parseInstinctType(mode0.seeingOff),
+                            parseInstinctType(mode0.seeingOn));
+                }
+                role.setBeSeenInstinctType(
+                        parseInstinctType(mode0.beSeenOff),
+                        parseInstinctType(mode0.beSeenOn));
+                // 存储模式数据供运行时切换和事件处理器使用
+                instinctModeDataMap.put(data.englishId, new ArrayList<>(data.instinctModes));
+                // 也存储旧版范围配置供旧版处理器兜底
+                if (!"*".equals(mode0.maxRange)) {
+                    try {
+                        int maxBlocks = Integer.parseInt(mode0.maxRange.trim());
+                        instinctMaxRanges.put(data.englishId, maxBlocks * maxBlocks);
+                    } catch (NumberFormatException ignored) {
+                    }
+                }
+                String beSeenRange0 = (mode0.beSeenMaxRange == null || "*".equals(mode0.beSeenMaxRange.trim()))
+                        ? mode0.maxRange
+                        : mode0.beSeenMaxRange;
+                if (beSeenRange0 != null && !"*".equals(beSeenRange0)) {
+                    try {
+                        int maxBlocks = Integer.parseInt(beSeenRange0.trim());
+                        instinctBeSeenMaxRanges.put(data.englishId, maxBlocks * maxBlocks);
+                    } catch (NumberFormatException ignored) {
+                    }
+                }
+                instinctUnlimitedTeammate.put(data.englishId, mode0.unlimitedTeammate);
+            } else {
+                // 旧版直觉配置
+                // 存储本能透视范围配置（供 ClientInstinctHandler 查询）
+                if (!"*".equals(data.instinctMaxRange)) {
+                    try {
+                        int maxBlocks = Integer.parseInt(data.instinctMaxRange.trim());
+                        instinctMaxRanges.put(data.englishId, maxBlocks * maxBlocks); // 存储平方值
+                    } catch (NumberFormatException ignored) {
+                    }
+                }
+                if (!"*".equals(data.instinctBeSeenMaxRange)) {
+                    try {
+                        int maxBlocks = Integer.parseInt(data.instinctBeSeenMaxRange.trim());
+                        instinctBeSeenMaxRanges.put(data.englishId, maxBlocks * maxBlocks); // 存储平方值
+                    } catch (NumberFormatException ignored) {
+                    }
+                }
+                instinctSameColor.put(data.englishId, data.instinctSameColorFrame);
+                instinctUnlimitedTeammate.put(data.englishId, data.instinctUnlimitedTeammate);
+            }
+        } else {
+            role.setCanUseInstinctAndNightVision(false);
+        }
+        // 独立夜视开关：若显式设置，覆盖上面组合 setter 的夜视值（true=本能+夜视，false=仅本能无夜视）
+        if (data.instinctNightVision != null)
+            role.setInstinctNightVision(data.instinctNightVision);
+        if (data.ableToPickUpRevolver != null)
+            role.setAbleToPickUpRevolver(data.ableToPickUpRevolver);
+        if (data.setNeutrals != null)
+            role.setNeutrals(data.setNeutrals);
+        if (data.setNeutralForKiller != null)
+            role.setNeutralForKiller(data.setNeutralForKiller);
+        if (data.setVigilanteTeam != null)
+            role.setVigilanteTeam(data.setVigilanteTeam);
+        if (data.canSeeTeammateKiller != null)
+            role.setCanSeeTeammateKillerRole(data.canSeeTeammateKiller);
+        role.setOccupiedRoleCount(data.occupiedRoleCount);
+        role.setDefaultMax(data.maxCount);
+        if (data.canAutoAddMoney != null)
+            role.setCanAutoAddMoney(data.canAutoAddMoney);
+        if (data.canAutoAddMiniGameToken != null)
+            role.setCanAutoAddMiniGameToken(data.canAutoAddMiniGameToken);
+        if (data.canClimbWalls != null)
+            role.setCanClimbWalls(data.canClimbWalls);
+        if (data.canUncuffOthers != null)
+            role.setCanUncuffOthers(data.canUncuffOthers);
+        role.setCanBeRandomedByOtherRoles(data.canBeRandomedByOtherRoles);
+        if (data.canIgnoreBlackout != null)
+            role.setCanIgnoreBlackout(data.canIgnoreBlackout);
+        if (data.canSeeBodyItems != null)
+            role.setCanSeeBodyItems(data.canSeeBodyItems);
+        if (data.canSeeBodyRoleInfo != null)
+            role.setCanSeeBodyRoleInfo(data.canSeeBodyRoleInfo);
+        if (data.canSeeBodyDeathReason != null)
+            role.setCanSeeBodyDeathReason(data.canSeeBodyDeathReason);
+        if (data.canSeeBodyKiller != null)
+            role.setCanSeeBodyKiller(data.canSeeBodyKiller);
+
+        // === 职业通用属性补全 ===
+        if (data.neutralForInnocent != null)
+            role.setNeutralForInnocent(data.neutralForInnocent);
+        // 事件中立：自定义职业工具无法配置事件中立，恒为 false
+        role.setEventNeutral(false);
+        // 特殊中立：显式标记；未标记的其余中立会由 isIndependentWinNeutral() 自动归入独立胜利中立
+        if (data.specialNeutral != null)
+            role.setSpecialNeutral(data.specialNeutral);
+        if (data.canSeeBodyName != null)
+            role.setCanSeeBodyName(data.canSeeBodyName);
+        if (data.canUseSkillWhileSpectator != null)
+            role.setCanUseSkillWhileSpectator(data.canUseSkillWhileSpectator);
+        if (data.mafiaTeam != null)
+            role.setMafiaTeam(data.mafiaTeam);
+        if (data.canBePoisoned != null)
+            role.setCanBePoisoned(data.canBePoisoned);
+        if (data.hiddenForRoleRotation != null)
+            role.setHiddenForRoleRotation(data.hiddenForRoleRotation);
+        if (data.specialMapRole != null && !"ALL".equalsIgnoreCase(data.specialMapRole)) {
+            try {
+                role.setSpecialMapRole(MapSpecialFeatures.valueOf(data.specialMapRole.trim().toUpperCase()));
+            } catch (IllegalArgumentException ignored) {
+            }
+        }
+        // 组合特性条件（setSpecialMapRolesCondition）：全部满足 / 任一满足
+        Set<MapSpecialFeatures> specialMapRoles = CustomRoleSpawnCondition.parseFeatures(data.specialMapRoles);
+        if (!specialMapRoles.isEmpty()) {
+            final boolean matchAllFeatures = data.specialMapRolesMatchAll;
+            role.setSpecialMapRolesCondition(features -> matchAllFeatures
+                    ? features.containsAll(specialMapRoles)
+                    : specialMapRoles.stream().anyMatch(features::contains));
+        }
+        // 自定义生成条件（setCanSpawnInMap）：按地图 id / 地图配置项自定义判定
+        BiPredicate<String, AreasSettings> mapCondition = CustomRoleSpawnCondition.parse(
+                data.canSpawnInMapConditions, data.canSpawnInMapMatchAll);
+        // 「仅出现在指定地图」：统一走 setCanSpawnInMap（canBeRandomed(Level) / getRoundMaxCount
+        // 都经由它判定）。输入仍为地图 id 列表，大小写不敏感，任一匹配即可。
+        List<String> restrictedMapIds = data.mapRestrictedTo == null ? List.of()
+                : data.mapRestrictedTo.stream()
+                        .filter(Objects::nonNull)
+                        .map(String::trim)
+                        .filter(s -> !s.isEmpty())
+                        .toList();
+        if (!restrictedMapIds.isEmpty()) {
+            BiPredicate<String, AreasSettings> mapAllowed = (mapId, settings) -> mapIdsContains(
+                    restrictedMapIds, mapId);
+            mapCondition = mapCondition == null ? mapAllowed : mapAllowed.and(mapCondition);
+        }
+        if (mapCondition != null) {
+            role.setCanSpawnInMap(mapCondition);
+        }
+        if (data.specialVigilante != null)
+            role.setSpecialVigilante(data.specialVigilante);
+        if (data.refreshableSpecialVigilante != null)
+            role.setRefreshableSpecialVigilante(data.refreshableSpecialVigilanteChance,
+                    data.refreshableSpecialVigilante);
+        if (data.canJumpManhole != null)
+            role.setCanJumpManhole(data.canJumpManhole);
+        if (data.canAcrossFog != null)
+            role.setCanAcrossFog(data.canAcrossFog);
+        if (data.canUseSabotage != null)
+            role.setCanUseSabotage(data.canUseSabotage);
+
+        // === 免疫 / 经济 / 战斗 / 杀手同伙 / 心情颜色 / 任务奖励 补全 ===
+        if (data.fallDamageImmune != null)
+            role.setFallDamageImmune(data.fallDamageImmune);
+        if (data.fallToDeathHeight >= 0)
+            role.setFallToDeathHeightOverride(data.fallToDeathHeight);
+        if (data.darknessImmune != null)
+            role.setDarknessImmune(data.darknessImmune);
+        if (data.environmentalImmune != null)
+            role.setEnvironmentalImmunity(data.environmentalImmune);
+
+        if (data.initialCoinCount >= 0)
+            role.setInitialCoinCount(data.initialCoinCount);
+        if (data.noCoinSystem != null)
+            role.setNoCoinSystem(data.noCoinSystem);
+        if (data.cannotEarnCoinFromKills != null)
+            role.setCanEarnKillerCoinAwardsFromKills(!data.cannotEarnCoinFromKills);
+        if (data.neutralKillCoin > 0)
+            role.setKillExtraCoinAwards(data.neutralKillCoin);
+
+        if (data.canKillWithBowAndCrossbow != null)
+            role.setCanKillWithBowAndCrossbow(data.canKillWithBowAndCrossbow);
+        if (data.canKillWithTrident != null)
+            role.setCanKillWithTrident(data.canKillWithTrident);
+        if (data.cannotKnifeLeftClick != null)
+            role.setCannotKnifeLeftClick(data.cannotKnifeLeftClick);
+        if (data.canUseDreamAxe != null)
+            role.setCanUseSpVanillaWeapon(data.canUseDreamAxe);
+
+        if (data.killerTeammateVisibilityEnabled != null)
+            role.setKillerTeammateScreenVisibility(data.killerTeammateVisibilityEnabled,
+                    data.canBeSeenAsKillerTeammate != null ? data.canBeSeenAsKillerTeammate : true);
+
+        if (data.moodColorR >= 0 && data.moodColorG >= 0 && data.moodColorB >= 0)
+            role.setMoodColor(new java.awt.Color(data.moodColorR, data.moodColorG, data.moodColorB));
+
+        // 任务奖励：完成 taskRewardCount 个任务给物品，可不限次数、可静默
+        if (data.taskRewardCount > 0 && !data.taskRewardItems.isEmpty()) {
+            List<ItemStack> rewardStacks = new ArrayList<>();
+            for (CustomRoleData.InitialItemEntry entry : data.taskRewardItems) {
+                ItemStack stack = parseConfiguredItem(entry.itemId, entry.count);
+                if (!stack.isEmpty()) {
+                    rewardStacks.add(stack);
+                }
+            }
+            if (!rewardStacks.isEmpty()) {
+                int triggers = data.taskRewardUnlimited ? -1 : Math.max(1, data.taskRewardMaxTriggers);
+                role.setTaskReward(data.taskRewardCount, triggers,
+                        rewardStacks.toArray(new ItemStack[0]));
+                if (data.taskRewardMessage != null && !data.taskRewardMessage.isEmpty())
+                    role.setTaskRewardMessage(data.taskRewardMessage);
+                role.setTaskRewardSilent(data.taskRewardSilent);
+            }
+        }
+
+        // === 生成选项 ===
+        if (data.enableChance >= 0 && !data.useRareChance)
+            role.setDefaultEnableChance(data.enableChance * 100);
+        if (data.useRareChance && data.enableRareChance >= 0)
+            role.setDefaultEnableChance(data.enableRareChance);
+        if (data.enableNeededPlayerCount >= 0)
+            role.setDefaultEnableNeededPlayerCount(data.enableNeededPlayerCount);
+        if (data.defaultEnableMaxPlayerCount >= 0)
+            role.setDefaultEnableMaxPlayerCount(data.defaultEnableMaxPlayerCount);
+
+        // 自定义职业直接设置 spawnInfo 并禁止配置覆盖，确保工具设置的值始终生效
+        role.setCanSetSpawnInfoInConfig(false);
+        org.agmas.noellesroles.config.SpawnInfoConfig.SpawnInfo customSpawn = new org.agmas.noellesroles.config.SpawnInfoConfig.SpawnInfo();
+        customSpawn.setMax(role.defaultMaxCount);
+        if (role.defaultEnableNeedPlayerCount >= 0)
+            customSpawn.setMinEnabledPlayer(role.defaultEnableNeedPlayerCount);
+        if (role.defaultEnableChance >= 0)
+            customSpawn.setEnableChance(role.defaultEnableChance);
+        role.setSpawnInfo(customSpawn);
+
+        // === 任务刷新黑 / 白名单 ===
+        SREPlayerTaskComponent.Task[] unrefreshable = parseTasks(data.unrefreshableTasks);
+        if (unrefreshable.length > 0) {
+            role.addUnrefreshableTasks(unrefreshable);
+        }
+        SREPlayerTaskComponent.Task[] onlyRefreshable = parseTasks(data.onlyRefreshableTasks);
+        if (onlyRefreshable.length > 0) {
+            role.addOnlyRefreshableTasks(onlyRefreshable);
+        }
+
+        // === 杂项开关（null = 不设置，保持基类默认） ===
+        if (data.independentMinigameTiming != null)
+            role.setIndependentMinigameTiming(data.independentMinigameTiming);
+        if (data.hideRoleInfoWhenSeen != null)
+            role.setHideRoleInfoWhenSeen(data.hideRoleInfoWhenSeen);
+        if (data.canXiaonao != null)
+            role.setCanXiaonao(data.canXiaonao);
+        if (data.canBeXiaonao != null)
+            role.setCanBeXiaonao(data.canBeXiaonao);
+        if (data.canIncreaseSurvivingInnocents != null)
+            role.setCanIncreaseSurvivingInnocents(data.canIncreaseSurvivingInnocents);
+        if (data.canIncreaseSurvivingKillers != null)
+            role.setCanIncreaseSurvivingKillers(data.canIncreaseSurvivingKillers);
+
+        // 互斥和绑定生成（需要在所有角色注册完成后处理，这里只存储引用）
+        // 这些将在 postInit 中处理
+
+        // === 职业能力选项 ===
+        // 初始物品
+        if (!data.initialItems.isEmpty()) {
+            List<ItemStack> stacks = new ArrayList<>();
+            for (CustomRoleData.InitialItemEntry entry : data.initialItems) {
+                ItemStack stack = parseConfiguredItem(entry.itemId, entry.count);
+                if (!stack.isEmpty()) {
+                    stacks.add(stack);
+                }
+            }
+            if (role instanceof CustomNormalRole customRole) {
+                customRole.setDefaultItems(stacks);
+                // 注册到 RoleInitialItems.INITIAL_ITEMS_MAP，确保所有发放路径都能获取
+                List<java.util.function.Supplier<ItemStack>> suppliers = new ArrayList<>();
+                for (ItemStack stack : stacks) {
+                    final ItemStack snapshot = stack.copy(); // 捕获当前快照
+                    suppliers.add(() -> snapshot.copy());
+                }
+                org.agmas.noellesroles.init.RoleInitialItems.INITIAL_ITEMS_MAP.put(role, suppliers);
+            }
+        }
+
+        // 技能（支持单技能 / 多技能切换）
+        if (data.enableAbility) {
+            List<CustomRoleData.SkillData> skills = data.getEffectiveSkills();
+            String skillNs = role.identifier().getNamespace();
+            String skillPath = role.identifier().getPath();
+            List<RoleSkill.Definition> skillDefs = new ArrayList<>();
+            for (int si = 0; si < skills.size(); si++) {
+                final CustomRoleData.SkillData sd = skills.get(si);
+                SRE.LOGGER.info("[CustomRole] Registering skill module #{} '{}' for role {} (commands={}, delayed={})",
+                        si, sd.name, data.englishId, sd.commands.size(), sd.delayedCommands.size());
+                final List<String> commands = new ArrayList<>(sd.commands);
+                final List<String> delayedCommands = new ArrayList<>(sd.delayedCommands);
+                final int cooldownSeconds = sd.cooldownSeconds;
+                final int delaySeconds = sd.delaySeconds;
+
+                ResourceLocation customSkillId = ResourceLocation.fromNamespaceAndPath(
+                        skillNs, skillPath + "_ability_" + si);
+                // 记录「技能 id -> 模块显示名」，供 HUD / 切换提示精确显示当前选中的技能名
+                skillDisplayNames.put(customSkillId,
+                        sd.name == null ? "" : sd.name);
+                skillDefs.add(RoleSkill.skill(
+                        customSkillId,
+                        sd.name == null || sd.name.isEmpty() ? "skill.sre.custom_role.ability" : sd.name,
+                        context -> {
+                            ServerPlayer player = context.player();
+                            // 死亡/旁观者不能使用技能；若角色设置了 canUseSkillWhileSpectator 则允许旁观者释放
+                            if (player.isSpectator() && !role.canUseSkillWhileSpectator()) {
+                                return false;
+                            }
+                            SREAbilityPlayerComponent ability = SREAbilityPlayerComponent.KEY.get(player);
+
+                            if (ability.cooldown > 0) {
+                                return false;
+                            }
+
+                            // 执行即时指令（支持 @a @p @r @s 选择器）
+                            for (String cmd : commands) {
+                                executeConfiguredCommand(cmd, player);
+                            }
+
+                            // 延迟执行指令
+                            if (!delayedCommands.isEmpty() && delaySeconds > 0) {
+                                final UUID playerUuid = player.getUUID();
+                                final ServerLevel level = player.serverLevel();
+                                GameUtils.serverTaskQueue
+                                        .add(new ServerTaskInfoClasses.SchedulerTask(delaySeconds * 20, () -> {
+                                            ServerPlayer target = level.getServer().getPlayerList()
+                                                    .getPlayer(playerUuid);
+                                            if (target == null
+                                                    || !GameUtils.isPlayerAliveAndSurvivalIgnoreShitSplit(target))
+                                                return;
+                                            for (String cmd : delayedCommands) {
+                                                executeConfiguredCommand(cmd, target);
+                                            }
+                                        }));
+                            }
+
+                            return true;
+                        }).cooldownSeconds(cooldownSeconds)
+                        .recordName(Component.literal(sd.name)).build());
+
+                // 存储技能初始冷却（游戏开始后首次分配角色时按技能分别应用）
+                if (sd.initialCooldownSeconds > 0) {
+                    initialCooldownMap.put(customSkillId, sd.initialCooldownSeconds * 20);
+                }
+            }
+            // 收集齐所有技能模块后，一次性注册（避免 RoleSkill.register 覆盖式 put 丢掉前面的技能）
+            if (!skillDefs.isEmpty()) {
+                RoleSkill.register(role, skillDefs.toArray(new RoleSkill.Definition[0]));
+            }
+        }
+
+        // 存储独立胜利条件数据（仅中立 && !setNeutralForKiller 时可用）
+        if (data.enableCustomWin && data.setNeutrals != null && data.setNeutrals
+                && data.setNeutralForKiller != null && !data.setNeutralForKiller) {
+            customWinDataMap.put(data.englishId, data);
+        }
+
+        // 存储游戏结束时执行指令（启用切换技能时汇总所有模块，否则使用单技能字段）
+        List<String> allGameEnd = new ArrayList<>(data.gameEndCommands);
+        if (data.enableSkillSwitch) {
+            for (CustomRoleData.SkillData mod : data.skillModules) {
+                allGameEnd.addAll(mod.gameEndCommands);
+            }
+        }
+        if (!allGameEnd.isEmpty()) {
+            gameEndCommandsByRoleId.put(data.englishId, allGameEnd);
+            registerGameEndHandlerIfNeeded();
+        }
+
+        return role;
+    }
+
+    // ==================== 游戏结束自动执行指令 ====================
+
+    private static void registerGameEndHandlerIfNeeded() {
+        if (gameEndHandlerRegistered || gameEndCommandsByRoleId.isEmpty())
+            return;
+        gameEndHandlerRegistered = true;
+
+        OnGameEnd.EVENT.register((level, comp) -> {
+            if (!gameEndCommandsByRoleId.isEmpty()) {
+                executeGameEndCommands(level, comp);
+            }
+        });
+    }
+
+    private static void executeGameEndCommands(ServerLevel level, SREGameWorldComponent comp) {
+        for (ServerPlayer player : level.players()) {
+            var role = comp.getRole(player);
+            if (role == null)
+                continue;
+            String key = role.identifier().getPath();
+            if (role instanceof CustomNormalRole || "customrole".equals(role.identifier().getNamespace())) {
+                // 自定义职业用 englishId 匹配
+                key = key.substring(key.lastIndexOf('/') + 1); // 去掉路径前缀
+            }
+            List<String> cmds = gameEndCommandsByRoleId.get(key);
+            if (cmds == null)
+                continue;
+            for (String cmd : cmds) {
+                executeConfiguredCommand(cmd, player);
+            }
+        }
+    }
+
+    /**
+     * 后期处理：设置互斥、绑定生成、地图限制等
+     */
+    public static void postInit() {
+        CustomRoleConfig config = CustomRoleConfig.getInstance();
+
+        for (CustomRoleData data : config.roles) {
+            SRERole role = registeredRoles.get(data.englishId);
+            if (role == null)
+                continue;
+
+            // 双向互斥
+            for (String oppId : data.twoWayOpposingJobs) {
+                SRERole oppRole = findRole(oppId);
+                if (oppRole != null) {
+                    role.addTwoWayOpposingRole(oppRole);
+                }
+            }
+
+            // 单向互斥
+            for (String oppId : data.opposingJobs) {
+                SRERole oppRole = findRole(oppId);
+                if (oppRole != null) {
+                    role.addOpposingRole(oppRole);
+                }
+            }
+
+            // 关联（绑定生成）职业：先清空 / 移除，再按 bindWithRoles 添加，便于「声明式重写」
+            if (data.clearOccupationRoles) {
+                role.clearOccupationRole();
+            }
+            for (String removeId : data.removeOccupationRoles) {
+                SRERole other = findRole(removeId);
+                if (other != null) {
+                    role.removeOccupationRole(other);
+                }
+            }
+
+            // 绑定生成
+            for (String bindId : data.bindWithRoles) {
+                SRERole bindRole = findRole(bindId);
+                if (bindRole != null) {
+                    Harpymodloader.addOccupationRole(role, bindRole);
+                }
+            }
+
+            // 相关职业 / 相关修饰符（介绍页展示，需要所有职业都已注册好再解析）
+            applyRelations(data, role);
+        }
+
+        // 注册技能初始冷却事件处理（仅首次）
+        if (!initialCooldownHandlerRegistered) {
+            registerInitialCooldownHandler();
+            initialCooldownHandlerRegistered = true;
+        }
+
+        // 注册「同阵营玩家无法互相伤害」事件处理（仅首次）
+        if (!factionFriendlyFireHandlerRegistered) {
+            registerFactionFriendlyFireHandler();
+            factionFriendlyFireHandlerRegistered = true;
+        }
+    }
+
+    /**
+     * 「同阵营玩家无法互相伤害」：参考教父家族，任一同阵营配置命中（攻击者与受害者都属于该阵营）时否决死亡。
+     */
+    private static void registerFactionFriendlyFireHandler() {
+        io.wifi.starrailexpress.event.AllowPlayerDeathWithKiller.EVENT.register((victim, killer, deathReason) -> {
+            if (deathReason != null && deathReason.equals(io.wifi.starrailexpress.game.GameConstants.DeathReasons.FELL_OUT_OF_TRAIN))
+                return true;
+            if (!(killer instanceof ServerPlayer attacker) || !(victim instanceof ServerPlayer attacked))
+                return true;
+            for (CustomRoleData data : loadedRoles.values()) {
+                if (data.instinctModes == null || data.instinctModes.isEmpty())
+                    continue;
+                InstinctModeData mode = data.instinctModes.get(0);
+                if (mode == null || !mode.factionEnabled || !mode.factionNoFriendlyFire)
+                    continue;
+                if (isFactionMember(data, mode, attacker) && isFactionMember(data, mode, attacked))
+                    return false;
+            }
+            return true;
+        });
+    }
+
+    /**
+     * 注册技能初始冷却事件处理器
+     * 在角色分配给玩家后，检查是否需要设置初始冷却
+     */
+    private static void registerInitialCooldownHandler() {
+        org.agmas.harpymodloader.events.ModdedRoleAssigned.EVENT.register((player, role) -> {
+            if (!(player instanceof ServerPlayer serverPlayer))
+                return;
+            SREAbilityPlayerComponent ability = SREAbilityPlayerComponent.KEY.get(serverPlayer);
+            var definitions = RoleSkill.getDefinitions(role);
+            if (definitions.isEmpty())
+                return;
+            ability.ensureSkills(definitions);
+            // 按技能分别应用各自的初始冷却
+            for (var def : definitions) {
+                Integer cooldownTicks = initialCooldownMap.get(def.id());
+                if (cooldownTicks != null && cooldownTicks > 0) {
+                    ability.setSkillCooldown(def.id(), cooldownTicks);
+                }
+            }
+        });
+    }
+
+    /**
+     * 地图限制匹配：{@code mapId} 与限制列表中任一条目相等（忽略大小写与首尾空白）即命中。
+     */
+    private static boolean mapIdsContains(List<String> mapIds, String mapId) {
+        String name = mapId == null ? "" : mapId.trim();
+        for (String allowed : mapIds) {
+            if (allowed.equalsIgnoreCase(name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static SRERole findRole(String roleId) {
+        // Try as ResourceLocation
+        ResourceLocation id;
+        if (roleId.contains(":")) {
+            id = ResourceLocation.parse(roleId);
+        } else {
+            id = SRE.id(roleId);
+        }
+        return TMMRoles.ROLES.get(id);
+    }
+
+    /** 按「完整 id 或路径」查找修饰符。 */
+    private static SREModifier findModifier(String modifierId) {
+        if (modifierId == null || modifierId.isBlank()) {
+            return null;
+        }
+        String id = modifierId.trim();
+        ResourceLocation location = ResourceLocation.tryParse(id);
+        if (location != null) {
+            SREModifier modifier = HMLModifiers.getModifier(location);
+            if (modifier != null) {
+                return modifier;
+            }
+        }
+        String path = id.contains(":") ? id.substring(id.indexOf(':') + 1) : id;
+        return HMLModifiers.getModifierByPath(path);
+    }
+
+    /**
+     * 应用相关职业 / 相关修饰符设置（仅作用于职业介绍页面）。
+     *
+     * <p>
+     * 需要在所有职业注册完成之后调用（{@link #postInit()}），否则引用不到尚未注册的自定义职业。
+     */
+    private static void applyRelations(CustomRoleData data, SRERole role) {
+        for (String id : safeList(data.bothRelatedRoles)) {
+            SRERole other = findRole(id);
+            if (other != null && other != role) {
+                role.addBothRelatedRole(other);
+            }
+        }
+        for (String id : safeList(data.relatedRoles)) {
+            SRERole other = findRole(id);
+            if (other != null && other != role) {
+                role.addRelatedRole(other);
+            }
+        }
+        for (String id : safeList(data.removeRelatedRoles)) {
+            SRERole other = findRole(id);
+            if (other != null) {
+                role.removeRelatedRole(other);
+            }
+        }
+        for (String id : safeList(data.bothRelatedModifiers)) {
+            SREModifier other = findModifier(id);
+            if (other != null) {
+                role.addBothRelatedModifier(other);
+            }
+        }
+        for (String id : safeList(data.relatedModifiers)) {
+            SREModifier other = findModifier(id);
+            if (other != null) {
+                role.addRelatedModifier(other);
+            }
+        }
+        for (String id : safeList(data.removeRelatedModifiers)) {
+            SREModifier other = findModifier(id);
+            if (other != null) {
+                role.removeRelatedModifier(other);
+            }
+        }
+    }
+
+    /** 解析任务枚举名列表（忽略非法名并记录警告）。 */
+    private static SREPlayerTaskComponent.Task[] parseTasks(List<String> names) {
+        List<SREPlayerTaskComponent.Task> result = new ArrayList<>();
+        for (String raw : safeList(names)) {
+            if (raw == null || raw.isBlank()) {
+                continue;
+            }
+            try {
+                SREPlayerTaskComponent.Task task = SREPlayerTaskComponent.Task
+                        .valueOf(raw.trim().toUpperCase(Locale.ROOT));
+                if (!result.contains(task)) {
+                    result.add(task);
+                }
+            } catch (IllegalArgumentException e) {
+                SRE.LOGGER.warn("[CustomRole] 未知的任务类型：'{}'（已忽略）", raw);
+            }
+        }
+        return result.toArray(new SREPlayerTaskComponent.Task[0]);
+    }
+
+    private static List<String> safeList(List<String> list) {
+        return list == null ? List.of() : list;
+    }
+
+    /**
+     * 获取自定义职业的本能透视最大范围（平方值），用于客户端事件处理
+     */
+    public static Integer getInstinctMaxRange(String englishId) {
+        return instinctMaxRanges.get(englishId);
+    }
+
+    /**
+     * 获取自定义职业的本能「被别人透视」（beSeen）最大范围（平方值），用于客户端事件处理
+     */
+    public static Integer getInstinctBeSeenMaxRange(String englishId) {
+        return instinctBeSeenMaxRanges.get(englishId);
+    }
+
+    /**
+     * 获取自定义职业的本能透视同色框设置，用于客户端事件处理
+     */
+    public static Boolean getInstinctSameColor(String englishId) {
+        return instinctSameColor.get(englishId);
+    }
+
+    /**
+     * 解析直觉类型字符串。
+     * 支持预定义常量名（DEFAULT/NONE/KILLER_INSTINCT/OBSERVER_ROLE_COLOR/TARGET_ROLE_COLOR）
+     * 以及自定义颜色格式 {@code CUSTOM(0xAARRGGBB)}。
+     */
+    public static InstinctType parseInstinctType(String str) {
+        if (str == null || str.isEmpty())
+            return InstinctType.DEFAULT;
+        String upper = str.toUpperCase().trim();
+        if (upper.startsWith("CUSTOM(") && upper.endsWith(")")) {
+            String hex = upper.substring(7, upper.length() - 1).trim();
+            try {
+                long color = Long.decode(hex);
+                return InstinctType.custom((int) color);
+            } catch (NumberFormatException e) {
+                SRE.LOGGER.warn("[CustomRole] Invalid CUSTOM color: {}", str);
+                return InstinctType.DEFAULT;
+            }
+        }
+        try {
+            return InstinctType.valueOf(upper);
+        } catch (IllegalArgumentException e) {
+            SRE.LOGGER.warn("[CustomRole] Unknown instinct type: {}, falling back to DEFAULT", str);
+            return InstinctType.DEFAULT;
+        }
+    }
+
+    /**
+     * 注册自定义职业的本能透视事件处理器（仅客户端）。
+     * <p>
+     * 必须在 {@code InstinctRenderer.registerInstinctEvents()} 之前注册，
+     * 否则通用的本能处理器会先于本处理器返回结果，导致自定义职业的
+     * 本能透视范围（instinctMaxRange）限制被忽略，玩家会超出设定范围仍被透视。
+     */
+    public static void registerClientInstinctHandler() {
+        if (!instinctHandlerRegistered
+                && FabricLoader.getInstance().getEnvironmentType() == net.fabricmc.api.EnvType.CLIENT) {
+            ClientInstinctHandler.register();
+            instinctHandlerRegistered = true;
+        }
+    }
+
+    /**
+     * 客户端本能透视事件处理器
+     * 这是内部类，编译为独立 .class 文件（CustomRoleLoader$ClientInstinctHandler.class），
+     * 不会被 JVM 在加载外层类时解析，避免服务端因引用客户端类而崩溃
+     */
+    private static class ClientInstinctHandler {
+        static void register() {
+            // 注册旧版本能透视后处理（仅对未使用 instinctModes 的角色生效）
+            io.wifi.starrailexpress.event.client.CommonInstinctEvents.ALIVE_COMMON_AFTER_EVENT
+                    .register((self, target, isInstinctEnabled) -> {
+                        if (!(target instanceof net.minecraft.world.entity.player.Player))
+                            return TrueFalseAndCustomResult.pass();
+                        net.minecraft.world.entity.player.Player targetPlayer = (net.minecraft.world.entity.player.Player) target;
+                        net.minecraft.client.Minecraft client = net.minecraft.client.Minecraft.getInstance();
+                        if (client.player == null)
+                            return TrueFalseAndCustomResult.pass();
+                        if (!isInstinctEnabled)
+                            return TrueFalseAndCustomResult.pass();
+
+                        io.wifi.starrailexpress.cca.SREGameWorldComponent gameWorld = io.wifi.starrailexpress.cca.SREGameWorldComponent.KEY
+                                .get(client.player.level());
+                        if (gameWorld == null)
+                            return TrueFalseAndCustomResult.pass();
+                        SRERole role = gameWorld.getRole(client.player);
+                        if (role == null)
+                            return TrueFalseAndCustomResult.pass();
+                        if (!"customrole".equals(role.identifier().getNamespace())
+                                || !(role instanceof CustomNormalRole))
+                            return TrueFalseAndCustomResult.pass();
+
+                        String englishId = role.identifier().getPath();
+
+                        // 使用 instinctModes 的角色由 OBSERVER_HIGHLIGHT_EVENT 专门处理，这里跳过
+                        if (instinctModeDataMap.containsKey(englishId))
+                            return TrueFalseAndCustomResult.pass();
+
+                        // 无限制透视队友：对同阵营玩家无视范围限制
+                        Boolean unlimitedTeammate = instinctUnlimitedTeammate.get(englishId);
+                        boolean isSameTeam = false;
+                        if (unlimitedTeammate != null && unlimitedTeammate) {
+                            SRERole targetRole = gameWorld.getRole(targetPlayer);
+                            if (targetRole != null) {
+                                boolean selfKiller = gameWorld.isKillerTeamRole(role);
+                                boolean targetKiller = gameWorld.isKillerTeamRole(targetRole);
+                                boolean selfInno = gameWorld.isInnocentTeamRole(role);
+                                boolean targetInno = gameWorld.isInnocentTeamRole(targetRole);
+                                if ((selfKiller && targetKiller) || (selfInno && targetInno)) {
+                                    isSameTeam = true;
+                                }
+                            }
+                        }
+
+                        if (!isSameTeam) {
+                            Integer maxRangeSq = instinctMaxRanges.get(englishId);
+                            if (maxRangeSq != null) {
+                                double distSq = client.player.distanceToSqr(targetPlayer);
+                                if (distSq > maxRangeSq)
+                                    return TrueFalseAndCustomResult.no();
+                            }
+                        }
+
+                        Boolean sameColor = instinctSameColor.get(englishId);
+                        if (sameColor != null && sameColor) {
+                            if (io.wifi.starrailexpress.client.SREClient.gameComponent != null
+                                    && io.wifi.starrailexpress.client.SREClient.gameComponent.isKillerTeamRole(role)) {
+                                return TrueFalseAndCustomResult.custom(java.awt.Color.RED.getRGB());
+                            }
+                            return TrueFalseAndCustomResult.custom(java.awt.Color.GREEN.getRGB());
+                        }
+
+                        return TrueFalseAndCustomResult.pass();
+                    });
+        }
+
+        /**
+         * 为拥有 instinctModes 的自定义职业注册 OBSERVER / TARGET 事件处理器。
+         * 始终使用模式 0。
+         */
+        static void registerModeEvents(CustomRoleData data, SRERole role) {
+            ResourceLocation roleId = role.identifier();
+            List<InstinctModeData> modes = data.instinctModes;
+            if (modes == null || modes.isEmpty())
+                return;
+
+            instinctModeDataMap.put(data.englishId, new ArrayList<>(modes));
+            InstinctModeData mode = modes.get(0);
+
+            // OBSERVER：自定义职业「看别人」
+            io.wifi.starrailexpress.event.client.RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(roleId,
+                    (client, self, target, hasInstinct) -> {
+                        if (!(target instanceof net.minecraft.world.entity.player.Player))
+                            return TrueFalseAndCustomResult.pass();
+                        net.minecraft.world.entity.player.Player tp = (net.minecraft.world.entity.player.Player) target;
+
+                        SRERole targetRole = io.wifi.starrailexpress.client.SREClient.gameComponent != null
+                                ? io.wifi.starrailexpress.client.SREClient.gameComponent.getRole(tp)
+                                : null;
+
+                        // 启用「同阵营」分类后，基础「看别人」不再生效，全部由同阵营自定义本能接管
+                        if (mode.factionEnabled) {
+                            boolean sameFaction = isFactionMember(data, mode, tp);
+                            if (sameFaction) {
+                                // 同阵营：可选择不受「透视范围」限制
+                                if (!mode.factionUnlimitedRange && !isWithinRange(self, tp, null, mode.maxRange))
+                                    return TrueFalseAndCustomResult.disallow();
+                                InstinctType type = hasInstinct
+                                        ? parseInstinctType(mode.factionSeeingOn)
+                                        : parseInstinctType(mode.factionSeeingOff);
+                                return applyType(type, self, tp, role, targetRole,
+                                        TrueFalseAndCustomResult.pass());
+                            }
+                            // 非同阵营：开启「仅能看同阵营」时直接看不到
+                            if (mode.factionOnly)
+                                return TrueFalseAndCustomResult.disallow();
+                            if (!isWithinRange(self, tp, mode, mode.maxRange))
+                                return TrueFalseAndCustomResult.disallow();
+                            InstinctType type = hasInstinct
+                                    ? parseInstinctType(mode.factionOtherSeeingOn)
+                                    : parseInstinctType(mode.factionOtherSeeingOff);
+                            return applyType(type, self, tp, role, targetRole,
+                                    TrueFalseAndCustomResult.pass());
+                        }
+
+                        if (!isWithinRange(self, tp, mode, mode.maxRange))
+                            return TrueFalseAndCustomResult.disallow();
+
+                        InstinctType type = hasInstinct
+                                ? parseInstinctType(mode.seeingOn)
+                                : parseInstinctType(mode.seeingOff);
+
+                        return applyType(type, self, tp, role, targetRole,
+                                TrueFalseAndCustomResult.pass());
+                    });
+
+            // TARGET：别人看自定义职业
+            io.wifi.starrailexpress.event.client.RoleInstinctEvents.TARGET_HIGHLIGHT_EVENT.register(roleId,
+                    (client, self, target, hasInstinct) -> {
+                        if (!(target instanceof net.minecraft.world.entity.player.Player))
+                            return TrueFalseAndCustomResult.pass();
+                        net.minecraft.world.entity.player.Player tp = (net.minecraft.world.entity.player.Player) target;
+
+                        String beSeenRange = (mode.beSeenMaxRange == null || "*".equals(mode.beSeenMaxRange.trim()))
+                                ? mode.maxRange
+                                : mode.beSeenMaxRange;
+                        if (!isWithinRange(self, tp, mode, beSeenRange))
+                            return TrueFalseAndCustomResult.disallow();
+
+                        InstinctType type = hasInstinct
+                                ? parseInstinctType(mode.beSeenOn)
+                                : parseInstinctType(mode.beSeenOff);
+
+                        return applyType(type, self, tp,
+                                io.wifi.starrailexpress.client.SREClient.gameComponent != null
+                                        ? io.wifi.starrailexpress.client.SREClient.gameComponent.getRole(self)
+                                        : null,
+                                role,
+                                TrueFalseAndCustomResult.pass());
+                    });
+        }
+
+        private static TrueFalseAndCustomResult<Integer> applyType(InstinctType type,
+                net.minecraft.world.entity.player.Player self,
+                net.minecraft.world.entity.player.Player target,
+                SRERole selfRole, SRERole targetRole,
+                TrueFalseAndCustomResult<Integer> fallback) {
+            if (type.isNone())
+                return TrueFalseAndCustomResult.disallow();
+            if (type.isObserverRoleColor()) {
+                if (selfRole == null)
+                    return TrueFalseAndCustomResult.disallow();
+                return TrueFalseAndCustomResult.custom(selfRole.getColor());
+            }
+            if (type.isTargetRoleColor()) {
+                if (targetRole == null)
+                    return TrueFalseAndCustomResult.disallow();
+                return TrueFalseAndCustomResult.custom(targetRole.getColor());
+            }
+            if (type.isCustom())
+                return TrueFalseAndCustomResult.custom(type.getColor());
+            if (type.isKillerInstinct())
+                return TrueFalseAndCustomResult.pass();
+            return fallback;
+        }
+
+        private static boolean isWithinRange(net.minecraft.world.entity.player.Player viewer,
+                net.minecraft.world.entity.player.Player target, InstinctModeData mode, String rangeStr) {
+            if (mode == null)
+                return true;
+            if (mode.unlimitedTeammate
+                    && io.wifi.starrailexpress.client.SREClient.gameComponent != null) {
+                SRERole vr = io.wifi.starrailexpress.client.SREClient.gameComponent.getRole(viewer);
+                SRERole tr = io.wifi.starrailexpress.client.SREClient.gameComponent.getRole(target);
+                if (vr != null && tr != null) {
+                    if ((io.wifi.starrailexpress.client.SREClient.gameComponent.isKillerTeamRole(vr)
+                            && io.wifi.starrailexpress.client.SREClient.gameComponent.isKillerTeamRole(tr))
+                            || (io.wifi.starrailexpress.client.SREClient.gameComponent.isInnocentTeamRole(vr)
+                                    && io.wifi.starrailexpress.client.SREClient.gameComponent.isInnocentTeamRole(tr)))
+                        return true;
+                }
+            }
+            if (rangeStr != null && !"*".equals(rangeStr)) {
+                try {
+                    int maxBlocks = Integer.parseInt(rangeStr.trim());
+                    if (viewer.distanceToSqr(target) > (double) maxBlocks * maxBlocks)
+                        return false;
+                } catch (NumberFormatException ignored) {
+                }
+            }
+            return true;
+        }
+    }
+
+    /**
+     * 按当前的自定义物品索引重建全部已注册自定义职业的商店条目。
+     *
+     * <p>
+     * 商店是在职业注册时按 id 解析自定义物品建好的（见 {@link #createShopEntries}）：如果那一刻
+     * 物品索引还没就绪，那条自定义物品就解析不出来。**游戏开始时**（内容已经全部同步 / 加载完毕）
+     * 再重建一次，就与内置职业商店的处理一致了（{@code RoleShopHandler.shopRegister()} 也会在
+     * 开局时重注册一遍商店条目）。
+     *
+     * <p>
+     * 这里<b>不重新注册职业本身</b>，只把商店列表换掉（{@link CustomNormalRole#setCustomShop}）：
+     * 开局时替换职业实例会牵动正在进行的职业分配，而商店只是个列表，换掉即可。
+     *
+     * @return 重建了商店的自定义职业数
+     */
+    public static int rebuildShops() {
+        int rebuilt = 0;
+        for (Map.Entry<String, SRERole> entry : registeredRoles.entrySet()) {
+            if (!(entry.getValue() instanceof CustomNormalRole role)) {
+                continue;
+            }
+            CustomRoleData data = loadedRoles.get(entry.getKey());
+            if (data == null) {
+                continue;
+            }
+            try {
+                role.setCustomShop(createShopEntries(data));
+                rebuilt++;
+            } catch (Exception e) {
+                SRE.LOGGER.error("[CustomRole] Failed to rebuild shop for {}", entry.getKey(), e);
+            }
+        }
+        if (rebuilt > 0) {
+            // 商店内容变了：让按 shopVersion 缓存的索引（物品→职业提示、价格表）跟着失效
+            org.agmas.noellesroles.init.RoleShopHandler.shopVersion++;
+            SRE.LOGGER.info("[CustomRole] Rebuilt shops of {} custom role(s)", rebuilt);
+        }
+        return rebuilt;
+    }
+
+    /**
+     * 创建商店条目（带购买冷却、禁止重复购买、每次购买涨价/降价支持）
+     */
+    public static List<ShopEntry> createShopEntries(CustomRoleData data) {
+        List<ShopEntry> entries = new ArrayList<>();
+        for (CustomRoleData.ShopEntryData entry : data.shopEntries) {
+            // 商品货币类型：默认金币（money），可选游戏币（minigame_token），参考网警商店
+            final ShopEntry.Currency currency = ShopEntry.Currency.fromSerializedName(entry.currency);
+            // 购买冷却：-1 = 该商品类型的默认冷却（当前配置值）
+            final int cooldownTicks = Math.max(0, resolveCooldownSeconds(entry)) * 20;
+            switch (entry.type) {
+                case "killer_shop":
+                    // 通用杀手商店：原样展开（价格 / 耐久 / 首购折扣都由通用商店自己负责）
+                    entries.addAll(ShopContent.getDefaultKnifeEntries());
+                    break;
+                case "knife": {
+                    // 耐久刀：与通用杀手商店的刀一致（murder 下 3 点耐久、可替换耗尽的刀、首购 -50%）
+                    final int knifePrice = entry.price >= 0 ? entry.price : SREConfig.instance().knifePrice;
+                    entries.add(new KillerKnifeShopEntry(knifePrice) {
+                        @Override
+                        public ShopEntry.Currency currency() {
+                            return currency;
+                        }
+
+                        @Override
+                        public boolean onBuy(Player player) {
+                            // 禁止重复购买：背包里已有刀则拒绝
+                            if (!entry.allowDuplicate) {
+                                for (ItemStack stack : player.getInventory().items) {
+                                    if (stack.is(io.wifi.starrailexpress.index.TMMItems.KNIFE)) {
+                                        return false;
+                                    }
+                                }
+                            }
+                            boolean result = super.onBuy(player);
+                            if (result) {
+                                // 父类内部已经记录过购买次数
+                                applyPurchaseStep(player, this.stack(), knifePrice, entry, true);
+                            }
+                            return result;
+                        }
+                    });
+                    break;
+                }
+                case "item":
+                case "custom_item": {
+                    // 统一的「物品」条目：id 先按自定义列车物品解析，找不到再当原版物品
+                    //（custom_item 是旧配置里的写法，等价处理）
+                    ItemStack base = parseConfiguredItem(entry.itemId, 1);
+                    if (!base.isEmpty()) {
+                        final ItemStack shopStack = base.copy();
+                        final Item theItem = shopStack.getItem();
+                        final ShopEntry built;
+                        if (!needsItemBehavior(entry, cooldownTicks)) {
+                            // 避免Mamizou不能购买所有的自定义职业的物品。
+                            built = new ShopEntry(shopStack.copy(), entry.price, ShopEntry.Type.TOOL, currency);
+                        } else {
+                            built = new ShopEntry(shopStack.copy(), entry.price, ShopEntry.Type.TOOL, currency) {
+                                @Override
+                                public boolean onBuy(Player player) {
+                                    // 禁止重复购买：检查快捷栏是否已有该物品（自定义物品连组件一起比对）
+                                    if (!entry.allowDuplicate) {
+                                        for (var stack : player.getInventory().items) {
+                                            if (ItemStack.isSameItemSameComponents(stack, shopStack))
+                                                return false;
+                                        }
+                                    }
+                                    boolean result = super.onBuy(player);
+                                    // 冷却
+                                    if (result && cooldownTicks > 0
+                                            && player instanceof ServerPlayer sp) {
+                                        sp.getCooldowns().addCooldown(theItem, cooldownTicks);
+                                    }
+                                    if (result) {
+                                        applyPurchaseStep(player, shopStack, entry.price, entry, false);
+                                    }
+                                    return result;
+                                }
+                            };
+                        }
+                        entries.add(built);
+                    }
+                    break;
+                }
+                case "psycho":
+                    entries.add(effectEntry(entry,
+                            io.wifi.starrailexpress.index.TMMItems.PSYCHO_MODE.getDefaultInstance(),
+                            entry.price, currency, cooldownTicks, ShopEntry.Type.WEAPON,
+                            p -> SREPlayerShopComponent.usePsychoMode(p)));
+                    break;
+                case "blackout":
+                    entries.add(effectEntry(entry,
+                            io.wifi.starrailexpress.index.TMMItems.BLACKOUT.getDefaultInstance(),
+                            entry.price, currency, cooldownTicks, ShopEntry.Type.TOOL,
+                            p -> SREPlayerShopComponent.useBlackout(p)));
+                    break;
+                case "monitor_fail":
+                    entries.add(effectEntry(entry,
+                            io.wifi.starrailexpress.index.TMMItems.MONITOR_BROKEN.getDefaultInstance(),
+                            entry.price, currency, cooldownTicks, ShopEntry.Type.TOOL,
+                            p -> SREPlayerShopComponent.useMonitorBroken(p,
+                                    SREConfig.instance().monitorBrokenDuration * 20)));
+                    break;
+                case "lightup":
+                    // 开灯：行为与钳工商店一致（结束关灯 + 清除全场黑暗/失明），冷却默认与关灯一致
+                    entries.add(effectEntry(entry,
+                            ModItems.LIGHTUP.getDefaultInstance(),
+                            entry.price, currency, cooldownTicks, ShopEntry.Type.TOOL,
+                            p -> {
+                                SREWorldBlackoutComponent blackCCA = SREWorldBlackoutComponent.KEY.get(p.level());
+                                if (blackCCA.blackOutRemainingTicks <= 0)
+                                    return false;
+                                blackCCA.reset();
+                                // 清除全场黑暗与失明药水效果
+                                for (Player other : p.level().players()) {
+                                    other.removeEffect(MobEffects.BLINDNESS);
+                                    other.removeEffect(MobEffects.DARKNESS);
+                                }
+                                p.level().playSound(null, p.getX(), p.getY(), p.getZ(),
+                                        SoundEvents.SMITHING_TABLE_USE, SoundSource.MASTER, 1.0F, 1.0F);
+                                // 冷却与关灯一致
+                                p.level().players().forEach(
+                                        other -> other.getCooldowns().addCooldown(ModItems.LIGHTUP,
+                                                GameConstants.getBlackoutCooldownGlobal()));
+                                p.getCooldowns().addCooldown(ModItems.LIGHTUP,
+                                        GameConstants.ITEM_COOLDOWNS
+                                                .getOrDefault(io.wifi.starrailexpress.index.TMMItems.BLACKOUT, 0));
+                                SRE.REPLAY_MANAGER.recordSkillUsed(p.getUUID(),
+                                        BuiltInRegistries.ITEM.getKey(ModItems.LIGHTUP));
+                                return true;
+                            }));
+                    break;
+                case "monitor_recovery":
+                    // 监控恢复：行为与钳工商店一致（结束监控失灵），冷却默认与监控失灵一致
+                    entries.add(effectEntry(entry,
+                            ModItems.MONITOR_RECOVERY.getDefaultInstance(),
+                            entry.price, currency, cooldownTicks, ShopEntry.Type.TOOL,
+                            p -> {
+                                SREMonitorWorldComponent monitorCCA = SREMonitorWorldComponent.KEY.get(p.level());
+                                if (monitorCCA.brokenTime <= 0)
+                                    return false;
+                                monitorCCA.reset();
+                                p.level().playSound(null, p.getX(), p.getY(), p.getZ(),
+                                        SoundEvents.UI_LOOM_TAKE_RESULT, SoundSource.MASTER, 1.0F, 1.0F);
+                                // 冷却与监控失灵一致
+                                p.level().players().forEach(
+                                        other -> other.getCooldowns().addCooldown(ModItems.MONITOR_RECOVERY,
+                                                GameConstants.getMonitorBrokenCooldownGlobal()));
+                                p.getCooldowns().addCooldown(ModItems.MONITOR_RECOVERY,
+                                        GameConstants.ITEM_COOLDOWNS.getOrDefault(
+                                                io.wifi.starrailexpress.index.TMMItems.MONITOR_BROKEN, 0));
+                                return true;
+                            }));
+                    break;
+                case "custom": {
+                    if (!entry.itemId.isEmpty() && !entry.commands.isEmpty()) {
+                        final List<String> cmds = new ArrayList<>(entry.commands);
+                        try {
+                            ResourceLocation itemId = ResourceLocation.parse(entry.itemId);
+                            Optional<Item> item = BuiltInRegistries.ITEM.getOptional(itemId);
+                            ItemStack display = item.map(ItemStack::new).orElse(ItemStack.EMPTY);
+                            // 设置自定义商品名称
+                            if (!entry.displayName.isEmpty()) {
+                                display.set(net.minecraft.core.component.DataComponents.ITEM_NAME,
+                                        net.minecraft.network.chat.Component.literal(entry.displayName));
+                            }
+                            entries.add(new ShopEntry(display, entry.price, ShopEntry.Type.TOOL,
+                                    currency) {
+                                @Override
+                                public boolean onBuy(Player player) {
+                                    for (String cmd : cmds) {
+                                        executeConfiguredCommand(cmd, player);
+                                    }
+                                    // 冷却
+                                    if (cooldownTicks > 0 && !display.isEmpty()
+                                            && player instanceof ServerPlayer sp) {
+                                        sp.getCooldowns().addCooldown(display.getItem(), cooldownTicks);
+                                    }
+                                    applyPurchaseStep(player, display, entry.price, entry, false);
+                                    return true;
+                                }
+                            });
+                        } catch (Exception ignored) {
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+        return entries;
+    }
+
+    /**
+     * 效果类商品（疯狂模式 / 停电 / 监控失灵 / 开灯 / 监控恢复）的公共外壳：
+     * 购买即触发效果，成功后按配置给商品挂原版物品冷却（会覆盖效果自带的默认冷却），
+     * 并应用「每次购买涨价 / 降价」。
+     */
+    private static ShopEntry effectEntry(CustomRoleData.ShopEntryData entry, ItemStack icon, int price,
+            ShopEntry.Currency currency, int cooldownTicks, ShopEntry.Type type,
+            Function<Player, Boolean> effect) {
+        final Item effectItem = icon.getItem();
+        return new ShopEntry(icon, price, type, currency) {
+            @Override
+            public boolean onBuy(@NotNull Player player) {
+                boolean triggered = effect.apply(player);
+                if (triggered && cooldownTicks > 0 && player instanceof ServerPlayer sp) {
+                    sp.getCooldowns().addCooldown(effectItem, cooldownTicks);
+                }
+                if (triggered) {
+                    applyPurchaseStep(player, icon, price, entry, false);
+                }
+                return triggered;
+            }
+        };
+    }
+
+    /**
+     * 购买成功后的「每次购买涨价 / 降价」：把下一档价格写进玩家的动态商店组件。
+     *
+     * <p>
+     * 复用 {@link DynamicShopComponent#setSteppedPrice}（更夫的锣 / 梆、独裁者的裁决之剑走的是同一条实现），
+     * 因此商店 UI 显示价与服务端扣费一致。金额在编辑器里已纠错，这里再兜一次底：
+     * 涨价的单次增量保证「价格 + 增量」不溢出 int，降价的单次增量不超过商品本身价格（最低降到 0）。
+     *
+     * @param countAlreadyRecorded 购买次数是否已经被记录过（耐久刀父类内部会记）
+     */
+    private static void applyPurchaseStep(Player player, ItemStack stack, int basePrice,
+            CustomRoleData.ShopEntryData entry, boolean countAlreadyRecorded) {
+        if (!hasSteppedPrice(entry) || stack == null || stack.isEmpty() || basePrice <= 0) {
+            return;
+        }
+        final String mode = discountMode(entry);
+        final DynamicShopComponent dynamicShop = DynamicShopComponent.KEY.get(player);
+        // 价格键按物品栈区分：自定义列车物品共用同一个物品本体，只靠注册 id 会让涨价/降价
+        // 误伤到商店里其它自定义物品商品；用 keyOf 把 CUSTOM_ITEM_ID 组件也算进去。
+        final String itemKey = DynamicShopComponent.keyOf(stack);
+        final int purchased = countAlreadyRecorded ? dynamicShop.getPurchaseCount(itemKey)
+                : dynamicShop.recordPurchase(itemKey);
+        final int amount = "raise".equals(mode)
+                ? (int) Math.min(Integer.MAX_VALUE - (long) basePrice, Math.max(0, entry.discountAmount))
+                : Math.min(basePrice, Math.max(0, entry.discountAmount));
+        if (amount <= 0) {
+            return;
+        }
+        dynamicShop.setSteppedPrice(itemKey, basePrice, amount, "raise".equals(mode), purchased,
+                parsePriceChangeCount(entry.priceChangeCount));
+    }
+
+    /**
+     * 解析「价格变动次数」：{@code "*"} / 空 / 非正数 / 非法输入都视为不受限制（返回 0）。
+     *
+     * @return 最多变动多少次；{@code 0} = 不受限制
+     */
+    public static int parsePriceChangeCount(String raw) {
+        if (raw == null) {
+            return 0;
+        }
+        final String s = raw.trim();
+        if (s.isEmpty() || "*".equals(s)) {
+            return 0;
+        }
+        try {
+            final int value = Integer.parseInt(s);
+            return value > 0 ? value : 0;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    /** 归一化折扣模式：只认 none / raise / lower，其余按 none。 */
+    private static String discountMode(CustomRoleData.ShopEntryData entry) {
+        final String mode = entry.discountMode == null ? "none"
+                : entry.discountMode.trim().toLowerCase(java.util.Locale.ROOT);
+        return ("raise".equals(mode) || "lower".equals(mode)) ? mode : "none";
+    }
+
+    /** 是否配置了「每次购买涨价 / 降价」（金额必须 > 0）。 */
+    private static boolean hasSteppedPrice(CustomRoleData.ShopEntryData entry) {
+        return !"none".equals(discountMode(entry)) && Math.max(0, entry.discountAmount) > 0;
+    }
+
+    /** 物品条目是否需要带行为的条目（冷却 / 禁止重复 / 每次涨价降价）；否则用最朴素的条目。 */
+    private static boolean needsItemBehavior(CustomRoleData.ShopEntryData entry, int cooldownTicks) {
+        return cooldownTicks > 0 || !entry.allowDuplicate || hasSteppedPrice(entry);
+    }
+
+    /**
+     * 商品类型的默认购买冷却（秒，取自当前配置）。编辑器的输入框也用它做默认值显示。
+     */
+    public static int defaultCooldownSeconds(String type) {
+        if (type == null) {
+            return 0;
+        }
+        return switch (type) {
+            case "psycho" -> Math.max(0, SREConfig.instance().psychoModeCooldown);
+            case "blackout", "lightup" -> Math.max(0, SREConfig.instance().blackoutCooldown);
+            case "monitor_fail", "monitor_recovery" -> Math.max(0, SREConfig.instance().monitorBrokenCooldown);
+            default -> 0;
+        };
+    }
+
+    /** 解析购买冷却：配置为 -1 时取该商品类型的默认值（当前配置值）。 */
+    private static int resolveCooldownSeconds(CustomRoleData.ShopEntryData entry) {
+        return entry.cooldownSeconds >= 0 ? entry.cooldownSeconds : defaultCooldownSeconds(entry.type);
+    }
+
+    private static void executeConfiguredCommand(String cmd, net.minecraft.world.entity.player.Player player) {
+        if (!(player instanceof ServerPlayer serverPlayer) || serverPlayer.getServer() == null || cmd == null
+                || cmd.isBlank()) {
+            return;
+        }
+
+        String processed = processCommandSelectors(cmd
+                .replace("<player>", serverPlayer.getGameProfile().getName())
+                .replace("~ ~ ~", String.format("%.1f %.1f %.1f",
+                        serverPlayer.getX(), serverPlayer.getY(), serverPlayer.getZ())),
+                serverPlayer);
+        try {
+            serverPlayer.getServer().getCommands().performPrefixedCommand(
+                    serverPlayer.getServer().createCommandSourceStack()
+                            .withPermission(SREConfig.instance().customRolePermission)
+                            .withSuppressedOutput()
+                            .withEntity(serverPlayer)
+                            .withLevel(serverPlayer.serverLevel())
+                            .withPosition(serverPlayer.position())
+                            .withRotation(serverPlayer.getRotationVector()),
+                    processed);
+        } catch (Exception e) {
+            SRE.LOGGER.warn("[CustomRole] Failed to execute configured command '{}': {}", processed, e.getMessage());
+        }
+    }
+
+    /**
+     * 处理指令中的 @p 选择器（其余 @s @a @r 由 Minecraft 原生解析）
+     * 
+     * @p → 距离当前玩家最近的存活玩家（排除自己）
+     */
+    private static String processCommandSelectors(String cmd, net.minecraft.world.entity.player.Player player) {
+        if (!(player instanceof ServerPlayer sp))
+            return cmd;
+
+        // @p → 最近的其他存活玩家（排除自己）
+        if (cmd.contains("@p")) {
+            var level = sp.serverLevel();
+            var alivePlayers = level.getPlayers(p -> GameUtils.isPlayerAliveAndSurvivalIgnoreShitSplit(p));
+            ServerPlayer nearest = null;
+            double minDist = Double.MAX_VALUE;
+            for (ServerPlayer p : alivePlayers) {
+                if (p == sp)
+                    continue;
+                double dist = sp.distanceToSqr(p);
+                if (dist < minDist) {
+                    minDist = dist;
+                    nearest = p;
+                }
+            }
+            cmd = cmd.replace("@p",
+                    nearest != null ? nearest.getGameProfile().getName() : sp.getGameProfile().getName());
+        }
+
+        return cmd;
+    }
+
+    // ==================== 自定义独立胜利判定 ====================
+
+    /**
+     * 判断某个角色是否匹配配置中填写的「指定职业 ID」。
+     * <p>
+     * 兼容多种填写格式（大小写不敏感）：
+     * <ul>
+     * <li>完整 ResourceLocation：{@code noellesroles:killer}</li>
+     * <li>仅路径（path）：{@code killer}</li>
+     * <li>{@code 命名空间:路径} 任意大小写</li>
+     * </ul>
+     * 修复此前用 {@code identifier().toString()} 与手填值严格 {@code equals} 比较，
+     * 导致用户填短 id 时匹配失败、条件6 误判为非「只剩自己和指定职业」、
+     * 从而通过 {@code return WinStatus.NONE} 永久阻止游戏结束的问题。
+     */
+    /**
+     * 从配置中填写的「指定职业 ID」提取职业路径（path），用于结算时的整类算赢匹配。
+     * <p>
+     * 兼容 {@code noellesroles:killer}（取 {@code killer}）与 {@code killer}（原样）两种写法。
+     */
+    private static String roleIdPath(String configuredId) {
+        if (configuredId == null)
+            return null;
+        String id = configuredId.trim();
+        if (id.isEmpty())
+            return null;
+        int idx = id.indexOf(':');
+        return idx >= 0 ? id.substring(idx + 1) : id;
+    }
+
+    private static boolean roleIdMatches(SRERole role, String configuredId) {
+        if (configuredId == null)
+            return false;
+        String id = configuredId.trim();
+        if (id.isEmpty())
+            return false;
+        ResourceLocation actual = role.identifier();
+        return actual.toString().equalsIgnoreCase(id) // 例如 noellesroles:killer
+                || actual.getPath().equalsIgnoreCase(id) // 例如 killer
+                || (actual.getNamespace() + ":" + actual.getPath()).equalsIgnoreCase(id);
+    }
+
+    /**
+     * 解析「存活到最后」的细分模式。
+     *
+     * @return {@code ""}（关闭）/ {@code INNOCENT} / {@code KILLER} / {@code BOTH}
+     */
+    private static String resolveSurviveToLastMode(CustomRoleData data) {
+        String mode = data.customWinSurviveToLastMode == null ? ""
+                : data.customWinSurviveToLastMode.trim().toUpperCase(java.util.Locale.ROOT);
+        if (mode.equals("INNOCENT") || mode.equals("KILLER") || mode.equals("BOTH")) {
+            return mode;
+        }
+        // 兼容旧布尔开关：旧配置里打开过的按「顶替双方」处理
+        return data.customWinSurviveToLast ? "BOTH" : "";
+    }
+
+    // ==================== 中立同阵营透视（参考教父家族） ====================
+
+    /** 逗号（中英文）/ 分号 / 空白分隔的 id 列表。 */
+    private static List<String> splitIds(String raw) {
+        if (raw == null || raw.isBlank())
+            return List.of();
+        List<String> out = new ArrayList<>();
+        for (String part : raw.split("[,，;；\\s]+")) {
+            String t = part.trim();
+            if (!t.isEmpty())
+                out.add(t);
+        }
+        return out;
+    }
+
+    private static boolean modifierIdMatches(ResourceLocation actual, String configuredId) {
+        if (actual == null || configuredId == null)
+            return false;
+        String id = configuredId.trim();
+        if (id.isEmpty())
+            return false;
+        return actual.toString().equalsIgnoreCase(id) // 例如 noellesroles:leader
+                || actual.getPath().equalsIgnoreCase(id) // 例如 leader
+                || (actual.getNamespace() + ":" + actual.getPath()).equalsIgnoreCase(id);
+    }
+
+    /**
+     * 目标玩家是否属于该配置定义的「同阵营」：
+     * 该自定义职业本身 / 配置里列出的职业 / 拥有配置里列出的修饰符。
+     */
+    private static boolean isFactionMember(CustomRoleData data, InstinctModeData mode,
+            net.minecraft.world.entity.player.Player target) {
+        if (data == null || mode == null || target == null || target.level() == null)
+            return false;
+        SRERole targetRole = null;
+        var game = SREGameWorldComponent.KEY.get(target.level());
+        if (game != null)
+            targetRole = game.getRole(target);
+        if (targetRole != null) {
+            // 该自定义职业自身也算同阵营
+            if (targetRole.identifier().getPath().equalsIgnoreCase(data.englishId))
+                return true;
+            for (String roleId : splitIds(mode.factionRoles)) {
+                if (roleIdMatches(targetRole, roleId))
+                    return true;
+            }
+        }
+        List<String> modifierIds = splitIds(mode.factionModifiers);
+        if (!modifierIds.isEmpty()) {
+            Set<SREModifier> modifiers = RoleUtils.getPlayerModifier(target);
+            if (modifiers != null) {
+                for (SREModifier modifier : modifiers) {
+                    if (modifier == null)
+                        continue;
+                    for (String modifierId : modifierIds) {
+                        if (modifierIdMatches(modifier.identifier(), modifierId))
+                            return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 检查所有启用了独立胜利的自定义角色是否满足胜利条件。
+     * 在 {@link org.agmas.noellesroles.CustomWinnerClass} 中调用。
+     *
+     * @return WinStatus.CUSTOM 如果某自定义角色胜利，否则 WinStatus.NOT_MODIFY
+     */
+    public static WinStatus checkCustomRoleWins(ServerLevel serverLevel, WinStatus currentWinStatus) {
+        if (customWinDataMap.isEmpty())
+            return WinStatus.NOT_MODIFY;
+
+        // 硬性约束：倒计时归零（TIME）时，任何「拖延/阻止游戏结束」的分支都不得生效。
+        // 下方所有 return WinStatus.NONE 的位置都必须受此标志保护。
+        final boolean canBlockGameEnd = currentWinStatus != WinStatus.TIME;
+
+        var gameComponent = SREGameWorldComponent.KEY.get(serverLevel);
+        int alivePlayerCount = 0;
+        for (var p : serverLevel.players()) {
+            if (GameUtils.isPlayerAliveAndSurvival(p)) {
+                // 黑白（monokuma）在场不计入存活人数：避免其在「只剩自己/只剩自己和指定职业」
+                // 的判定中阻挡游戏结束（场上只剩自己+黑白时应能正常结算）
+                if (gameComponent.isRole(p, ModRoles.MONOKUMA))
+                    continue;
+                alivePlayerCount++;
+            }
+        }
+
+        // 恋人胜利状态（供低优先级条件让位使用）。优先级链：
+        // 条件4(存活到最后) > TIME > LOVER > 条件5/6(只剩自己/只剩自己+指定职业)
+        boolean loversWin = LoversWinCheckEvent.isLoversWin(serverLevel);
+
+        for (var entry : customWinDataMap.entrySet()) {
+            CustomRoleData data = entry.getValue();
+            ResourceLocation roleId = ResourceLocation.fromNamespaceAndPath("customrole", data.englishId);
+            SRERole role = TMMRoles.ROLES.get(roleId);
+            if (role == null)
+                continue;
+
+            // 找到拥有此自定义角色的存活玩家
+            ServerPlayer customPlayer = null;
+            for (var p : serverLevel.players()) {
+                if (GameUtils.isPlayerAliveAndSurvival(p) && gameComponent.isRole(p, role)) {
+                    customPlayer = p;
+                    break;
+                }
+            }
+            if (customPlayer == null)
+                continue;
+
+            // 条件6: 当场上只剩下自己和某职业时 (类似教父)
+            // 说明：该条件不再依赖 currentWinStatus。当「结算计入存活好人 / 结算计入存活杀手」两项均为真时，
+            // 自己（及指定职业）存活会让常规结算一直停留在 NONE（即阻止游戏结束），永远不会进入
+            // KILLERS / PASSENGERS，导致本条件无法触发。因此这里改为按「实际存活构成」判定：
+            // 1) 只剩自己 + 指定职业（无外人）-> 直接独立获胜
+            // 2) 仍有外人存活且常规结算即将发生 -> 阻止游戏结束，直到外人被杀光
+            // 优先级仍低于 TIME 与 LOVER：TIME 时不触发；恋人已赢时让位
+            if (!data.customWinLastWithRoles.isEmpty()) {
+
+                // 统计除自己以外的存活玩家：分成「指定职业」与「外人（非指定职业）」两类
+                boolean specifiedAlive = false;
+                boolean outsiderAlive = false;
+                List<ServerPlayer> specifiedWinners = new ArrayList<>();
+                for (var p : serverLevel.players()) {
+                    if (!GameUtils.isPlayerAliveAndSurvival(p) || p == customPlayer)
+                        continue;
+                    // 黑白（monokuma）在场不参与条件6判定：既不算指定职业也不算外人，
+                    // 不会因其在场而阻止游戏结束（场上只剩自己+指定职业+黑白时应正常结算）
+                    if (gameComponent.isRole(p, ModRoles.MONOKUMA))
+                        continue;
+                    SRERole pRole = gameComponent.getRole(p);
+                    boolean matched = false;
+                    if (pRole != null) {
+                        for (String allowedId : data.customWinLastWithRoles) {
+                            if (roleIdMatches(pRole, allowedId)) {
+                                matched = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (matched) {
+                        specifiedWinners.add(p);
+                        specifiedAlive = true;
+                    } else {
+                        outsiderAlive = true;
+                    }
+                }
+
+                // 指定职业是否需要存活（默认 true = 原行为）；关闭后指定职业全灭、场上只剩自己时也能获胜
+                boolean needSpecifiedAlive = data.customWinLastWithRolesNeedAlive;
+
+                // 1) 只剩自己 + 指定职业（无外人）-> 直接独立获胜，不再判断指定职业阵营。
+                // 「指定职业是否需存活」关闭时：无外人存活即可（指定职业是否存活不作要求）。
+                // TIME（倒计时归零）时不触发，让 TIME 正常结算，也不阻塞后续更高优先级的条件。
+                // 不再要求 currentWinStatus 为 KILLERS/PASSENGERS，这样即使两项「结算计入存活」都为真、
+                // 常规结算停留在 NONE，也能正常取得独立胜利。
+                if (!outsiderAlive && (!needSpecifiedAlive || specifiedAlive)
+                        && currentWinStatus != WinStatus.TIME) {
+                    // 恋人胜利优先级高于条件6：让位给后注册的恋人监听器
+                    if (loversWin)
+                        return WinStatus.NOT_MODIFY;
+                    doCustomWin(serverLevel, data, customPlayer, specifiedWinners);
+                    return WinStatus.CUSTOM;
+                }
+
+                // 2) 仍有外人存活、且常规结算即将发生 -> 阻止游戏结束，直到外人被杀光。
+                // 「指定职业是否需存活」关闭时：指定职业全灭也会继续阻止，直至外人死光后由分支1 结算。
+                // 若自己/指定职业已通过「结算计入存活」阻止结算（winStatus 保持 NONE），无需额外干预。
+                if (outsiderAlive && (!needSpecifiedAlive || specifiedAlive) && canBlockGameEnd
+                        && (currentWinStatus == WinStatus.KILLERS
+                                || currentWinStatus == WinStatus.PASSENGERS
+                                || currentWinStatus == WinStatus.NO_PLAYER)) {
+                    // 恋人已赢时让位给恋人
+                    if (loversWin)
+                        return WinStatus.NOT_MODIFY;
+                    return WinStatus.NONE; // 拖延游戏结束，直至非自己/指定职业的玩家全部死亡
+                }
+                // 自己虽存活，但（需要存活时）指定职业已全灭 -> 条件6 不介入，让原胜利方正常结算
+                // （自己已死的情况在上方 customPlayer == null 处就已 continue 跳过）
+            }
+
+            // 条件5: 当场上一共只剩下自己存活时 (类似纵火犯)
+            // 优先级低于 TIME 与 LOVER：TIME 时不触发；恋人已赢时让位
+            if (data.customWinLastAlive && alivePlayerCount == 1 && currentWinStatus != WinStatus.TIME) {
+                if (loversWin)
+                    return WinStatus.NOT_MODIFY;
+                doCustomWin(serverLevel, data, customPlayer, List.of());
+                return WinStatus.CUSTOM;
+            }
+            // 阻止游戏结束（纵火犯式）；TIME 时不得阻止；恋人已赢时让位给恋人
+            if (data.customWinLastAlive && canBlockGameEnd && (currentWinStatus == WinStatus.KILLERS
+                    || currentWinStatus == WinStatus.PASSENGERS)) {
+                if (loversWin)
+                    return WinStatus.NOT_MODIFY;
+                return WinStatus.NONE;
+            }
+
+            // 条件4: 存活到最后 —— 细分为「顶替平民 / 顶替杀手 / 顶替双方」三种模式。
+            // 优先级最高，高于 TIME 与 LOVER。该条件只「改判」常规胜负，**不会**拖延 / 阻止游戏正常结束。
+            String surviveMode = resolveSurviveToLastMode(data);
+            if (!surviveMode.isEmpty()) {
+                boolean replaceInnocent = "INNOCENT".equals(surviveMode) || "BOTH".equals(surviveMode);
+                boolean replaceKiller = "KILLER".equals(surviveMode) || "BOTH".equals(surviveMode);
+                boolean replace =
+                        // 只剩自己存活（真正「存活到最后」）
+                        alivePlayerCount <= 1
+                                // 顶替平民：平民获胜 / 时间耗尽
+                                || (replaceInnocent && (currentWinStatus == WinStatus.PASSENGERS
+                                        || currentWinStatus == WinStatus.TIME))
+                                // 顶替杀手：杀手获胜
+                                || (replaceKiller && currentWinStatus == WinStatus.KILLERS);
+                if (replace) {
+                    doCustomWin(serverLevel, data, customPlayer, List.of());
+                    return WinStatus.CUSTOM;
+                }
+            }
+
+            // 条件7: 拥有指定标签时躺在床上取得独立胜利 (类似小偷)
+            if (!data.customWinTagSleep.isEmpty() && customPlayer.getTags().contains(data.customWinTagSleep)
+                    && customPlayer.isSleeping()) {
+                doCustomWin(serverLevel, data, customPlayer, List.of());
+                return WinStatus.CUSTOM;
+            }
+
+            // 条件8: 当玩家拥有某个物品时取得独立胜利
+            if (!data.customWinHeldItem.isEmpty()) {
+                boolean hasItem = false;
+                ResourceLocation itemId = ResourceLocation.tryParse(data.customWinHeldItem);
+                if (itemId != null) {
+                    var itemOpt = BuiltInRegistries.ITEM.getOptional(itemId);
+                    if (itemOpt.isPresent()) {
+                        for (var stack : customPlayer.getInventory().items) {
+                            if (stack.is(itemOpt.get())) {
+                                hasItem = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (hasItem) {
+                    doCustomWin(serverLevel, data, customPlayer, List.of());
+                    return WinStatus.CUSTOM;
+                }
+            }
+        }
+
+        return WinStatus.NOT_MODIFY;
+    }
+
+    private static void doCustomWin(ServerLevel serverLevel, CustomRoleData data, ServerPlayer winner,
+            List<ServerPlayer> extraWinners) {
+        int color = (data.colorR << 16) | (data.colorG << 8) | data.colorB;
+        var roundComponent = SREGameRoundEndComponent.KEY.get(serverLevel);
+        boolean hasCustomText = !data.customWinTitle.isEmpty() || !data.customWinSubtitle.isEmpty();
+
+        // 记录条件6中一同获胜的「指定职业」角色路径，使其在结算时整类算赢（对齐教父/杀手团队）
+        // 来源使用配置里填写的指定职业（而非仅存活玩家），确保已死的指定职业成员也随其职业整类算赢
+        roundComponent.CustomWinnerExtraRoleIds.clear();
+        // 先加入触发胜利的自定义角色自身，避免 A/B/C 互相绑定时「先命中者反而不在获胜名单」
+        String selfPath = roleIdPath(data.englishId);
+        if (selfPath != null && !selfPath.isEmpty())
+            roundComponent.CustomWinnerExtraRoleIds.add(selfPath);
+        for (String allowedId : data.customWinLastWithRoles) {
+            String path = roleIdPath(allowedId);
+            if (path != null && !path.isEmpty() && !roundComponent.CustomWinnerExtraRoleIds.contains(path))
+                roundComponent.CustomWinnerExtraRoleIds.add(path);
+        }
+
+        if (hasCustomText && roundComponent != null) {
+            // 使用 CUSTOM_COMPONENT 模式直接显示用户自定义文本
+            if (!data.customWinTitle.isEmpty()) {
+                roundComponent.CustomWinnerTitle = Component.literal(data.customWinTitle
+                        .replace("<player>", winner.getGameProfile().getName()));
+            }
+            if (!data.customWinSubtitle.isEmpty()) {
+                roundComponent.CustomWinnerSubtitle = Component.literal(data.customWinSubtitle
+                        .replace("<player>", winner.getGameProfile().getName()));
+            }
+            if (roundComponent.CustomWinnerTitle == null) {
+                roundComponent.CustomWinnerTitle = Component.literal("");
+            }
+            roundComponent.CustomWinnerColor = color;
+            roundComponent.CustomWinnerID = data.englishId;
+            roundComponent.setRoundEndData(serverLevel.players(), WinStatus.CUSTOM_COMPONENT);
+            GameUtils.stopGame(serverLevel);
+        } else {
+            // 无自定义文本时使用 CUSTOM 模式，走翻译键
+            RoleUtils.customWinnerWin(serverLevel, data.englishId, color);
+        }
+    }
+
+    /**
+     * 解析职业配置里的「物品 id」：<b>先按自定义列车物品解析，找不到再当原版物品，都找不到就当
+     * 还没登记的自定义物品留个空壳</b>。
+     *
+     * <p>
+     * 两种物品共用同一个 id 字段，所以自定义列车物品与模组/原版物品可以混在一张表里写。
+     * 兼容两种历史写法：
+     * <ul>
+     * <li>{@code [custom_item] my_sword} / {@code [item] minecraft:stone} —— 前缀会被忽略，
+     * 直接按统一规则解析（前缀不再有实际作用，仅为不破坏已保存的配置而保留）；</li>
+     * <li>旧配置里 {@code type = custom_item} 的条目走的是同一个 id，因此照常生效。</li>
+     * </ul>
+     *
+     * <p>
+     * <b>兜底（延后生效）</b>：两条路都没命中时不再返回空栈，而是
+     * {@link io.wifi.starrailexpress.customitem.CustomItemLoader#buildPlaceholder} 造一个只带 id
+     * 组件的「自定义列车物品」空壳——配置里引用的自定义物品可以先写、物品后加，商店 / 初始物品 /
+     * 任务奖励里那条目不会被静默丢掉；名称与贴图是按 id 现查配置的，物品登记好之后同一个栈就自动
+     * 显示成正确的自定义物品。真的是写错了 id 时，它会一直显示成「尚未配置物品数据」的通用物品，
+     * 配合日志里的告警可以看出问题。
+     *
+     * @return 只有 id 完全为空、或拿不到自定义物品本体时才返回空栈
+     */
+    public static ItemStack parseConfiguredItem(String spec, int count) {
+        if (spec == null || spec.isBlank()) {
+            return ItemStack.EMPTY;
+        }
+        String value = spec.trim();
+        int amount = Math.max(1, count);
+
+        if (value.startsWith("[")) {
+            int close = value.indexOf(']');
+            if (close < 0) {
+                return ItemStack.EMPTY;
+            }
+            value = value.substring(close + 1).trim();
+            if (value.isEmpty()) {
+                return ItemStack.EMPTY;
+            }
+        }
+
+        // ① 自定义列车物品（同名 id）
+        String customId = value.toLowerCase(java.util.Locale.ROOT);
+        io.wifi.starrailexpress.customitem.CustomItemData custom = io.wifi.starrailexpress.customitem.CustomItemLoader
+                .get(customId);
+        if (custom != null) {
+            return io.wifi.starrailexpress.customitem.CustomItemLoader.buildStack(custom, amount);
+        }
+
+        // ② 原版 / 模组物品
+        ResourceLocation itemId = ResourceLocation.tryParse(value);
+        if (itemId != null) {
+            try {
+                Item resolved = BuiltInRegistries.ITEM.getOptional(itemId).orElse(null);
+                if (resolved != null && resolved != net.minecraft.world.item.Items.AIR) {
+                    return new ItemStack(resolved, amount);
+                }
+            } catch (Exception ignored) {
+                // 注册表还没就绪 / id 非法：当作还没登记的自定义物品，走下面的兜底
+            }
+        }
+
+        // ③ 兜底：当作「还没登记的自定义物品」，留一个空壳（延后生效）
+        SRE.LOGGER.warn(
+                "[CustomRole] Item '{}' is neither a loaded custom item nor a vanilla/mod item; kept as an unconfigured custom item placeholder",
+                value);
+        return io.wifi.starrailexpress.customitem.CustomItemLoader.buildPlaceholder(customId, amount);
+    }
+}

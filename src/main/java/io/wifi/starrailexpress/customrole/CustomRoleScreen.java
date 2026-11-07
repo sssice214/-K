@@ -1,0 +1,1485 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.customrole;
+
+import io.wifi.starrailexpress.SREConfig;
+import io.wifi.starrailexpress.api.AreasSettingUtils.MapSpecialFeatures;
+import io.wifi.starrailexpress.cca.SREPlayerTaskComponent;
+import io.wifi.starrailexpress.client.gui.SREPanelStyle;
+import io.wifi.starrailexpress.client.gui.screen.CustomEditorScreen;
+import io.wifi.starrailexpress.customrole.CustomRoleData.EffectEntry;
+import io.wifi.starrailexpress.customrole.CustomRoleData.InstinctModeData;
+import io.wifi.starrailexpress.customrole.CustomRoleData.InitialItemEntry;
+import io.wifi.starrailexpress.customrole.CustomRoleData.ShopEntryData;
+import net.fabricmc.api.EnvType;
+import net.fabricmc.api.Environment;
+import net.minecraft.ChatFormatting;
+import net.minecraft.network.chat.Component;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
+
+/**
+ * 自定义职业编辑界面（5 页：基础 / 进阶 / 能力 / 生成 / 商店）。
+ *
+ * <p>
+ * 布局、页签、滚动、渲染与鼠标键盘全部交给 {@link CustomEditorScreen}。这次改造修掉了旧实现里
+ * 三个会直接影响使用的问题：
+ * <ol>
+ * <li>旧实现把 5 个页签的控件<b>全部</b>注册进事件系统，只绘制当前页签 —— 各页签的同坐标控件完全重合，
+ * 点击会命中别的页签里看不见的输入框，打字会写进别的页签的数据；现在只注册当前页签；</li>
+ * <li>旧实现用 {@code init(minecraft, width, height)} 原地重建（37 处），绕过了 {@code clearWidgets()}，
+ * 每次重建都往事件系统里再注册一遍控件、只增不减；现在统一走 {@link #requestRebuild()}；</li>
+ * <li>行内控件靠 {@code fieldX() + 220} 这类写死偏移横向拼接，面板一窄就戳出面板、被裁掉还点不到；
+ * 现在用 {@link #cluster} 声明，装不下自动折行。</li>
+ * </ol>
+ *
+ * <p>
+ * 文案一律走翻译键（{@code sre.custom_role.*}）。
+ */
+@Environment(EnvType.CLIENT)
+public class CustomRoleScreen extends CustomEditorScreen {
+
+    private static final String PREFIX = "sre.custom_role";
+    private static final String[] TABS = { "basic", "advanced", "ability", "generation", "shop" };
+
+    private CustomRoleData data = new CustomRoleData();
+    private String originalEnglishId = "";
+    private int moodIndex;
+    /** 开局入场提示颜色在预设列表里的下标（编辑界面切换按钮时使用，保存前写回 data.entranceHintColor）。 */
+    private int entranceColorIndex = 0;
+
+    /** 开局入场提示可选颜色（与现有入场提示一致，默认 YELLOW）。 */
+    private static final ChatFormatting[] ENTRANCE_COLORS = {
+            ChatFormatting.WHITE, ChatFormatting.YELLOW, ChatFormatting.GOLD, ChatFormatting.RED,
+            ChatFormatting.DARK_RED, ChatFormatting.GREEN, ChatFormatting.DARK_GREEN, ChatFormatting.BLUE,
+            ChatFormatting.DARK_BLUE, ChatFormatting.AQUA, ChatFormatting.DARK_AQUA,
+            ChatFormatting.LIGHT_PURPLE, ChatFormatting.DARK_PURPLE, ChatFormatting.BLACK
+    };
+
+    /** 任务列表编辑器里「候选类型」的下标持有者（点按钮循环切换，重建界面后保持）。 */
+    private final int[] unrefreshableTaskCursor = { 0 };
+    private final int[] onlyRefreshableTaskCursor = { 0 };
+
+    public CustomRoleScreen() {
+        super(Component.translatable(PREFIX + ".title"));
+        syncToggles();
+    }
+
+    public CustomRoleScreen(CustomRoleData d) {
+        super(Component.translatable(PREFIX + ".title"));
+        if (d != null) {
+            this.data = d;
+            this.originalEnglishId = d.englishId == null ? "" : d.englishId;
+        }
+        syncToggles();
+    }
+
+    private void syncToggles() {
+        moodIndex = "FAKE".equalsIgnoreCase(data.moodType) ? 1 : 0;
+        entranceColorIndex = 0;
+        if (data.entranceHintColor != null) {
+            for (int i = 0; i < ENTRANCE_COLORS.length; i++) {
+                if (ENTRANCE_COLORS[i].name().equalsIgnoreCase(data.entranceHintColor)) {
+                    entranceColorIndex = i;
+                    break;
+                }
+            }
+        }
+    }
+
+    @Override
+    protected String translationPrefix() {
+        return PREFIX;
+    }
+
+    @Override
+    protected String[] tabKeys() {
+        return TABS;
+    }
+
+    @Override
+    protected void buildTab(int tab) {
+        switch (tab) {
+            case 0 -> buildBasicTab();
+            case 1 -> buildAdvancedTab();
+            case 2 -> buildAbilityTab();
+            case 3 -> buildGenerationTab();
+            case 4 -> buildShopTab();
+            default -> {
+            }
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // 行包装
+    // ══════════════════════════════════════════════════════════════════
+
+    private static Component hint(String key) {
+        return key == null || key.isEmpty() ? null : Component.translatable(key);
+    }
+
+    /** 标签列 + 字段区撑满的文本行（限长 + 占位提示 + 悬停全文）。 */
+    private int textRow(int r, String labelKey, String value, int limit, String hintKey, Consumer<String> setter) {
+        return field(r, labelKey, value, limit, hint(hintKey), setter);
+    }
+
+    /** 标签列 + 定宽数值框（数值解析、越界钳制都在调用方的 setter 里）。 */
+    private int numRow(int r, String labelKey, String value, int width, String hintKey, Consumer<String> setter) {
+        return cluster(r, labelKey, fixedBox(value, LIMIT_NUMBER, width, hint(hintKey), setter));
+    }
+
+    /** 一行只有一个「＋」式的按钮（列表尾部追加用）。 */
+    private int addRow(int r, Component text, Runnable onClick) {
+        return cluster(r, null, fixedButton(text, 160, onClick));
+    }
+
+    /**
+     * 三态开关（是 / 否 / 未设置）：一行一个或一行两个都用它。
+     *
+     * <p>
+     * 点击**不重建界面**（只有影响显示哪些字段的才传 {@code rebuild}），切换后不会丢焦点、也不会跳回顶部。
+     */
+    private Cell triCell(String key, Boolean current, Consumer<Boolean> setter, boolean rebuild) {
+        return triSwitchCell(key, current, setter, rebuild);
+    }
+
+    /** 每行一个「×」的删除行（列表项用）。 */
+    private int removeRow(int r, Component text, Runnable onClick) {
+        return cluster(r, null, fixedButton(text, 200, onClick));
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // 页 0：基础
+    // ══════════════════════════════════════════════════════════════════
+    private void buildBasicTab() {
+        int r = 0;
+        r = field(r, PREFIX + ".label.english_id", data.englishId, 64, hint(PREFIX + ".hint.english_id"),
+                value -> data.englishId = value.toLowerCase());
+        r = textRow(r, PREFIX + ".label.display_name", data.displayName, LIMIT_NAME,
+                PREFIX + ".hint.display_name", value -> data.displayName = value);
+        r = textRow(r, PREFIX + ".label.goals", data.goals, LIMIT_TEXT, PREFIX + ".hint.goals",
+                value -> data.goals = value);
+        r = textRow(r, PREFIX + ".label.description", data.description, LIMIT_TEXT,
+                PREFIX + ".hint.description", value -> data.description = value);
+
+        // 自定义标签：挂成运行时职业的 flags，介绍页就能按它筛选
+        r = lines(r, PREFIX + ".label.tags", data.tags, LIMIT_ID, PREFIX + ".hint.tags", null,
+                PREFIX + ".add_tag", PREFIX + ".remove", Integer.MAX_VALUE);
+
+        StringBuilder effects = new StringBuilder();
+        for (EffectEntry entry : data.initialEffects) {
+            if (!effects.isEmpty()) {
+                effects.append(";");
+            }
+            effects.append(entry.effectId).append(",").append(entry.amplifier);
+        }
+        r = cluster(r, PREFIX + ".label.effects",
+                box(effects.toString(), LIMIT_COMMAND, 200, hint(PREFIX + ".hint.effects_example"), value -> {
+                    data.initialEffects.clear();
+                    if (value == null || value.isBlank()) {
+                        return;
+                    }
+                    java.util.regex.Matcher matcher = java.util.regex.Pattern
+                            .compile("([a-z0-9_\\-.:]+)[,:](\\d+)", java.util.regex.Pattern.CASE_INSENSITIVE)
+                            .matcher(value);
+                    while (matcher.find()) {
+                        int level = 0;
+                        try {
+                            level = Integer.parseInt(matcher.group(2));
+                        } catch (Exception ignored) {
+                        }
+                        data.initialEffects.add(new EffectEntry(matcher.group(1).trim(), level));
+                    }
+                }));
+
+        r = rgb(r, PREFIX + ".label.color_rgb", null,
+                new int[] { data.colorR, data.colorG, data.colorB }, value -> {
+                    data.colorR = value[0];
+                    data.colorG = value[1];
+                    data.colorB = value[2];
+                });
+
+        r = cluster(r, null,
+                toggleCell(PREFIX + ".is_innocent", data.isInnocent, value -> data.isInnocent = value, false),
+                toggleCell(PREFIX + ".can_use_killer", data.canUseKiller, value -> data.canUseKiller = value, false));
+
+        // 心情类型：真实 / 伪装（按钮文字就地刷新，不用重建）
+        r = cluster(r, PREFIX + ".label.mood",
+                stateButtonCell(() -> Component.translatable(PREFIX + ".mood.current").append(": ")
+                        .append(Component.translatable(PREFIX + ".mood." + (moodIndex == 0 ? "real" : "fake"))),
+                        () -> {
+                            moodIndex = (moodIndex + 1) % 2;
+                            data.moodType = moodIndex == 0 ? "REAL" : "FAKE";
+                        }, false));
+
+        // 心情值(san)上限：默认 1.0，可设 0~1 或更高；setMaxMood 内部已夹取为 >=0
+        r = numRow(r, PREFIX + ".label.mood_max", String.valueOf(data.moodMax), 80,
+                PREFIX + ".hint.mood_max_default", value -> {
+                    try {
+                        data.moodMax = Float.parseFloat(value);
+                    } catch (Exception ignored) {
+                    }
+                });
+
+        // 心情颜色覆盖（R/G/B，任一 <0 视为不覆盖）
+        r = numRow(r, PREFIX + ".label.mood_color_r", String.valueOf(data.moodColorR), 60,
+                PREFIX + ".hint.minus_one_default", value -> {
+                    try {
+                        data.moodColorR = Integer.parseInt(value);
+                    } catch (Exception ignored) {
+                    }
+                });
+        r = numRow(r, PREFIX + ".label.mood_color_g", String.valueOf(data.moodColorG), 60,
+                PREFIX + ".hint.minus_one_default", value -> {
+                    try {
+                        data.moodColorG = Integer.parseInt(value);
+                    } catch (Exception ignored) {
+                    }
+                });
+        r = numRow(r, PREFIX + ".label.mood_color_b", String.valueOf(data.moodColorB), 60,
+                PREFIX + ".hint.minus_one_default", value -> {
+                    try {
+                        data.moodColorB = Integer.parseInt(value);
+                    } catch (Exception ignored) {
+                    }
+                });
+
+        r = numRow(r, PREFIX + ".label.sprint_mult", String.valueOf(data.sprintMultiplier), 80,
+                PREFIX + ".hint.default_one", value -> {
+                    try {
+                        data.sprintMultiplier = Double.parseDouble(value);
+                    } catch (Exception ignored) {
+                    }
+                });
+        r = cluster(r, null,
+                toggleCell(PREFIX + ".infinite_sprint", data.infiniteSprint, value -> data.infiniteSprint = value,
+                        false),
+                toggleCell(PREFIX + ".can_see_time", data.canSeeTime, value -> data.canSeeTime = value, false));
+
+        // 开局入场提示：输入框输入文本（为空则无提示），按钮选择文本颜色
+        r = section(r, PREFIX + ".entrance_hint_section");
+        r = textRow(r, PREFIX + ".label.entrance_hint", data.entranceHint, LIMIT_TEXT,
+                PREFIX + ".hint.entrance_hint", value -> data.entranceHint = value);
+        r = cluster(r, PREFIX + ".label.entrance_hint_color",
+                stateButtonCell(() -> Component.translatable(PREFIX + ".entrance_hint_color.current",
+                                ENTRANCE_COLORS[entranceColorIndex].name()),
+                        () -> {
+                            entranceColorIndex = (entranceColorIndex + 1) % ENTRANCE_COLORS.length;
+                            data.entranceHintColor = ENTRANCE_COLORS[entranceColorIndex].name();
+                        }, false));
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // 页 1：进阶
+    // ══════════════════════════════════════════════════════════════════
+    private void buildAdvancedTab() {
+        int r = 0;
+        // ── 阵营分组：中立阵营 / 警长阵营 / 杀手方中立 / 偏好中立 / 特殊中立 ──
+        r = cluster(r, null,
+                triCell(PREFIX + ".set_neutrals", data.setNeutrals, value -> data.setNeutrals = value, true),
+                triCell(PREFIX + ".set_vigilante_team", data.setVigilanteTeam,
+                        value -> data.setVigilanteTeam = value, false));
+        r = cluster(r, null,
+                triCell(PREFIX + ".set_neutral_for_killer", data.setNeutralForKiller,
+                        value -> data.setNeutralForKiller = value, true),
+                triCell(PREFIX + ".neutral_for_innocent", data.neutralForInnocent,
+                        value -> data.neutralForInnocent = value, false));
+        r = cluster(r, null,
+                triCell(PREFIX + ".special_neutral", data.specialNeutral,
+                        value -> data.specialNeutral = value, false));
+
+        r = numRow(r, PREFIX + ".label.occupied_role_count", String.valueOf(data.occupiedRoleCount), 80,
+                PREFIX + ".hint.default_one", value -> {
+                    try {
+                        data.occupiedRoleCount = Integer.parseInt(value);
+                    } catch (Exception ignored) {
+                    }
+                });
+        r = numRow(r, PREFIX + ".label.max_count", String.valueOf(data.maxCount), 80,
+                PREFIX + ".hint.default_one", value -> {
+                    try {
+                        data.maxCount = Integer.parseInt(value);
+                    } catch (Exception ignored) {
+                    }
+                });
+
+        // ── 与阵营分开的三项：可看到金币 / 可捡起左轮手枪 / 看到队友杀手身份（置于被动收入之前）──
+        r = cluster(r, null,
+                toggleCell(PREFIX + ".can_see_coin", data.canSeeCoin, value -> data.canSeeCoin = value, false),
+                triCell(PREFIX + ".able_pickup_revolver", data.ableToPickUpRevolver,
+                        value -> data.ableToPickUpRevolver = value, false));
+        r = cluster(r, null,
+                triCell(PREFIX + ".can_see_teammate_killer", data.canSeeTeammateKiller,
+                        value -> data.canSeeTeammateKiller = value, false));
+
+        r = cluster(r, null,
+                triCell(PREFIX + ".can_auto_add_money", data.canAutoAddMoney,
+                        value -> data.canAutoAddMoney = value, false),
+                triCell(PREFIX + ".can_auto_add_minigame_token", data.canAutoAddMiniGameToken,
+                        value -> data.canAutoAddMiniGameToken = value, false));
+        r = cluster(r, null,
+                triCell(PREFIX + ".can_climb_walls", data.canClimbWalls,
+                        value -> data.canClimbWalls = value, false));
+        r = cluster(r, null,
+                triCell(PREFIX + ".can_uncuff_others", data.canUncuffOthers,
+                        value -> data.canUncuffOthers = value, false));
+        r = cluster(r, null,
+                toggleCell(PREFIX + ".can_be_randomed", data.canBeRandomedByOtherRoles,
+                        value -> data.canBeRandomedByOtherRoles = value, false),
+                triCell(PREFIX + ".can_ignore_blackout", data.canIgnoreBlackout,
+                        value -> data.canIgnoreBlackout = value, false));
+        r = cluster(r, null,
+                triCell(PREFIX + ".can_see_body_items", data.canSeeBodyItems,
+                        value -> data.canSeeBodyItems = value, false),
+                triCell(PREFIX + ".can_see_body_role_info", data.canSeeBodyRoleInfo,
+                        value -> data.canSeeBodyRoleInfo = value, false));
+        r = cluster(r, null,
+                triCell(PREFIX + ".can_see_body_death_reason", data.canSeeBodyDeathReason,
+                        value -> data.canSeeBodyDeathReason = value, false),
+                triCell(PREFIX + ".can_see_body_killer", data.canSeeBodyKiller,
+                        value -> data.canSeeBodyKiller = value, false));
+
+        // === 职业通用属性补全 ===
+        r = gap(r);
+        r = cluster(r, null,
+                triCell(PREFIX + ".mafia_team", data.mafiaTeam, value -> data.mafiaTeam = value, false));
+        r = cluster(r, null,
+                triCell(PREFIX + ".can_see_body_name", data.canSeeBodyName, value -> data.canSeeBodyName = value,
+                        false),
+                triCell(PREFIX + ".can_use_skill_while_spectator", data.canUseSkillWhileSpectator,
+                        value -> data.canUseSkillWhileSpectator = value, false));
+        r = cluster(r, null,
+                triCell(PREFIX + ".can_be_poisoned", data.canBePoisoned, value -> data.canBePoisoned = value, false),
+                triCell(PREFIX + ".hidden_for_role_rotation", data.hiddenForRoleRotation,
+                        value -> data.hiddenForRoleRotation = value, false));
+        r = cluster(r, null,
+                triCell(PREFIX + ".special_vigilante", data.specialVigilante,
+                        value -> data.specialVigilante = value, false),
+                triCell(PREFIX + ".refreshable_special_vigilante", data.refreshableSpecialVigilante,
+                        value -> data.refreshableSpecialVigilante = value, false));
+        r = numRow(r, PREFIX + ".label.refresh_special_vigilante_chance",
+                String.valueOf(data.refreshableSpecialVigilanteChance), 80, PREFIX + ".hint.chance_range_10000",
+                value -> {
+                    try {
+                        data.refreshableSpecialVigilanteChance = Math.min(10000, Math.max(0,
+                                Integer.parseInt(value)));
+                    } catch (Exception ignored) {
+                    }
+                });
+        r = cluster(r, null,
+                triCell(PREFIX + ".can_jump_manhole", data.canJumpManhole, value -> data.canJumpManhole = value,
+                        false),
+                triCell(PREFIX + ".can_across_fog", data.canAcrossFog, value -> data.canAcrossFog = value, false));
+        r = cluster(r, null,
+                triCell(PREFIX + ".can_use_sabotage", data.canUseSabotage, value -> data.canUseSabotage = value,
+                        false));
+
+        // === 免疫 / 经济 / 战斗 / 杀手同伙 ===
+        r = gap(r);
+        r = cluster(r, null,
+                triCell(PREFIX + ".fall_damage_immune", data.fallDamageImmune,
+                        value -> data.fallDamageImmune = value, false),
+                triCell(PREFIX + ".darkness_immune", data.darknessImmune, value -> data.darknessImmune = value,
+                        false));
+        // 摔落致死高度：不免疫摔落时生效；-1 = 跟随地图设置（需要数值，用输入框填写）
+        r = numRow(r, PREFIX + ".label.fall_to_death_height", String.valueOf(data.fallToDeathHeight), 80,
+                PREFIX + ".hint.fall_to_death_height", value -> {
+                    try {
+                        data.fallToDeathHeight = Integer.parseInt(value);
+                    } catch (Exception ignored) {
+                    }
+                });
+        r = cluster(r, null,
+                triCell(PREFIX + ".environmental_immune", data.environmentalImmune,
+                        value -> data.environmentalImmune = value, false),
+                triCell(PREFIX + ".no_coin_system", data.noCoinSystem, value -> data.noCoinSystem = value, false));
+        r = numRow(r, PREFIX + ".label.initial_coin_count", String.valueOf(data.initialCoinCount), 80,
+                PREFIX + ".hint.minus_one_no_change", value -> {
+                    try {
+                        data.initialCoinCount = Integer.parseInt(value);
+                    } catch (Exception ignored) {
+                    }
+                });
+        r = cluster(r, null,
+                triCell(PREFIX + ".cannot_earn_coin_from_kills", data.cannotEarnCoinFromKills,
+                        value -> data.cannotEarnCoinFromKills = value, false));
+        r = numRow(r, PREFIX + ".label.neutral_kill_coin", String.valueOf(data.neutralKillCoin), 80,
+                PREFIX + ".hint.zero_no_give", value -> {
+                    try {
+                        data.neutralKillCoin = Math.max(0, Integer.parseInt(value));
+                    } catch (Exception ignored) {
+                    }
+                });
+        r = cluster(r, null,
+                triCell(PREFIX + ".can_kill_with_bow_crossbow", data.canKillWithBowAndCrossbow,
+                        value -> data.canKillWithBowAndCrossbow = value, false),
+                triCell(PREFIX + ".can_kill_with_trident", data.canKillWithTrident,
+                        value -> data.canKillWithTrident = value, false));
+        r = cluster(r, null,
+                triCell(PREFIX + ".cannot_knife_left_click", data.cannotKnifeLeftClick,
+                        value -> data.cannotKnifeLeftClick = value, false));
+        r = cluster(r, null,
+                triCell(PREFIX + ".can_use_dream_axe", data.canUseDreamAxe, value -> data.canUseDreamAxe = value,
+                        false),
+                triCell(PREFIX + ".killer_teammate_visibility_enabled", data.killerTeammateVisibilityEnabled,
+                        value -> data.killerTeammateVisibilityEnabled = value, false));
+        r = cluster(r, null,
+                triCell(PREFIX + ".can_be_seen_as_killer_teammate", data.canBeSeenAsKillerTeammate,
+                        value -> data.canBeSeenAsKillerTeammate = value, false));
+
+        // === 自定义独立胜利 (仅中立 && !杀手方中立时可用) ===
+        boolean isNeutral = data.setNeutrals != null && data.setNeutrals;
+        boolean isNotKillerNeutral = data.setNeutralForKiller != null && !data.setNeutralForKiller;
+        if (isNeutral && isNotKillerNeutral) {
+            r = section(r, PREFIX + ".custom_win_section");
+            r = cluster(r, null,
+                    toggleCell(PREFIX + ".enable_custom_win", data.enableCustomWin,
+                            value -> data.enableCustomWin = value, true));
+            if (data.enableCustomWin) {
+                r = textRow(r, PREFIX + ".custom_win_title", data.customWinTitle, LIMIT_NAME, null,
+                        value -> data.customWinTitle = value);
+                r = textRow(r, PREFIX + ".custom_win_subtitle", data.customWinSubtitle, LIMIT_NAME, null,
+                        value -> data.customWinSubtitle = value);
+                // 存活到最后（细分模式）：点击在 关闭 → 顶替平民 → 顶替杀手 → 顶替双方 之间循环。
+                // 该条件不会阻碍游戏正常结束，只会在对应胜负下改判为本职业独立胜利。
+                r = cluster(r, PREFIX + ".custom_win_survive_mode",
+                        stateButtonCell(() -> Component.translatable(surviveModeKey(currentSurviveMode()))
+                                .append(Component.literal(" ↻")), () -> {
+                            data.customWinSurviveToLastMode = cycleSurviveMode(currentSurviveMode());
+                            // 使用细分模式后清掉旧布尔字段，避免两处同时生效
+                            data.customWinSurviveToLast = false;
+                            if (!data.customWinSurviveToLastMode.isEmpty()) {
+                                data.customWinLastAlive = false;
+                            }
+                        }, false));
+                // 与「只剩自己存活」互斥：打开后者时关闭「存活到最后」模式（需要重建刷新文案）
+                r = cluster(r, null,
+                        toggleCell(PREFIX + ".custom_win_last_alive", data.customWinLastAlive, value -> {
+                            data.customWinLastAlive = value;
+                            if (value) {
+                                data.customWinSurviveToLastMode = "";
+                                data.customWinSurviveToLast = false;
+                            }
+                        }, true));
+                r = textRow(r, PREFIX + ".custom_win_with_roles",
+                        String.join(";", data.customWinLastWithRoles), LIMIT_TEXT,
+                        PREFIX + ".hint.role_semicolon_list", value -> {
+                            data.customWinLastWithRoles.clear();
+                            for (String part : value.split(";")) {
+                                String trimmed = part.trim();
+                                if (!trimmed.isEmpty()) {
+                                    data.customWinLastWithRoles.add(trimmed);
+                                }
+                            }
+                        });
+                // 指定职业是否需存活：默认开（原行为）；关闭后指定职业全灭、场上只剩自己时也能获胜
+                r = cluster(r, null,
+                        toggleCell(PREFIX + ".custom_win_with_roles_need_alive",
+                                data.customWinLastWithRolesNeedAlive,
+                                value -> data.customWinLastWithRolesNeedAlive = value, true));
+                r = textRow(r, PREFIX + ".custom_win_tag_sleep", data.customWinTagSleep, LIMIT_TEXT,
+                        PREFIX + ".hint.customwin_tag", value -> data.customWinTagSleep = value.trim());
+                r = textRow(r, PREFIX + ".custom_win_held_item", data.customWinHeldItem, LIMIT_PATH,
+                        PREFIX + ".hint.item_example", value -> data.customWinHeldItem = value.trim());
+            }
+        }
+
+        // === 跟随获胜（任何职业均可配置，不要求中立） ===
+        r = section(r, PREFIX + ".follow_win_section");
+        r = cluster(r, null,
+                toggleCell(PREFIX + ".enable_follow_win", data.enableFollowWin,
+                        value -> data.enableFollowWin = value, true));
+        if (data.enableFollowWin) {
+            // 跟随条件：无条件 / 存活到最后 / 在该阵营玩家周围
+            r = cluster(r, PREFIX + ".follow_win_condition",
+                    stateButtonCell(() -> Component.translatable(enumKey(PREFIX + ".follow_win_condition",
+                            currentFollowCondition())).append(Component.literal(" ↻")), () -> {
+                        data.followWinCondition = cycleOption(FOLLOW_CONDITIONS, currentFollowCondition());
+                    }, false));
+            // 跟随阵营：不设置 / 最终结算(不含中立) / 最终结算(含中立) / 仅平民 / 仅杀手
+            r = cluster(r, PREFIX + ".follow_win_faction",
+                    stateButtonCell(() -> Component.translatable(enumKey(PREFIX + ".follow_win_faction",
+                            currentFollowFaction())).append(Component.literal(" ↻")), () -> {
+                        data.followWinFaction = cycleOption(FOLLOW_FACTIONS, currentFollowFaction());
+                    }, false));
+            // 跟随特定职业（填职业 id，默认空）
+            r = textRow(r, PREFIX + ".follow_win_role_id", data.followWinRoleId, LIMIT_PATH,
+                    PREFIX + ".hint.follow_win_role_id", value -> data.followWinRoleId = value.trim());
+            // 跟随带特定修饰符的玩家获胜（填修饰符 id，默认空）
+            r = textRow(r, PREFIX + ".follow_win_modifier_id", data.followWinModifierId, LIMIT_PATH,
+                    PREFIX + ".hint.follow_win_modifier_id", value -> data.followWinModifierId = value.trim());
+        }
+
+        // 特殊地图类型限制（枚举按钮，默认 ALL）
+        r = cluster(r, PREFIX + ".special_map_role",
+                stateButtonCell(() -> Component.translatable(PREFIX + ".special_map_role.current").append(": ")
+                        .append(Component.literal(data.specialMapRole)), () -> {
+                            // 直接取自枚举，避免像以前那样漏掉 HORSE 之类的特性
+                            String[] values = java.util.Arrays.stream(MapSpecialFeatures.values())
+                                    .map(MapSpecialFeatures::name).toArray(String[]::new);
+                            int index = java.util.Arrays.asList(values).indexOf(data.specialMapRole);
+                            if (index < 0) {
+                                // 配置里是非法值（或大小写不符）：先回到 ALL，避免按一下按钮就跳到别的特性上
+                                data.specialMapRole = "ALL";
+                            } else {
+                                data.specialMapRole = values[(index + 1) % values.length];
+                            }
+                        }, false));
+
+        // 小游戏任务独立计时 / 被透视时隐藏职业信息
+        r = cluster(r, null,
+                triCell(PREFIX + ".independent_minigame_timing", data.independentMinigameTiming,
+                        value -> data.independentMinigameTiming = value, false),
+                triCell(PREFIX + ".hide_role_info_when_seen", data.hideRoleInfoWhenSeen,
+                        value -> data.hideRoleInfoWhenSeen = value, false));
+        // 能否"小脑"别人 / 能否被别人"小脑"
+        r = cluster(r, null,
+                triCell(PREFIX + ".can_xiaonao", data.canXiaonao, value -> data.canXiaonao = value, false),
+                triCell(PREFIX + ".can_be_xiaonao", data.canBeXiaonao, value -> data.canBeXiaonao = value, false));
+        // 结算时计入"存活好人" / "存活杀手"计数
+        r = cluster(r, null,
+                triCell(PREFIX + ".can_increase_surviving_innocents", data.canIncreaseSurvivingInnocents,
+                        value -> data.canIncreaseSurvivingInnocents = value, false),
+                triCell(PREFIX + ".can_increase_surviving_killers", data.canIncreaseSurvivingKillers,
+                        value -> data.canIncreaseSurvivingKillers = value, false));
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // 页 2：能力
+    // ══════════════════════════════════════════════════════════════════
+    private void buildAbilityTab() {
+        int r = 0;
+
+        // ═══ 初始物品 ═══
+        r = gap(r);
+        if (data.initialItems.isEmpty()) {
+            data.initialItems.add(new InitialItemEntry());
+        }
+        for (InitialItemEntry entry : data.initialItems) {
+            r = itemEntryRow(r, PREFIX + ".label.initial_items", data.initialItems, entry);
+        }
+
+        // ═══ 任务奖励（完成 N 个任务给物品） ═══
+        r = section(r, PREFIX + ".task_reward_section");
+        r = numRow(r, PREFIX + ".label.task_reward_count", String.valueOf(data.taskRewardCount), 60,
+                PREFIX + ".hint.zero_off", value -> {
+                    try {
+                        data.taskRewardCount = Integer.parseInt(value);
+                    } catch (Exception ignored) {
+                    }
+                });
+        r = numRow(r, PREFIX + ".label.task_reward_max_triggers",
+                String.valueOf(data.taskRewardMaxTriggers), 60, PREFIX + ".hint.default_one", value -> {
+                    try {
+                        data.taskRewardMaxTriggers = Integer.parseInt(value);
+                    } catch (Exception ignored) {
+                    }
+                });
+        r = cluster(r, null,
+                toggleCell(PREFIX + ".task_reward_unlimited", data.taskRewardUnlimited,
+                        value -> data.taskRewardUnlimited = value, false),
+                toggleCell(PREFIX + ".task_reward_silent", data.taskRewardSilent,
+                        value -> data.taskRewardSilent = value, false));
+        r = textRow(r, PREFIX + ".task_reward_message", data.taskRewardMessage, LIMIT_TEXT, null,
+                value -> data.taskRewardMessage = value);
+        if (data.taskRewardItems.isEmpty()) {
+            data.taskRewardItems.add(new InitialItemEntry());
+        }
+        for (InitialItemEntry entry : data.taskRewardItems) {
+            r = itemEntryRow(r, PREFIX + ".label.task_reward_items", data.taskRewardItems, entry);
+        }
+
+        // ═══ 直觉系统 ═══
+        r = section(r, PREFIX + ".instinct_section");
+        r = cluster(r, null,
+                toggleCell(PREFIX + ".can_use_instinct", data.canUseInstinct, value -> {
+                    data.canUseInstinct = value;
+                    if (!value) {
+                        data.instinctModes.clear();
+                    }
+                }, true),
+                triCell(PREFIX + ".instinct_night_vision", data.instinctNightVision,
+                        value -> data.instinctNightVision = value, false));
+
+        if (data.canUseInstinct) {
+            ensureInstinctMode();
+            InstinctModeData mode = data.instinctModes.get(0);
+
+            // 同阵营分类开关（参考教父家族本能）
+            r = cluster(r, null,
+                    toggleCell(PREFIX + ".instinct_faction_enabled", mode.factionEnabled,
+                            value -> mode.factionEnabled = value, true));
+            if (mode.factionEnabled) {
+                // 将某职业 / 拥有某修饰符的玩家拉入同阵营（逗号分隔）
+                r = textRow(r, PREFIX + ".instinct_faction_roles", mode.factionRoles, LIMIT_TEXT,
+                        PREFIX + ".hint.faction_roles", value -> mode.factionRoles = value.trim());
+                r = textRow(r, PREFIX + ".instinct_faction_modifiers", mode.factionModifiers, LIMIT_TEXT,
+                        PREFIX + ".hint.faction_modifiers", value -> mode.factionModifiers = value.trim());
+                r = cluster(r, null,
+                        toggleCell(PREFIX + ".instinct_faction_no_friendly_fire", mode.factionNoFriendlyFire,
+                                value -> mode.factionNoFriendlyFire = value, false),
+                        toggleCell(PREFIX + ".instinct_faction_unlimited_range", mode.factionUnlimitedRange,
+                                value -> mode.factionUnlimitedRange = value, false));
+                r = cluster(r, null,
+                        toggleCell(PREFIX + ".instinct_faction_only", mode.factionOnly,
+                                value -> mode.factionOnly = value, false));
+                // 同阵营颜色（不含杀手透视逻辑）/ 非同阵营颜色（包含所有）
+                r = cluster(r, PREFIX + ".instinct_faction_seeing",
+                        factionInstinctCell(() -> mode.factionSeeingOff, value -> mode.factionSeeingOff = value),
+                        factionInstinctCell(() -> mode.factionSeeingOn, value -> mode.factionSeeingOn = value));
+                r = cluster(r, PREFIX + ".instinct_faction_other_seeing",
+                        instinctCell(() -> mode.factionOtherSeeingOff, value -> mode.factionOtherSeeingOff = value),
+                        instinctCell(() -> mode.factionOtherSeeingOn, value -> mode.factionOtherSeeingOn = value));
+                if (isCustomType(mode.factionSeeingOff) || isCustomType(mode.factionSeeingOn)) {
+                    r = cluster(r, PREFIX + ".instinct_faction_custom_color",
+                            fixedBox(findFirstCustomHex(mode.factionSeeingOff, mode.factionSeeingOn), 32, 80,
+                                    hint(PREFIX + ".hint.hex"), value -> {
+                                        String hex = value.trim().replaceAll("[^0-9a-fA-F]", "");
+                                        if (hex.isEmpty()) {
+                                            hex = "FF0000";
+                                        }
+                                        String newValue = "CUSTOM(0x" + hex + ")";
+                                        if (isCustomType(mode.factionSeeingOff)) {
+                                            mode.factionSeeingOff = newValue;
+                                        }
+                                        if (isCustomType(mode.factionSeeingOn)) {
+                                            mode.factionSeeingOn = newValue;
+                                        }
+                                    }));
+                }
+                if (isCustomType(mode.factionOtherSeeingOff) || isCustomType(mode.factionOtherSeeingOn)) {
+                    r = cluster(r, PREFIX + ".instinct_faction_other_custom_color",
+                            fixedBox(findFirstCustomHex(mode.factionOtherSeeingOff, mode.factionOtherSeeingOn), 32, 80,
+                                    hint(PREFIX + ".hint.hex"), value -> {
+                                        String hex = value.trim().replaceAll("[^0-9a-fA-F]", "");
+                                        if (hex.isEmpty()) {
+                                            hex = "FF0000";
+                                        }
+                                        String newValue = "CUSTOM(0x" + hex + ")";
+                                        if (isCustomType(mode.factionOtherSeeingOff)) {
+                                            mode.factionOtherSeeingOff = newValue;
+                                        }
+                                        if (isCustomType(mode.factionOtherSeeingOn)) {
+                                            mode.factionOtherSeeingOn = newValue;
+                                        }
+                                    }));
+                }
+            } else {
+                // 看别人（启用同阵营分类后不再生效）
+                r = cluster(r, PREFIX + ".instinct_seeing",
+                        instinctCell(() -> mode.seeingOff, value -> mode.seeingOff = value),
+                        instinctCell(() -> mode.seeingOn, value -> mode.seeingOn = value));
+            }
+            // 被看
+            r = cluster(r, PREFIX + ".instinct_be_seen",
+                    instinctCell(() -> mode.beSeenOff, value -> mode.beSeenOff = value),
+                    instinctCell(() -> mode.beSeenOn, value -> mode.beSeenOn = value));
+
+            // 自定义颜色输入（当任一字段为 CUSTOM 时显示）
+            boolean baseSeeingCustom = !mode.factionEnabled
+                    && (isCustomType(mode.seeingOff) || isCustomType(mode.seeingOn));
+            boolean hasCustom = baseSeeingCustom || isCustomType(mode.beSeenOff) || isCustomType(mode.beSeenOn);
+            if (hasCustom) {
+                // 收集所有 CUSTOM 字段，使用同一个颜色输入
+                r = cluster(r, PREFIX + ".instinct_custom_color",
+                        fixedBox(findFirstCustomHex(mode), 32, 80, hint(PREFIX + ".hint.hex"), value -> {
+                            String hex = value.trim().replaceAll("[^0-9a-fA-F]", "");
+                            if (hex.isEmpty()) {
+                                hex = "FF0000";
+                            }
+                            String newValue = "CUSTOM(0x" + hex + ")";
+                            if (baseSeeingCustom) {
+                                if (isCustomType(mode.seeingOff)) {
+                                    mode.seeingOff = newValue;
+                                }
+                                if (isCustomType(mode.seeingOn)) {
+                                    mode.seeingOn = newValue;
+                                }
+                            }
+                            if (isCustomType(mode.beSeenOff)) {
+                                mode.beSeenOff = newValue;
+                            }
+                            if (isCustomType(mode.beSeenOn)) {
+                                mode.beSeenOn = newValue;
+                            }
+                        }));
+            }
+
+            // 看别人最大距离（透视范围）
+            r = cluster(r, PREFIX + ".label.instinct_range",
+                    fixedBox(mode.maxRange, LIMIT_TEXT, 80, hint(PREFIX + ".hint.any_range"),
+                            value -> mode.maxRange = value));
+            // 被透视最大距离（被别人看范围，独立）
+            r = cluster(r, PREFIX + ".label.instinct_beseen_range",
+                    fixedBox(mode.beSeenMaxRange == null ? "*" : mode.beSeenMaxRange, LIMIT_TEXT, 80,
+                            hint(PREFIX + ".hint.any_range_beseen"), value -> mode.beSeenMaxRange = value));
+            r = cluster(r, null,
+                    toggleCell(PREFIX + ".instinct_unlimited_teammate", mode.unlimitedTeammate,
+                            value -> mode.unlimitedTeammate = value, false));
+        }
+
+        // ═══ 技能 ═══
+        r = gap(r);
+        r = cluster(r, null,
+                toggleCell(PREFIX + ".enable_ability", data.enableAbility, value -> data.enableAbility = value,
+                        true));
+        if (data.enableAbility) {
+            // 是否启用切换技能
+            r = cluster(r, null,
+                    toggleCell(PREFIX + ".enable_skill_switch", data.enableSkillSwitch,
+                            value -> data.enableSkillSwitch = value, true));
+
+            if (data.enableSkillSwitch) {
+                // ===== 多技能模块（技能1、技能2…） =====
+                if (data.skillModules.isEmpty()) {
+                    data.skillModules.add(new CustomRoleData.SkillData());
+                }
+                for (int m = 0; m < data.skillModules.size(); m++) {
+                    final int moduleIndex = m;
+                    CustomRoleData.SkillData skill = data.skillModules.get(m);
+                    // 一个技能模块一张卡片：标题「技能 N」+ 技能名徽标，卡片头右侧删除模块
+                    r = cardBegin(r, "role_skill_" + moduleIndex,
+                            Component.translatable(PREFIX + ".skill_module_title", moduleIndex + 1),
+                            skill.name == null || skill.name.isBlank() ? null : Component.literal(skill.name),
+                            () -> data.skillModules.remove(moduleIndex));
+                    r = textRow(r, PREFIX + ".skill_name", skill.name, LIMIT_NAME, null,
+                            value -> skill.name = value);
+                    r = stringList(r, skill.commands, PREFIX + ".label.ability_commands", 220,
+                            PREFIX + ".hint.command");
+                    r = numRow(r, PREFIX + ".label.ability_cooldown", String.valueOf(skill.cooldownSeconds), 80,
+                            PREFIX + ".hint.cooldown_seconds", value -> {
+                                try {
+                                    skill.cooldownSeconds = Integer.parseInt(value);
+                                } catch (Exception ignored) {
+                                }
+                            });
+                    r = numRow(r, PREFIX + ".label.ability_initial_cooldown",
+                            String.valueOf(skill.initialCooldownSeconds), 80,
+                            PREFIX + ".hint.initial_cooldown_seconds", value -> {
+                                try {
+                                    skill.initialCooldownSeconds = Integer.parseInt(value);
+                                } catch (Exception ignored) {
+                                }
+                            });
+                    r = numRow(r, PREFIX + ".label.ability_delay_seconds",
+                            String.valueOf(skill.delaySeconds), 80, PREFIX + ".hint.delay_seconds", value -> {
+                                try {
+                                    skill.delaySeconds = Integer.parseInt(value);
+                                } catch (Exception ignored) {
+                                }
+                            });
+                    r = stringList(r, skill.delayedCommands, PREFIX + ".label.ability_delayed_commands", 220,
+                            PREFIX + ".hint.command_no_slash");
+                    r = stringList(r, skill.gameEndCommands, PREFIX + ".label.game_end_commands", 220,
+                            PREFIX + ".hint.command_no_slash");
+                    r = gap(cardEnd(gap(r)));
+                }
+                r = addRow(r, Component.translatable(PREFIX + ".add_skill_module"),
+                        () -> {
+                            data.skillModules.add(new CustomRoleData.SkillData());
+                            requestRebuild();
+                        });
+            } else {
+                // ===== 单技能（旧字段，向后兼容） =====
+                r = textRow(r, PREFIX + ".ability_name", data.abilityName, LIMIT_NAME, null,
+                        value -> data.abilityName = value);
+                r = stringList(r, data.abilitySkillCommands, PREFIX + ".label.ability_commands", 220,
+                        PREFIX + ".hint.command");
+                r = numRow(r, PREFIX + ".label.ability_cooldown",
+                        String.valueOf(data.abilityCooldownSeconds), 80, PREFIX + ".hint.cooldown_seconds",
+                        value -> {
+                            try {
+                                data.abilityCooldownSeconds = Integer.parseInt(value);
+                            } catch (Exception ignored) {
+                            }
+                        });
+                r = numRow(r, PREFIX + ".label.ability_initial_cooldown",
+                        String.valueOf(data.abilityInitialCooldownSeconds), 80,
+                        PREFIX + ".hint.initial_cooldown_seconds", value -> {
+                            try {
+                                data.abilityInitialCooldownSeconds = Integer.parseInt(value);
+                            } catch (Exception ignored) {
+                            }
+                        });
+                r = numRow(r, PREFIX + ".label.ability_delay_seconds",
+                        String.valueOf(data.abilityDelaySeconds), 80, PREFIX + ".hint.delay_seconds", value -> {
+                            try {
+                                data.abilityDelaySeconds = Integer.parseInt(value);
+                            } catch (Exception ignored) {
+                            }
+                        });
+                r = stringList(r, data.abilityDelayedCommands, PREFIX + ".label.ability_delayed_commands", 220,
+                        PREFIX + ".hint.command_no_slash");
+                r = stringList(r, data.gameEndCommands, PREFIX + ".label.game_end_commands", 220,
+                        PREFIX + ".hint.command_no_slash");
+            }
+        }
+    }
+
+    /** 「物品 id + 数量 ±」条目行。 */
+    private int itemEntryRow(int r, String labelKey, List<InitialItemEntry> list, InitialItemEntry entry) {
+        return cluster(r, labelKey,
+                box(entry.itemId, LIMIT_PATH, 130, hint(PREFIX + ".hint.item_id"), value -> entry.itemId = value),
+                fixedBox(String.valueOf(entry.count), LIMIT_NUMBER, 50, hint(PREFIX + ".hint.count"), value -> {
+                    try {
+                        entry.count = Integer.parseInt(value);
+                    } catch (Exception ignored) {
+                    }
+                }),
+                fixedButton(Component.literal("+"), 22, () -> {
+                    list.add(new InitialItemEntry());
+                    requestRebuild();
+                }),
+                fixedButton(Component.literal("-"), 22, () -> {
+                    list.remove(entry);
+                    requestRebuild();
+                }));
+    }
+
+    /** 「文本 id + 数量 ±」式字符串列表（指挥令行）。 */
+    private int stringList(int r, List<String> list, String labelKey, int width, String hintKey) {
+        r = labelRow(r, labelKey);
+        if (list.isEmpty()) {
+            list.add("");
+        }
+        for (int i = 0; i < list.size(); i++) {
+            final int index = i;
+            r = cluster(r, null,
+                    box(list.get(i), LIMIT_COMMAND, width, hint(hintKey), value -> list.set(index, value)),
+                    fixedButton(Component.literal("+"), 22, () -> {
+                        list.add("");
+                        requestRebuild();
+                    }),
+                    fixedButton(Component.literal("-"), 22, () -> {
+                        list.remove(index);
+                        requestRebuild();
+                    }));
+        }
+        return addRow(r, Component.literal("+"), () -> {
+            list.add("");
+            requestRebuild();
+        });
+    }
+
+    /** 直觉类型轮回按钮（点了就地刷新文字；切到 CUSTOM 会多出一个颜色输入框，所以重建）。 */
+    private Cell instinctCell(Supplier<String> getter, Consumer<String> setter) {
+        return stateButtonCell(
+                () -> Component.literal(instinctTypeDisplay(getter.get()))
+                        .append(Component.literal(" ↻").withStyle(style -> style.withColor(SREPanelStyle.MUTED))),
+                () -> setter.accept(cycleInstinctTypeStr(getter.get())),
+                true);
+    }
+
+    /**
+     * 「同阵营颜色」轮回按钮：与 {@link #instinctCell} 同款，但**不提供** {@code KILLER_INSTINCT}
+     * （同阵营透视不走杀手透视逻辑）。
+     */
+    private Cell factionInstinctCell(Supplier<String> getter, Consumer<String> setter) {
+        return stateButtonCell(
+                () -> Component.literal(instinctTypeDisplay(getter.get()))
+                        .append(Component.literal(" ↻").withStyle(style -> style.withColor(SREPanelStyle.MUTED))),
+                () -> setter.accept(cycleInstinctTypeStrNoKiller(getter.get())),
+                true);
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // 页 3：生成
+    // ══════════════════════════════════════════════════════════════════
+    private void buildGenerationTab() {
+        int r = 0;
+        r = textRow(r, PREFIX + ".label.two_way_opposing", String.join(",", data.twoWayOpposingJobs), LIMIT_TEXT,
+                PREFIX + ".hint.role_list", value -> replaceList(data.twoWayOpposingJobs, value));
+        r = textRow(r, PREFIX + ".label.opposing", String.join(",", data.opposingJobs), LIMIT_TEXT,
+                PREFIX + ".hint.role_list", value -> replaceList(data.opposingJobs, value));
+        r = textRow(r, PREFIX + ".label.bind_with", String.join(",", data.bindWithRoles), LIMIT_TEXT,
+                PREFIX + ".hint.role_list", value -> replaceList(data.bindWithRoles, value));
+
+        // 相关职业 / 相关修饰符（介绍页展示）
+        r = textRow(r, PREFIX + ".label.both_related_roles", String.join(",", data.bothRelatedRoles), LIMIT_TEXT,
+                PREFIX + ".hint.role_list", value -> replaceList(data.bothRelatedRoles, value));
+        r = textRow(r, PREFIX + ".label.related_roles", String.join(",", data.relatedRoles), LIMIT_TEXT,
+                PREFIX + ".hint.role_list", value -> replaceList(data.relatedRoles, value));
+        r = textRow(r, PREFIX + ".label.remove_related_roles", String.join(",", data.removeRelatedRoles),
+                LIMIT_TEXT, PREFIX + ".hint.role_list", value -> replaceList(data.removeRelatedRoles, value));
+        r = textRow(r, PREFIX + ".label.both_related_modifiers", String.join(",", data.bothRelatedModifiers),
+                LIMIT_TEXT, PREFIX + ".hint.modifier_list", value -> replaceList(data.bothRelatedModifiers, value));
+        r = textRow(r, PREFIX + ".label.related_modifiers", String.join(",", data.relatedModifiers), LIMIT_TEXT,
+                PREFIX + ".hint.modifier_list", value -> replaceList(data.relatedModifiers, value));
+        r = textRow(r, PREFIX + ".label.remove_related_modifiers", String.join(",", data.removeRelatedModifiers),
+                LIMIT_TEXT, PREFIX + ".hint.modifier_list", value -> replaceList(data.removeRelatedModifiers, value));
+
+        // 关联（绑定生成）职业的移除 / 清空（清空在添加之前生效）
+        r = textRow(r, PREFIX + ".label.remove_occupation_roles", String.join(",", data.removeOccupationRoles),
+                LIMIT_TEXT, PREFIX + ".hint.role_list", value -> replaceList(data.removeOccupationRoles, value));
+        r = cluster(r, null,
+                toggleCell(PREFIX + ".label.clear_occupation_roles", data.clearOccupationRoles,
+                        value -> data.clearOccupationRoles = value, false));
+
+        // 任务刷新黑 / 白名单（按钮选择任务类型）
+        r = buildTaskListEditor(r, PREFIX + ".label.unrefreshable_tasks", data.unrefreshableTasks,
+                unrefreshableTaskCursor);
+        r = buildTaskListEditor(r, PREFIX + ".label.only_refreshable_tasks", data.onlyRefreshableTasks,
+                onlyRefreshableTaskCursor);
+
+        r = textRow(r, PREFIX + ".label.map_restrict", String.join(",", data.mapRestrictedTo), LIMIT_TEXT,
+                PREFIX + ".hint.map_list", value -> replaceList(data.mapRestrictedTo, value));
+        // 组合地图特性条件（setSpecialMapRolesCondition）
+        r = textRow(r, PREFIX + ".label.special_map_roles", String.join(",", data.specialMapRoles), LIMIT_TEXT,
+                PREFIX + ".hint.special_map_roles", value -> replaceList(data.specialMapRoles, value));
+        r = cluster(r, null,
+                toggleCell(PREFIX + ".label.special_map_roles_match_all", data.specialMapRolesMatchAll,
+                        value -> data.specialMapRolesMatchAll = value, false));
+        // 自定义生成条件（setCanSpawnInMap）
+        r = textRow(r, PREFIX + ".label.spawn_conditions", String.join(",", data.canSpawnInMapConditions),
+                LIMIT_TEXT, PREFIX + ".hint.spawn_conditions",
+                value -> replaceList(data.canSpawnInMapConditions, value));
+        r = cluster(r, null,
+                toggleCell(PREFIX + ".label.spawn_conditions_match_all", data.canSpawnInMapMatchAll,
+                        value -> data.canSpawnInMapMatchAll = value, false));
+        r = cluster(r, null,
+                toggleCell(PREFIX + ".use_rare_chance", data.useRareChance, value -> data.useRareChance = value,
+                        true));
+        if (data.useRareChance) {
+            r = numRow(r, PREFIX + ".label.enable_rare_chance", String.valueOf(data.enableRareChance), 80,
+                    PREFIX + ".hint.chance_range_10000", value -> {
+                        try {
+                            data.enableRareChance = Math.min(10000, Math.max(0, Integer.parseInt(value)));
+                        } catch (Exception ignored) {
+                        }
+                    });
+        } else {
+            r = numRow(r, PREFIX + ".label.enable_chance", String.valueOf(data.enableChance), 80,
+                    PREFIX + ".hint.chance_range_100", value -> {
+                        try {
+                            data.enableChance = Math.min(100, Math.max(0, Integer.parseInt(value)));
+                        } catch (Exception ignored) {
+                        }
+                    });
+        }
+        r = numRow(r, PREFIX + ".label.min_players", String.valueOf(data.enableNeededPlayerCount), 80,
+                PREFIX + ".hint.minus_one_no_threshold", value -> {
+                    try {
+                        data.enableNeededPlayerCount = Integer.parseInt(value);
+                    } catch (Exception ignored) {
+                    }
+                });
+        r = numRow(r, PREFIX + ".label.max_players", String.valueOf(data.defaultEnableMaxPlayerCount), 80,
+                PREFIX + ".hint.minus_one_no_limit", value -> {
+                    try {
+                        data.defaultEnableMaxPlayerCount = Integer.parseInt(value);
+                    } catch (Exception ignored) {
+                    }
+                });
+    }
+
+    /**
+     * 任务类型列表编辑器：一行「候选类型（点击循环切换）+ 添加」，之后每个已选类型一行（点击移除）。
+     *
+     * @param cursor 候选类型下标的持有者
+     * @return 下一行行号
+     */
+    private int buildTaskListEditor(int r, String labelKey, List<String> list, int[] cursor) {
+        SREPlayerTaskComponent.Task[] tasks = SREPlayerTaskComponent.Task.values();
+        if (tasks.length == 0) {
+            return r;
+        }
+        if (cursor[0] < 0 || cursor[0] >= tasks.length) {
+            cursor[0] = 0;
+        }
+        r = cluster(r, labelKey,
+                stateButtonCell(
+                        () -> Component.translatable(PREFIX + ".task_candidate", taskName(tasks[cursor[0]])),
+                        () -> cursor[0] = (cursor[0] + 1) % tasks.length, false),
+                fixedButton(Component.translatable(PREFIX + ".task_add"), 64, () -> {
+                    String name = tasks[cursor[0]].name();
+                    if (!list.contains(name)) {
+                        list.add(name);
+                    }
+                    requestRebuild();
+                }));
+        for (int i = 0; i < list.size(); i++) {
+            final int index = i;
+            r = removeRow(r, Component.translatable(PREFIX + ".task_remove", taskNameOf(list.get(i))), () -> {
+                list.remove(index);
+                requestRebuild();
+            });
+        }
+        return r;
+    }
+
+    /** 任务显示名：优先 {@code task.<小写枚举名>} 翻译键，缺失时回退枚举名。 */
+    private static Component taskName(SREPlayerTaskComponent.Task task) {
+        String name = task.name().toLowerCase(java.util.Locale.ROOT);
+        if ("raed_book".equals(name)) {
+            name = "read_book"; // 枚举名是历史拼写，语言文件里的键是 read_book
+        }
+        String key = "task." + name;
+        return net.minecraft.locale.Language.getInstance().has(key)
+                ? Component.translatable(key)
+                : Component.literal(task.name());
+    }
+
+    /** 配置里存的枚举名 → 显示名（解析失败时按原样显示）。 */
+    private static Component taskNameOf(String raw) {
+        try {
+            return taskName(SREPlayerTaskComponent.Task.valueOf(raw.trim().toUpperCase(java.util.Locale.ROOT)));
+        } catch (IllegalArgumentException e) {
+            return Component.literal(raw);
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // 页 4：商店
+    // ══════════════════════════════════════════════════════════════════
+    private static final String[] SHOP_TYPES = { "item", "psycho", "blackout", "monitor_fail", "lightup",
+            "monitor_recovery", "custom", "killer_shop", "knife" };
+    /** 折扣模式轮回顺序：无折扣 → 每次购买涨价 → 每次购买降价。 */
+    private static final String[] DISCOUNT_MODES = { "none", "raise", "lower" };
+
+    private void buildShopTab() {
+        int r = 0;
+        for (int i = 0; i < data.shopEntries.size(); i++) {
+            final int index = i;
+            ShopEntryData entry = data.shopEntries.get(i);
+            boolean isItem = "item".equals(entry.type);
+            boolean isCustom = "custom".equals(entry.type);
+            boolean isKnife = "knife".equals(entry.type);
+            boolean isKillerShop = "killer_shop".equals(entry.type);
+            // 通用杀手商店自带全部内容，不需要价格/货币/冷却/折扣
+            boolean editable = !isKillerShop;
+            // 这些类型购买后会挂原版物品冷却，因此可配「购买 cd」
+            boolean hasPurchaseCooldown = isItem || isCustom || "psycho".equals(entry.type)
+                    || "blackout".equals(entry.type) || "monitor_fail".equals(entry.type)
+                    || "lightup".equals(entry.type) || "monitor_recovery".equals(entry.type);
+
+            List<Cell> cells = new ArrayList<>();
+            // 类型按钮：切换后显示的字段会变，所以重建
+            cells.add(stateButtonCell(() -> Component.translatable(shopTypeKey(entry.type)), () -> {
+                entry.type = nextShopType(entry.type);
+                applyShopTypeDefaults(entry);
+            }, true));
+            // 价格
+            if (editable) {
+                cells.add(fixedBox(String.valueOf(displayPrice(entry)), LIMIT_NUMBER, 55,
+                        hint(PREFIX + ".hint.price"), value -> {
+                            try {
+                                entry.price = Math.max(0, Integer.parseInt(value));
+                            } catch (Exception ignored) {
+                            }
+                        }));
+                // 货币类型按钮：金币（默认）/ 游戏币（参考网警商店）
+                cells.add(stateButtonCell(
+                        () -> Component.translatable(PREFIX + ".shop.currency." + currentCurrencyKey(entry.currency)),
+                        () -> entry.currency = "money".equals(entry.currency) ? "minigame_token" : "money", false));
+            }
+            // 购买 cd（默认值 = 当前配置值）
+            if (hasPurchaseCooldown) {
+                cells.add(fixedBox(String.valueOf(displayCooldownSeconds(entry)), LIMIT_NUMBER, 50,
+                        hint(PREFIX + ".hint.cd_seconds"), value -> {
+                            try {
+                                entry.cooldownSeconds = Math.max(0, Integer.parseInt(value));
+                            } catch (Exception ignored) {
+                            }
+                        }));
+            }
+            // 禁止重复(item / knife)
+            if (isItem || isKnife) {
+                cells.add(stateButtonCell(
+                        () -> Component.translatable(entry.allowDuplicate
+                                ? PREFIX + ".shop.dup_allowed"
+                                : PREFIX + ".shop.dup_forbidden"),
+                        () -> entry.allowDuplicate = !entry.allowDuplicate, false));
+            }
+            // 折扣：无折扣 / 每次购买涨价 / 每次购买降价
+            if (editable) {
+                cells.add(stateButtonCell(() -> Component.translatable(discountModeKey(entry.discountMode)), () -> {
+                    entry.discountMode = nextDiscountMode(entry.discountMode);
+                }, true));
+                if (!"none".equals(normalizeDiscountMode(entry.discountMode))) {
+                    cells.add(fixedBox(String.valueOf(clampDiscountAmount(entry, entry.discountAmount)),
+                            LIMIT_NUMBER, 55, hint(PREFIX + ".hint.discount_amount"), value -> {
+                                try {
+                                    entry.discountAmount = clampDiscountAmount(entry, Integer.parseInt(value));
+                                } catch (Exception ignored) {
+                                }
+                            }));
+                    // 价格变动次数：购买多少次后不再涨/降，* = 不受限制
+                    cells.add(fixedBox(displayPriceChangeCount(entry), LIMIT_NUMBER, 40,
+                            hint(PREFIX + ".hint.price_change_count"), value -> {
+                                entry.priceChangeCount = sanitizePriceChangeCount(value);
+                            }));
+                }
+            }
+            cells.add(fixedButton(Component.literal("X"), 22, () -> {
+                data.shopEntries.remove(index);
+                requestRebuild();
+            }));
+            r = cluster(r, null, cells.toArray(new Cell[0]));
+
+            if (isItem) {
+                r = cluster(r, PREFIX + ".label.shop_item_id",
+                        box(entry.itemId, LIMIT_PATH, 160, hint(PREFIX + ".hint.item_id"),
+                                value -> entry.itemId = value));
+            }
+            if (isCustom) {
+                r = cluster(r, PREFIX + ".label.shop_custom_name",
+                        box(entry.displayName, LIMIT_NAME, 130, hint(PREFIX + ".hint.shop_name"),
+                                value -> entry.displayName = value));
+                r = cluster(r, PREFIX + ".label.shop_custom_icon",
+                        box(entry.itemId, LIMIT_PATH, 130, hint(PREFIX + ".hint.shop_icon"),
+                                value -> entry.itemId = value));
+                r = stringList(r, entry.commands, PREFIX + ".label.shop_custom_cmd", 200,
+                        PREFIX + ".hint.command");
+            }
+            if (isKillerShop) {
+                r = note(r, PREFIX + ".shop.type.killer_shop.desc", SREPanelStyle.MUTED);
+            }
+            if (isKnife) {
+                r = note(r, PREFIX + ".shop.type.knife.desc", SREPanelStyle.MUTED);
+            }
+        }
+        r = addRow(r, Component.translatable(PREFIX + ".add_shop_entry"), () -> {
+            data.shopEntries.add(new ShopEntryData());
+            requestRebuild();
+        });
+    }
+
+    /** 商品类别显示名（翻译键）。custom_item 是旧配置写法，按 item 显示。 */
+    private static String shopTypeKey(String type) {
+        String t = type == null ? "" : type.trim();
+        if (t.isEmpty() || "custom_item".equalsIgnoreCase(t)) {
+            t = "item";
+        }
+        return PREFIX + ".shop.type." + t;
+    }
+
+    /** 切到下一个商品类别（未知/旧写法回落到 item）。 */
+    private static String nextShopType(String current) {
+        int index = java.util.Arrays.asList(SHOP_TYPES).indexOf(current == null ? "" : current.trim());
+        return SHOP_TYPES[(index + 1) % SHOP_TYPES.length];
+    }
+
+    /** 切换商品类型时，把类型相关字段复位到该类型的默认值。 */
+    private static void applyShopTypeDefaults(ShopEntryData entry) {
+        // 购买 cd：效果类商品默认跟随当前配置值（-1），其它类型默认无冷却
+        entry.cooldownSeconds = CustomRoleLoader.defaultCooldownSeconds(entry.type) > 0 ? -1 : 0;
+        // 耐久刀默认跟随配置里的刀价
+        if ("knife".equals(entry.type)) {
+            entry.price = -1;
+        } else if (entry.price < 0) {
+            entry.price = 0;
+        }
+    }
+
+    /** 界面显示用的价格：耐久刀配 -1 时显示配置里的刀价。 */
+    private static int displayPrice(ShopEntryData entry) {
+        if ("knife".equals(entry.type) && entry.price < 0) {
+            return Math.max(0, SREConfig.instance().knifePrice);
+        }
+        return Math.max(0, entry.price);
+    }
+
+    /** 界面显示用的购买 cd：配 -1（跟随默认）时显示当前配置值。 */
+    private static int displayCooldownSeconds(ShopEntryData entry) {
+        return entry.cooldownSeconds >= 0 ? entry.cooldownSeconds
+                : CustomRoleLoader.defaultCooldownSeconds(entry.type);
+    }
+
+    /** 归一化折扣模式：只认 none / raise / lower，其余按 none。 */
+    private static String normalizeDiscountMode(String mode) {
+        String m = mode == null ? "" : mode.trim().toLowerCase(java.util.Locale.ROOT);
+        return ("raise".equals(m) || "lower".equals(m)) ? m : "none";
+    }
+
+    private static String discountModeKey(String mode) {
+        return PREFIX + ".shop.discount." + normalizeDiscountMode(mode);
+    }
+
+    private static String nextDiscountMode(String current) {
+        int index = java.util.Arrays.asList(DISCOUNT_MODES).indexOf(normalizeDiscountMode(current));
+        return DISCOUNT_MODES[(index + 1) % DISCOUNT_MODES.length];
+    }
+
+    /**
+     * 折扣金额自动纠错：涨价的单次增量保证「价格 + 增量」不超出 int 上限；
+     * 降价的单次增量不超过商品本身价格（商品最低降到 0）。
+     */
+    private static int clampDiscountAmount(ShopEntryData entry, int amount) {
+        final int base = displayPrice(entry);
+        final int value = Math.max(0, amount);
+        if ("raise".equals(normalizeDiscountMode(entry.discountMode))) {
+            return (int) Math.min(Integer.MAX_VALUE - (long) base, value);
+        }
+        return Math.min(base, value);
+    }
+
+    /** 界面显示用的价格变动次数：不受限制时显示 {@code *}。 */
+    private static String displayPriceChangeCount(ShopEntryData entry) {
+        final int count = CustomRoleLoader.parsePriceChangeCount(entry.priceChangeCount);
+        return count > 0 ? String.valueOf(count) : "*";
+    }
+
+    /**
+     * 价格变动次数的写入归一化：{@code *} / 空 = 不受限制；否则至少为 1 次。
+     * （输入框是自由文本，非法/非正数一律归一成 {@code *}。）
+     */
+    private static String sanitizePriceChangeCount(String value) {
+        if (value == null) {
+            return "*";
+        }
+        final String s = value.trim();
+        if (s.isEmpty() || "*".equals(s)) {
+            return "*";
+        }
+        try {
+            return Integer.parseInt(s) > 0 ? s : "*";
+        } catch (Exception e) {
+            return "*";
+        }
+    }
+
+    /** 商店货币的显示键：仅识别 minigame_token（游戏币），其余一律视为 money（金币，默认）。 */
+    private static String currentCurrencyKey(String currency) {
+        return currency != null && "minigame_token".equalsIgnoreCase(currency.trim()) ? "minigame_token" : "money";
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // 「存活到最后」独立胜利细分模式工具
+    // ══════════════════════════════════════════════════════════════════
+    /** 轮回顺序：关闭 → 顶替平民 → 顶替杀手 → 顶替双方 */
+    private static final String[] SURVIVE_MODE_ORDER = { "", "INNOCENT", "KILLER", "BOTH" };
+
+    /** 当前生效的「存活到最后」模式（兼容旧布尔开关：true → BOTH）。 */
+    private String currentSurviveMode() {
+        String m = data.customWinSurviveToLastMode == null ? ""
+                : data.customWinSurviveToLastMode.trim().toUpperCase(java.util.Locale.ROOT);
+        if (m.equals("INNOCENT") || m.equals("KILLER") || m.equals("BOTH")) {
+            return m;
+        }
+        return data.customWinSurviveToLast ? "BOTH" : "";
+    }
+
+    private static String cycleSurviveMode(String current) {
+        for (int i = 0; i < SURVIVE_MODE_ORDER.length; i++) {
+            if (SURVIVE_MODE_ORDER[i].equals(current)) {
+                return SURVIVE_MODE_ORDER[(i + 1) % SURVIVE_MODE_ORDER.length];
+            }
+        }
+        return "";
+    }
+
+    private static String surviveModeKey(String mode) {
+        String m = mode == null ? "" : mode.trim().toLowerCase(java.util.Locale.ROOT);
+        return PREFIX + ".custom_win_survive_mode." + (m.isEmpty() ? "off" : m);
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // 跟随获胜工具
+    // ══════════════════════════════════════════════════════════════════
+    /** 轮回顺序：无条件 → 存活到最后 → 在该阵营玩家周围 */
+    private static final String[] FOLLOW_CONDITIONS = { "UNCONDITIONAL", "SURVIVE_TO_END", "NEAR_FACTION" };
+    /** 轮回顺序：不设置 → 最终结算(不含中立) → 最终结算(含中立) → 仅平民 → 仅杀手 */
+    private static final String[] FOLLOW_FACTIONS = { "NONE", "FINAL_EXCL_NEUTRAL", "FINAL_INCL_NEUTRAL",
+            "INNOCENT_ONLY", "KILLER_ONLY" };
+
+    private String currentFollowCondition() {
+        return normalizeEnumOption(data.followWinCondition, FOLLOW_CONDITIONS, "UNCONDITIONAL");
+    }
+
+    private String currentFollowFaction() {
+        return normalizeEnumOption(data.followWinFaction, FOLLOW_FACTIONS, "NONE");
+    }
+
+    private static String normalizeEnumOption(String value, String[] allowed, String def) {
+        if (value != null) {
+            String v = value.trim().toUpperCase(java.util.Locale.ROOT);
+            for (String a : allowed) {
+                if (a.equals(v)) {
+                    return a;
+                }
+            }
+        }
+        return def;
+    }
+
+    private static String cycleOption(String[] order, String current) {
+        for (int i = 0; i < order.length; i++) {
+            if (order[i].equals(current)) {
+                return order[(i + 1) % order.length];
+            }
+        }
+        return order[0];
+    }
+
+    private static String enumKey(String base, String value) {
+        return base + "." + value.toLowerCase(java.util.Locale.ROOT);
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // 直觉系统工具
+    // ══════════════════════════════════════════════════════════════════
+    private static final String[] INSTINCT_TYPE_NAMES = {
+            "DEFAULT", "NONE", "KILLER_INSTINCT", "OBSERVER_ROLE_COLOR", "TARGET_ROLE_COLOR"
+    };
+
+    /** 「同阵营颜色」可用类型：不含 KILLER_INSTINCT（同阵营透视不走杀手透视逻辑）。 */
+    private static final String[] FACTION_INSTINCT_TYPE_NAMES = {
+            "DEFAULT", "NONE", "OBSERVER_ROLE_COLOR", "TARGET_ROLE_COLOR"
+    };
+
+    /** 确保 data.instinctModes 存在至少一个模式，否则从旧字段自动补全 */
+    private void ensureInstinctMode() {
+        if (data.instinctModes.isEmpty()) {
+            InstinctModeData mode = new InstinctModeData();
+            if (data.instinctSameColorFrame) {
+                mode.seeingOn = "OBSERVER_ROLE_COLOR";
+            }
+            if (!"*".equals(data.instinctMaxRange)) {
+                mode.maxRange = data.instinctMaxRange;
+            }
+            mode.unlimitedTeammate = data.instinctUnlimitedTeammate;
+            data.instinctModes.add(mode);
+        }
+    }
+
+    /** 将类型字符串循环到下一个预定义类型 */
+    private String cycleInstinctTypeStr(String current) {
+        return cycleInstinctTypeStr(current, INSTINCT_TYPE_NAMES);
+    }
+
+    /** 同阵营颜色轮回：不含 KILLER_INSTINCT。 */
+    private String cycleInstinctTypeStrNoKiller(String current) {
+        return cycleInstinctTypeStr(current, FACTION_INSTINCT_TYPE_NAMES);
+    }
+
+    private String cycleInstinctTypeStr(String current, String[] names) {
+        String upper = current == null ? "" : current.toUpperCase().trim();
+        if (upper.startsWith("CUSTOM(")) {
+            return "DEFAULT";
+        }
+        for (int i = 0; i < names.length; i++) {
+            if (names[i].equals(upper)) {
+                return i + 1 < names.length ? names[i + 1] : "CUSTOM(0xFFE06B65)";
+            }
+        }
+        return "DEFAULT";
+    }
+
+    /** 获取类型字符串的显示名 */
+    private String instinctTypeDisplay(String s) {
+        if (s == null || s.isEmpty()) {
+            return "DEFAULT";
+        }
+        String upper = s.toUpperCase().trim();
+        if (upper.startsWith("CUSTOM(")) {
+            String hex = upper.substring(7, upper.length() - 1).trim();
+            try {
+                return "CUSTOM(#" + Integer.toHexString(Long.decode(hex).intValue()).toUpperCase().substring(2) + ")";
+            } catch (Exception e) {
+                return "CUSTOM(???)";
+            }
+        }
+        return upper;
+    }
+
+    /** 提取 CUSTOM 颜色字符串中的 hex 部分（不含 0x 前缀） */
+    private String extractCustomHex(String s) {
+        if (s == null) {
+            return "FF0000";
+        }
+        String upper = s.toUpperCase().trim();
+        if (upper.startsWith("CUSTOM(") && upper.endsWith(")")) {
+            String hex = upper.substring(7, upper.length() - 1).trim();
+            try {
+                return Integer.toHexString(Long.decode(hex).intValue()).toUpperCase().substring(2);
+            } catch (Exception e) {
+                return "FF0000";
+            }
+        }
+        return "FF0000";
+    }
+
+    /** 检查类型字符串是否为 CUSTOM */
+    private boolean isCustomType(String s) {
+        return s != null && s.toUpperCase().trim().startsWith("CUSTOM(");
+    }
+
+    /** 从模式中提取第一个 CUSTOM 类型的 hex 颜色字符串 */
+    private String findFirstCustomHex(InstinctModeData mode) {
+        for (String s : new String[] { mode.seeingOff, mode.seeingOn, mode.beSeenOff, mode.beSeenOn }) {
+            if (isCustomType(s)) {
+                return extractCustomHex(s);
+            }
+        }
+        return "FF0000";
+    }
+
+    /** 从若干字段中提取第一个 CUSTOM 类型的 hex 颜色字符串 */
+    private String findFirstCustomHex(String... values) {
+        for (String s : values) {
+            if (isCustomType(s)) {
+                return extractCustomHex(s);
+            }
+        }
+        return "FF0000";
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // 保存 / 管理
+    // ══════════════════════════════════════════════════════════════════
+
+    @Override
+    protected void onSave() {
+        CustomRoleConfig config = CustomRoleConfig.getInstance();
+        if (originalEnglishId != null && !originalEnglishId.isBlank()) {
+            config.removeRole(originalEnglishId);
+        }
+        config.removeRole(data.englishId);
+        config.addRole(data);
+        config.savePreferWorldPath(minecraft.getSingleplayerServer());
+        var server = minecraft.getSingleplayerServer();
+        if (server != null) {
+            try {
+                config.saveToDefaultPath();
+                CustomRoleLoader.reloadClient();
+            } catch (Exception ignored) {
+            }
+
+            server.execute(() -> {
+                try {
+                    // 走重载命令的路径：除了重建服务端索引，还会给在线客户端重新握手
+                    CustomRoleReloadCommand.reload(server);
+                } catch (Exception ignored) {
+                }
+            });
+        }
+        if (minecraft.player != null) {
+            minecraft.player.displayClientMessage(
+                    Component.translatable(PREFIX + ".saved", data.englishId), false);
+        }
+        onClose();
+    }
+
+    @Override
+    protected void onOpenManage() {
+        CustomRoleConfig config = CustomRoleConfig.getInstance();
+        config.savePreferWorldPath(minecraft.getSingleplayerServer());
+        minecraft.setScreen(new CustomRoleManageScreen(new CustomRoleScreen()));
+    }
+}

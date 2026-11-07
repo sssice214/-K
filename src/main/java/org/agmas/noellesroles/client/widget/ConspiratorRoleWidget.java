@@ -1,0 +1,133 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.client.widget;
+
+import io.wifi.starrailexpress.api.SRERole;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.renderer.RenderType;
+import net.minecraft.network.chat.Component;
+import org.agmas.noellesroles.client.screen.ConspiratorScreen;
+import org.agmas.noellesroles.utils.RoleUtils;
+import org.jetbrains.annotations.NotNull;
+
+import java.awt.*;
+import java.util.function.Consumer;
+
+/**
+ * 阴谋家角色选择 Widget
+ * 
+ * 显示角色名称和颜色，点击选择该角色进行猜测
+ */
+public class ConspiratorRoleWidget extends Button {
+
+    public ConspiratorScreen screen;
+    public final SRERole role;
+    private final Consumer<SRERole> onPick;
+    private final int buttonWidth;
+    private final int buttonHeight;
+
+    public ConspiratorRoleWidget(ConspiratorScreen screen, int x, int y, int width, int height,
+            @NotNull SRERole role, int index) {
+        this(x, y, width, height, role, picked -> screen.onRoleSelected(picked));
+        this.screen = screen;
+    }
+
+    /**
+     * 回调版构造：供其它界面（如独裁之书）复用同一套职业框（含职业颜色渲染），
+     * 不依赖 {@link ConspiratorScreen}。
+     */
+    public ConspiratorRoleWidget(int x, int y, int width, int height,
+            @NotNull SRERole role, Consumer<SRERole> onPick) {
+        super(x, y, width, height,
+                ((role == null) ? Component.translatable("announcement.star.role.null") : RoleUtils.getRoleName(role)),
+                (button) -> onPick.accept(role),
+                DEFAULT_NARRATION);
+        this.screen = null;
+        this.onPick = onPick;
+        this.role = role;
+        this.buttonWidth = width;
+        this.buttonHeight = height;
+    }
+
+    @Override
+    protected void renderWidget(GuiGraphics context, int mouseX, int mouseY, float delta) {
+        Font textRenderer = Minecraft.getInstance().font;
+        // String roleName =
+        // Component.translatable("announcement.star.role.null").getString();
+        // 获取角色颜色
+        Color roleColor = Color.WHITE;
+        if (role != null) {
+            roleColor = new Color(role.color());
+        }
+
+        // 背景颜色 - 使用角色颜色的暗化版本
+        int bgAlpha = this.isHovered() ? 200 : 150;
+        Color bgColor = new Color(
+                Math.max(0, roleColor.getRed() / 3),
+                Math.max(0, roleColor.getGreen() / 3),
+                Math.max(0, roleColor.getBlue() / 3),
+                bgAlpha);
+
+        // 绘制背景
+        context.fill(getX(), getY(), getX() + buttonWidth, getY() + buttonHeight, bgColor.getRGB());
+
+        // 边框颜色 - 使用角色颜色
+        Color borderColor = this.isHovered()
+                ? new Color(
+                        Math.min(255, roleColor.getRed() + 50),
+                        Math.min(255, roleColor.getGreen() + 50),
+                        Math.min(255, roleColor.getBlue() + 50))
+                : roleColor;
+
+        // 绘制边框
+        context.renderOutline(getX(), getY(), buttonWidth, buttonHeight, borderColor.getRGB());
+
+        // 绘制角色名称
+        Component roleName = Component.translatable("announcement.star.role.null");
+        if (role != null) {
+            roleName = RoleUtils.getRoleName(role);
+        }
+
+        int textWidth = textRenderer.width(roleName);
+        int textX = getX() + (buttonWidth - textWidth) / 2;
+        int textY = getY() + (buttonHeight - 8) / 2;
+
+        // 使用角色颜色绘制文字
+        context.drawString(textRenderer, roleName, textX, textY, roleColor.getRGB());
+
+        // 高亮效果
+        if (this.isHovered()) {
+            drawSlotHighlight(context, getX(), getY());
+        }
+    }
+
+    private void drawSlotHighlight(GuiGraphics context, int x, int y) {
+        Color roleColor = Color.WHITE;
+        if (role != null)
+            roleColor = new Color(role.color());
+
+        int color = new Color(roleColor.getRed(), roleColor.getGreen(), roleColor.getBlue(), 80).getRGB();
+        context.fillGradient(RenderType.guiOverlay(), x, y, x + buttonWidth, y + buttonHeight, color, color, 0);
+    }
+
+    @Override
+    public void renderString(GuiGraphics context, Font textRenderer, int color) {
+        // 不使用默认消息绘制
+    }
+}

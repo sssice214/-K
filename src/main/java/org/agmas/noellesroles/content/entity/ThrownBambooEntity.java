@@ -1,0 +1,653 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.content.entity;
+
+import io.wifi.starrailexpress.game.GameUtils;
+import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.NbtUtils;
+import net.minecraft.nbt.Tag;
+import net.minecraft.network.syncher.EntityDataAccessor;
+import net.minecraft.network.syncher.EntityDataSerializers;
+import net.minecraft.network.syncher.SynchedEntityData;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.util.Mth;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityDimensions;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.entity.projectile.AbstractArrow;
+import net.minecraft.world.entity.projectile.ProjectileUtil;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.EntityHitResult;
+import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec3;
+import org.agmas.noellesroles.init.ModEffects;
+import org.agmas.noellesroles.init.ModItems;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+import java.util.UUID;
+
+/**
+ * 投掷竹子（竹枪）：水平直线飞行，途中最多把 2 名玩家挂在竹杆上带着一起走；
+ * 撞墙后整根钉在墙上不再位移，被挂的玩家也一起钉在墙上无法移动，
+ * <b>从发射到消失总共 10 秒</b>（飞行 + 带人 + 钉墙都算在这 10 秒内）。
+ * <p>
+ * 防卡墙：挂人位置 / 下竹位置都会做碰撞检测并检查与竹子本体之间无墙阻挡，
+ * 找不到安全位就落地放人，绝不把人传送到墙对面。
+ */
+public class ThrownBambooEntity extends AbstractArrow {
+
+    public static final int MAX_HANG = 2;
+    /** 从发射到消失的总时长（飞行 + 钉在墙上的时间全算在内）。 */
+    public static final int LIFETIME_TICKS = 20 * 10;
+    /** 发射速度。 */
+    public static final float THROW_SPEED = 2.04F;
+
+    /** 渲染用：竹杆枪尖相对实体原点向前的距离（需与 ThrownBambooRenderer 保持一致）。 */
+    public static final float TIP_REACH = 1.75F;
+    /** 渲染用：竹杆尾端相对实体原点向后的距离。 */
+    public static final float TAIL_REACH = 0.45F;
+    /** 钉墙时枪尖扎进墙体的深度。 */
+    private static final float PIN_EMBED = 0.6F;
+
+    private static final double HANG_FORWARD = 0.15;
+    private static final double HANG_SIDE = 0.35;
+    private static final double HANG_UP = 0.15;
+
+    /** 挂人判定的整杆扫掠半径（比原版箭矢命中盒大得多，好命中）。 */
+    private static final double HIT_INFLATE = 0.4;
+
+    /** 渲染朝向：显式同步的水平 yaw，不依赖原版箭矢的旋转插值。 */
+    private static final EntityDataAccessor<Float> FACING_YAW = SynchedEntityData.defineId(ThrownBambooEntity.class,
+            EntityDataSerializers.FLOAT);
+    /**
+     * 是否已钉在墙上。<b>必须同步</b>：客户端也要用它算挂人的挂点（钉墙后挂点从杆前挪到杆后），
+     * 不同步的话客户端会把被挂玩家画到墙里去；渲染端也靠它做入墙的震颤。
+     */
+    private static final EntityDataAccessor<Boolean> PINNED = SynchedEntityData.defineId(ThrownBambooEntity.class,
+            EntityDataSerializers.BOOLEAN);
+
+    private final List<UUID> hungPlayers = new ArrayList<>(2);
+
+    /** 钉墙点与钉墙朝向：仅服务端权威，客户端位置由同步包给出。 */
+    private Vec3 pinPos = Vec3.ZERO;
+    private float pinYaw;
+
+    /** 客户端平滑朝向。 */
+    private float renderYaw;
+    private float prevRenderYaw;
+    /** 客户端：钉墙后经过的 tick 数，用于入墙震颤。 */
+    private int clientPinTicks = -1;
+
+    public ThrownBambooEntity(EntityType<? extends AbstractArrow> entityType, Level level) {
+        super(entityType, level);
+        this.setNoGravity(true);
+        this.setBaseDamage(0);
+        this.pickup = AbstractArrow.Pickup.DISALLOWED;
+    }
+
+    public ThrownBambooEntity(EntityType<? extends AbstractArrow> entityType, LivingEntity livingEntity, Level level,
+            ItemStack itemStack) {
+        super(entityType, livingEntity, level, itemStack, null);
+        this.setNoGravity(true);
+        this.setBaseDamage(0);
+        this.pickup = AbstractArrow.Pickup.DISALLOWED;
+    }
+
+    /** 设置投掷方向：同步朝向并摆正实体旋转（只用于水平飞行）。 */
+    public void setThrownDirection(Vec3 horizontalDirection) {
+        float yaw = yawFrom(horizontalDirection);
+        this.entityData.set(FACING_YAW, yaw);
+        this.setYRot(yaw);
+        this.setXRot(0.0F);
+        this.yRotO = yaw;
+        this.xRotO = 0.0F;
+    }
+
+
+    @Override
+    protected void defineSynchedData(SynchedEntityData.Builder builder) {
+        super.defineSynchedData(builder);
+        builder.define(FACING_YAW, 0.0F);
+        builder.define(PINNED, false);
+    }
+
+    public float getFacingYaw() {
+        return this.entityData.get(FACING_YAW);
+    }
+
+    /** 是否已钉在墙上（两端可读）。 */
+    public boolean isPinned() {
+        return this.entityData.get(PINNED);
+    }
+
+    /** 客户端插值后的渲染朝向。 */
+    public float getRenderYaw(float partialTick) {
+        return Mth.lerp(partialTick, this.prevRenderYaw, this.renderYaw);
+    }
+
+    /** 客户端：钉墙后经过的时间（tick），未钉墙返回 -1。渲染端据此做入墙震颤。 */
+    public int getClientPinTicks() {
+        return this.clientPinTicks;
+    }
+
+    // ------------------------------------------------------------------ 基础行为
+
+    @Override
+    protected boolean tryPickup(Player player) {
+        return false;
+    }
+
+    @Override
+    protected float getWaterInertia() {
+        return 1F;
+    }
+
+    @Override
+    public void playerTouch(Player player) {
+    }
+
+    @Override
+    public boolean isPickable() {
+        return false;
+    }
+
+    /** 不让它被原版的 60 秒地面计时器清掉，存活时间完全由 LIFETIME_TICKS 决定。 */
+    @Override
+    protected void tickDespawn() {
+    }
+
+    // ------------------------------------------------------------------ 挂人
+
+    @Override
+    protected boolean canAddPassenger(Entity passenger) {
+        return this.getPassengers().size() < MAX_HANG && passenger instanceof Player;
+    }
+
+    @Override
+    protected Vec3 getPassengerAttachmentPoint(Entity passenger, EntityDimensions dimensions, float scale) {
+        int index = this.getPassengers().indexOf(passenger);
+        double side = index <= 0 ? HANG_SIDE : -HANG_SIDE;
+        Vec3 forward = this.forward();
+        Vec3 right = rightOf(forward);
+        // 钉墙后把人挂在竹杆后方（投掷者一侧），避免穿到墙对面。
+        double along = this.isPinned() ? -0.95 : HANG_FORWARD;
+        return forward.scale(along).add(right.scale(side)).add(0.0, HANG_UP, 0.0);
+    }
+
+    @Override
+    protected void positionRider(Entity passenger, Entity.MoveFunction moveFunction) {
+        if (!this.hasPassenger(passenger)) {
+            return;
+        }
+        Vec3 target = this.getPassengerRidingPosition(passenger).subtract(this.getVehicleAttachmentPoint(passenger));
+        if (passenger instanceof Player) {
+            Vec3 safe = this.findFreeSpot(passenger, target);
+            if (safe != null) {
+                target = safe;
+            } else if (!this.isPinned()) {
+                // 飞行中附近没空位：先贴着竹子本体，下一 tick 再检查；仍会卡墙就放下来。
+                moveFunction.accept(passenger, this.getX(), this.getY(), this.getZ());
+                return;
+            } else {
+                target = this.position();
+            }
+        }
+        moveFunction.accept(passenger, target.x, target.y, target.z);
+    }
+
+    @Override
+    protected boolean canHitEntity(Entity entity) {
+        if (this.isPinned()) {
+            return false;
+        }
+        if (this.hungPlayers.size() >= MAX_HANG) {
+            return false;
+        }
+        if (this.hungPlayers.contains(entity.getUUID())) {
+            return false;
+        }
+        if (!(entity instanceof Player player)) {
+            return false;
+        }
+        if (!GameUtils.isPlayerAliveAndSurvival(player)) {
+            return false;
+        }
+        return super.canHitEntity(entity);
+    }
+
+    @Override
+    protected void onHitEntity(EntityHitResult entityHitResult) {
+        if (this.level().isClientSide) {
+            return;
+        }
+        if (entityHitResult.getEntity() instanceof ServerPlayer target) {
+            this.hangPlayer(target, entityHitResult.getLocation());
+        }
+    }
+
+    /** 把玩家挂到竹子上（去重 + 反馈）。 */
+    private void hangPlayer(ServerPlayer target, Vec3 location) {
+        if (this.getOwner() != null && target.getUUID().equals(this.getOwner().getUUID())) {
+            return;
+        }
+        if (this.hungPlayers.contains(target.getUUID()) || this.hungPlayers.size() >= MAX_HANG) {
+            return;
+        }
+        if (!GameUtils.isPlayerAliveAndSurvival(target)) {
+            return;
+        }
+        this.hungPlayers.add(target.getUUID());
+        target.startRiding(this, true);
+        // 挂上时立刻清零被命中玩家自身的动量（冲力），否则这股朝墙的速度会把人顶穿薄墙。
+        target.setDeltaMovement(Vec3.ZERO);
+        target.fallDistance = 0.0F;
+
+        ServerLevel serverLevel = target.serverLevel();
+        serverLevel.sendParticles(ParticleTypes.CRIT, location.x, location.y + 1.0f, location.z, 10, 0.25, 0.25,
+                0.25, 0.12);
+        serverLevel.playSound(null, location.x, location.y, location.z, SoundEvents.BAMBOO_WOOD_HIT, SoundSource.PLAYERS,
+                1.0f, 0.9f);
+    }
+
+    @Override
+    public Vec3 getDismountLocationForPassenger(LivingEntity passenger) {
+        Vec3 base = new Vec3(this.getX(), this.getBoundingBox().maxY + 0.05, this.getZ());
+        Vec3 safe = this.findFreeSpot(passenger, base);
+        if (safe != null) {
+            return safe;
+        }
+        Vec3 ground = this.findGroundSpot(passenger, this.getX(), this.getY(), this.getZ());
+        return ground == null ? base : ground;
+    }
+
+    // ------------------------------------------------------------------ 撞墙 / 钉墙
+
+    @Override
+    protected void onHitBlock(BlockHitResult blockHitResult) {
+        if (this.isPinned()) {
+            this.applyPin();
+            return;
+        }
+        super.onHitBlock(blockHitResult);
+        this.pinTo(blockHitResult.getLocation());
+        this.setDeltaMovement(Vec3.ZERO);
+        this.applyPin();
+        if (!this.level().isClientSide) {
+            this.level().playSound(null, this.getX(), this.getY(), this.getZ(), SoundEvents.BAMBOO_WOOD_HIT,
+                    SoundSource.PLAYERS, 1.0f, 0.8f);
+            if (this.level() instanceof ServerLevel serverLevel) {
+                Vec3 tip = this.pinPos.add(this.forward().scale(TIP_REACH));
+                serverLevel.sendParticles(ParticleTypes.CRIT, tip.x, tip.y, tip.z, 8, 0.12, 0.12, 0.12, 0.08);
+            }
+        }
+    }
+
+    /** 计算钉墙位置：枪尖扎进墙体 PIN_EMBED，杆身留在墙外，保证挂人的位置不在方块里。 */
+    private void pinTo(Vec3 hitLocation) {
+        Vec3 dir = this.forward();
+        float[] backoffs = { TIP_REACH - PIN_EMBED, TIP_REACH - PIN_EMBED - 0.5F, TIP_REACH * 0.5F, 0.25F };
+        Vec3 chosen = hitLocation.subtract(dir.scale(TIP_REACH - PIN_EMBED));
+        for (float backoff : backoffs) {
+            if (backoff <= 0.05F) {
+                break;
+            }
+            Vec3 candidate = hitLocation.subtract(dir.scale(backoff));
+            AABB box = new AABB(candidate.x - 0.2, candidate.y - 0.2, candidate.z - 0.2, candidate.x + 0.2,
+                    candidate.y + 0.2, candidate.z + 0.2);
+            if (this.level().noCollision(box)) {
+                chosen = candidate;
+                break;
+            }
+        }
+        this.pinPos = new Vec3(chosen.x, this.getY(), chosen.z);
+        this.pinYaw = this.getFacingYaw();
+        this.entityData.set(PINNED, true);
+    }
+
+    /** 强制保持钉墙状态（抵消原版 startFalling / 位移 / 旋转抖动）。 */
+    private void applyPin() {
+        this.setDeltaMovement(Vec3.ZERO);
+        this.setPos(this.pinPos.x, this.pinPos.y, this.pinPos.z);
+        this.setYRot(this.pinYaw);
+        this.setXRot(0.0F);
+        this.yRotO = this.pinYaw;
+        this.xRotO = 0.0F;
+        if (this.getFacingYaw() != this.pinYaw) {
+            this.entityData.set(FACING_YAW, this.pinYaw);
+        }
+        this.inGround = true;
+        this.inGroundTime = 1;
+    }
+
+    // ------------------------------------------------------------------ 每 tick
+
+    @Override
+    public void tick() {
+        if (this.isPinned()) {
+            // 原版箭矢 tick 在「钉点所在方块为空气」时会解除 inGround 并重新飞行，
+            // 而钉墙时实体本体停在墙外空气中，所以钉墙期间完全绕过原版箭矢逻辑：
+            // 只维持位置/朝向、计时与乘客管理，保证从发射算起满 10 秒后消失。
+            this.tickCount++;
+            if (this.level().isClientSide) {
+                this.tickRenderYaw();
+                this.clientPinTicks++;
+                // 客户端没有钉墙点（那是服务端字段），位置由同步包给出；
+                // 这里只掐掉运动，别让客户端副本自己接着往前飞。
+                this.setDeltaMovement(Vec3.ZERO);
+                this.setXRot(0.0F);
+                this.xRotO = 0.0F;
+                return;
+            }
+            this.applyPin();
+            if (this.tickCount > LIFETIME_TICKS) {
+                this.remove(RemovalReason.DISCARDED);
+                return;
+            }
+            this.remountHungPlayers();
+            this.unstickRiders();
+            return;
+        }
+        // 保持水平直线飞行，速度恒定，朝向始终跟运动方向。
+        Vec3 motion = this.getDeltaMovement();
+        Vec3 horiz = new Vec3(motion.x, 0.0, motion.z);
+        if (horiz.lengthSqr() > 1.0E-6) {
+            horiz = horiz.normalize().scale(THROW_SPEED);
+            this.setDeltaMovement(horiz.x, 0.0, horiz.z);
+            if (!this.level().isClientSide) {
+                this.entityData.set(FACING_YAW, yawFrom(horiz));
+            }
+        }
+        this.setXRot(0.0f);
+        this.xRotO = 0.0f;
+        if (this.level().isClientSide) {
+            this.tickRenderYaw();
+        }
+        super.tick();
+        if (this.tickCount > LIFETIME_TICKS) {
+            this.remove(RemovalReason.DISCARDED);
+            return;
+        }
+        if (this.isPinned()) {
+            if (this.level().isClientSide) {
+                this.clientPinTicks = 0;
+            } else {
+                this.applyPin();
+            }
+        }
+        if (this.level().isClientSide) {
+            return;
+        }
+        // super.tick() 里可能刚刚撞墙钉住，这一 tick 就不要再扫掠挂人了。
+        if (!this.isPinned()) {
+            this.sweepHang();
+        }
+        this.remountHungPlayers();
+        this.unstickRiders();
+    }
+
+    /** 客户端朝向平滑：同步值是每 tick 一跳的，这里追一个软化后的角度给渲染端插值。 */
+    private void tickRenderYaw() {
+        this.prevRenderYaw = this.renderYaw;
+        this.renderYaw = Mth.rotLerp(0.35F, this.renderYaw, this.getFacingYaw());
+    }
+
+    /** 飞行中用整根竹杆扫掠挂人：命中判定覆盖杆头到杆尾，比原版箭矢判定大得多。 */
+    private void sweepHang() {
+        if (this.hungPlayers.size() >= MAX_HANG) {
+            return;
+        }
+        Vec3 forward = this.forward();
+        Vec3 start = this.position().add(forward.scale(-TAIL_REACH));
+        Vec3 end = this.position().add(forward.scale(TIP_REACH));
+        AABB poleBox = new AABB(start, end).inflate(HIT_INFLATE);
+        EntityHitResult hit = ProjectileUtil.getEntityHitResult(this.level(), this, start, end, poleBox,
+                entity -> entity instanceof ServerPlayer target
+                        && target != this.getOwner()
+                        && GameUtils.isPlayerAliveAndSurvival(target)
+                        && !this.hungPlayers.contains(target.getUUID()),
+                (float) (end.distanceToSqr(start) + 1.0D));
+        if (hit != null && hit.getEntity() instanceof ServerPlayer target) {
+            this.hangPlayer(target, hit.getLocation());
+        }
+    }
+
+    private void remountHungPlayers() {
+        hungPlayers.removeIf(uuid -> {
+            Player player = this.level().getPlayerByUUID(uuid);
+            if (!(player instanceof ServerPlayer serverPlayer) || !GameUtils.isPlayerAliveAndSurvival(serverPlayer)) {
+                if (player != null && player.getVehicle() == this) {
+                    player.stopRiding();
+                }
+                return true;
+            }
+            if (serverPlayer.getVehicle() != this) {
+                serverPlayer.startRiding(this, true);
+            }
+            serverPlayer.setDeltaMovement(Vec3.ZERO);
+            banMovement(serverPlayer);
+            return false;
+        });
+    }
+
+    /**
+     * 被挂在竹杆上的玩家不能动：骑乘本身已经吃掉了大部分移动输入，
+     * 这里再叠一层 MOVE_BANED 兜底（钉在墙上期间尤其重要，否则玩家能靠位移把自己蹭下来）。
+     * <p>
+     * 只在剩余时长不足半秒时续期，避免每 tick 都把效果同步包发一遍。
+     */
+    private static void banMovement(ServerPlayer player) {
+        MobEffectInstance current = player.getEffect(ModEffects.MOVE_BANED);
+        if (current != null && current.getDuration() > 10) {
+            return;
+        }
+        player.addEffect(new MobEffectInstance(ModEffects.MOVE_BANED, 40, 0, false, false, false));
+    }
+
+    /** 兜底：万一玩家嵌进方块、或被墙挡在竹子另一侧，清零动量后找同侧安全位；找不到就下竹落地，绝不把人传到墙对面。 */
+    private void unstickRiders() {
+        for (Entity passenger : this.getPassengers()) {
+            if (!(passenger instanceof ServerPlayer player)) {
+                continue;
+            }
+            boolean embedded = !this.level().noCollision(player.getBoundingBox());
+            boolean behindWall = !this.isVisibleFromBamboo(player.position());
+            if (!embedded && !behindWall) {
+                continue;
+            }
+            // 先掐掉动量，避免重定位瞬间又被残留速度带穿墙。
+            player.setDeltaMovement(Vec3.ZERO);
+            Vec3 safe = this.findFreeSpot(player, player.position());
+            if (safe == null) {
+                safe = this.findGroundSpot(player, this.getX(), this.getY(), this.getZ());
+            }
+            if (safe == null) {
+                if (player.getVehicle() == this) {
+                    player.stopRiding();
+                }
+                this.hungPlayers.remove(player.getUUID());
+                continue;
+            }
+            player.teleportTo(player.serverLevel(), safe.x, safe.y, safe.z, Set.of(), player.getYRot(),
+                    player.getXRot());
+            player.setDeltaMovement(Vec3.ZERO);
+        }
+    }
+
+    /** 从竹子本体能否无遮挡地看到该点（中间隔了方块即视为被墙隔开）。 */
+    private boolean isVisibleFromBamboo(Vec3 point) {
+        Vec3 from = this.position();
+        if (from.distanceToSqr(point) < 1.0E-4) {
+            return true;
+        }
+        BlockHitResult clip = this.level().clip(new ClipContext(from, point, ClipContext.Block.COLLIDER,
+                ClipContext.Fluid.NONE, this));
+        return clip.getType() == HitResult.Type.MISS || clip.getLocation().distanceToSqr(point) < 0.09;
+    }
+
+    /**
+     * 在 base 附近找空位：水平面上沿飞行反方向后退，可略向下；
+     * 必须能从竹子本体看到该点，避免把人放到墙对面。
+     */
+    private Vec3 findFreeSpot(Entity entity, Vec3 base) {
+        AABB box = entity.getBoundingBox();
+        Vec3 origin = entity.position();
+        double lockedY = this.getY();
+        Vec3 locked = new Vec3(base.x, lockedY, base.z);
+        if (isOpenAndVisible(entity, box, origin, locked)) {
+            return locked;
+        }
+        Vec3 back = this.forward().reverse();
+        Vec3 right = rightOf(back);
+        Vec3 best = null;
+        double bestDistance = Double.MAX_VALUE;
+        for (double backStep = 0.0; backStep <= 2.5; backStep += 0.5) {
+            for (double sideStep = -1.0; sideStep <= 1.0; sideStep += 0.5) {
+                for (double downStep = 0.0; downStep <= 1.5; downStep += 0.5) {
+                    Vec3 candidate = new Vec3(
+                            locked.x + back.x * backStep + right.x * sideStep,
+                            lockedY - downStep,
+                            locked.z + back.z * backStep + right.z * sideStep);
+                    if (!isOpenAndVisible(entity, box, origin, candidate)) {
+                        continue;
+                    }
+                    double distance = candidate.distanceToSqr(locked);
+                    if (distance < bestDistance) {
+                        bestDistance = distance;
+                        best = candidate;
+                    }
+                }
+            }
+        }
+        return best;
+    }
+
+    /** 从竹子位置垂直向下找能站人的点（同侧，有视线）。 */
+    private Vec3 findGroundSpot(Entity entity, double x, double y, double z) {
+        AABB box = entity.getBoundingBox();
+        Vec3 origin = entity.position();
+        double lowest = Math.max(this.level().getMinBuildHeight() + 1.0, y - 4.0);
+        for (double yy = y; yy >= lowest; yy -= 0.25) {
+            Vec3 candidate = new Vec3(x, yy, z);
+            if (isOpenAndVisible(entity, box, origin, candidate)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private boolean isOpenAndVisible(Entity entity, AABB box, Vec3 origin, Vec3 candidate) {
+        if (!this.level().noCollision(box.move(candidate.subtract(origin)))) {
+            return false;
+        }
+        Vec3 from = this.position();
+        BlockHitResult clip = this.level().clip(new ClipContext(from, candidate, ClipContext.Block.COLLIDER,
+                ClipContext.Fluid.NONE, entity));
+        return clip.getType() == HitResult.Type.MISS || clip.getLocation().distanceToSqr(candidate) < 0.09;
+    }
+
+    private Vec3 forward() {
+        float yaw = this.getFacingYaw() * Mth.DEG_TO_RAD;
+        return new Vec3(-Mth.sin(yaw), 0.0, Mth.cos(yaw));
+    }
+
+    private static Vec3 rightOf(Vec3 dir) {
+        Vec3 right = new Vec3(-dir.z, 0.0, dir.x);
+        if (right.lengthSqr() < 1.0E-6) {
+            return new Vec3(1.0, 0.0, 0.0);
+        }
+        return right.normalize();
+    }
+
+    private static float yawFrom(Vec3 dir) {
+        Vec3 flat = new Vec3(dir.x, 0.0, dir.z);
+        if (flat.lengthSqr() < 1.0E-6) {
+            return 0.0F;
+        }
+        return (float) (Mth.atan2(-flat.x, flat.z) * Mth.RAD_TO_DEG);
+    }
+
+    // ------------------------------------------------------------------ 存档
+
+    @Override
+    public void remove(RemovalReason reason) {
+        // 竹子消失时立刻把「不能动」解掉，别让玩家继续被 MOVE_BANED 的剩余时长按在原地。
+        for (Entity passenger : this.getPassengers()) {
+            if (passenger instanceof ServerPlayer player) {
+                player.removeEffect(ModEffects.MOVE_BANED);
+            }
+        }
+        this.ejectPassengers();
+        super.remove(reason);
+    }
+
+    @Override
+    protected ItemStack getDefaultPickupItem() {
+        return Items.BAMBOO.getDefaultInstance();
+    }
+
+    @Override
+    public ItemStack getPickupItemStackOrigin() {
+        return ModItems.BAMBOO.getDefaultInstance();
+    }
+
+    @Override
+    public void addAdditionalSaveData(CompoundTag compoundTag) {
+        super.addAdditionalSaveData(compoundTag);
+        ListTag list = new ListTag();
+        for (UUID uuid : hungPlayers) {
+            list.add(NbtUtils.createUUID(uuid));
+        }
+        compoundTag.put("HungPlayers", list);
+        compoundTag.putBoolean("Pinned", this.isPinned());
+        if (this.isPinned()) {
+            compoundTag.putDouble("PinX", this.pinPos.x);
+            compoundTag.putDouble("PinY", this.pinPos.y);
+            compoundTag.putDouble("PinZ", this.pinPos.z);
+            compoundTag.putFloat("PinYaw", this.pinYaw);
+        }
+    }
+
+    @Override
+    public void readAdditionalSaveData(CompoundTag compoundTag) {
+        super.readAdditionalSaveData(compoundTag);
+        hungPlayers.clear();
+        ListTag list = compoundTag.getList("HungPlayers", Tag.TAG_INT_ARRAY);
+        for (Tag tag : list) {
+            hungPlayers.add(NbtUtils.loadUUID(tag));
+        }
+        this.entityData.set(PINNED, compoundTag.getBoolean("Pinned"));
+        if (this.isPinned()) {
+            this.pinPos = new Vec3(compoundTag.getDouble("PinX"), compoundTag.getDouble("PinY"),
+                    compoundTag.getDouble("PinZ"));
+            this.pinYaw = compoundTag.getFloat("PinYaw");
+        }
+    }
+}

@@ -1,0 +1,167 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.game.data;
+
+import com.google.gson.Gson;
+
+import io.wifi.starrailexpress.SRE;
+import io.wifi.starrailexpress.SREConfig;
+import io.wifi.starrailexpress.cca.MapVotingComponent;
+import io.wifi.starrailexpress.game.data.MapConfig.MapEntry;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.storage.LevelResource;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.Writer;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+public class ServerMapConfig {
+    private static final Gson gson = new Gson();
+    private static ServerMapConfig instance;
+
+    private List<MapConfig.MapEntry> maps;
+    // private final Path configPath = Paths.get("world", "tmm_maps.json");
+
+    public static synchronized ServerMapConfig getInstance(ServerLevel sl) {
+        return getInstance(sl.getServer());
+    }
+
+    public static synchronized ServerMapConfig getInstance(MinecraftServer sl) {
+        if (instance == null) {
+            instance = loadOrCreateConfig(sl);
+        }
+        return instance;
+    }
+
+    public static synchronized void reload(MinecraftServer sl) {
+        instance = loadOrCreateConfig(sl);
+        io.wifi.starrailexpress.game.modes.funny.mob.MobRiotRules.clearMapEligibilityCache();
+    }
+
+    public static synchronized void reload(ServerLevel sl) {
+        reload(sl.getServer());
+    }
+
+    public List<MapEntry> getRandomMaps() {
+        return getRandomMaps(SREConfig.instance().mapRandomCount);
+    }
+
+    public static List<MapEntry> cache_maps = new ArrayList<>();
+
+    public List<MapEntry> getRandomMaps(int count) {
+        if (SRE.SERVER == null) {
+            return getRandomMaps(count, null);
+        }
+
+        return getRandomMaps(count, MapVotingComponent.KEY.get(SRE.SERVER.overworld()).getPresetGameMode());
+    }
+
+    public List<MapEntry> getRandomMaps(int count, String gameMode) {
+
+        ArrayList<MapEntry> a = new ArrayList<>(this.maps);
+        int pCount = -1;
+        if (SRE.SERVER != null) {
+            pCount = SRE.SERVER.getPlayerCount();
+        }
+        final int playerCount = pCount;
+        a.removeIf(
+                mapEntry -> !mapEntry.canSelect
+                        || (!mapEntry.isSupportedGameMode(gameMode))
+                        || (playerCount >= 0
+                                &&
+                                ((mapEntry.maxCount >= 0 && playerCount > mapEntry.maxCount)
+                                        || (mapEntry.minCount >= 0 && playerCount < mapEntry.minCount))));
+        if (io.wifi.starrailexpress.game.modes.funny.mob.MobRiotRules.MODE_PATH.equals(gameMode)
+                && SRE.SERVER != null) {
+            a.removeIf(mapEntry -> !io.wifi.starrailexpress.game.modes.funny.mob.MobRiotRules
+                    .isVoteMapEligible(SRE.SERVER, mapEntry.id));
+        }
+        if (count < 0) {
+            cache_maps = a;
+            return a;
+        }
+        Collections.shuffle(a);
+        int take = Math.min(count, a.size());
+        List<MapEntry> mapEntries = take <= 0 ? new ArrayList<>() : a.subList(0, take);
+        cache_maps = mapEntries;
+        return mapEntries;
+    }
+
+    private static ServerMapConfig loadOrCreateConfig(MinecraftServer sl) {
+        ServerMapConfig config = new ServerMapConfig();
+        Path configPath = Paths.get(sl.getWorldPath(LevelResource.ROOT).toString(), "train_vote_maps.json");
+        // 尝试从服务器配置目录加载配置
+        if (Files.exists(configPath)) {
+            try (BufferedReader reader = Files.newBufferedReader(configPath, StandardCharsets.UTF_8)) {
+                MapConfig loadedConfig = gson.fromJson(reader, MapConfig.class);
+                if (loadedConfig != null && loadedConfig.getMaps() != null) {
+                    config.maps = loadedConfig.getMaps();
+                    return config;
+                }
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+
+        // 如果配置文件不存在或加载失败，使用默认配置并保存
+        MapConfig defaultConfig = MapConfig.createDefaultConfig();
+        config.maps = defaultConfig.getMaps();
+        config.saveConfig(sl);
+        return config;
+    }
+
+    public void saveConfig(MinecraftServer sl) {
+        try {
+            // 确保配置目录存在
+            Path configPath = Paths.get(sl.getWorldPath(LevelResource.ROOT).toString(),
+                    "train_vote_maps.json");
+
+            Files.createDirectories(configPath.getParent());
+
+            MapConfig tempConfig = new MapConfig();
+            tempConfig.maps = this.maps;
+
+            try (Writer writer = Files.newBufferedWriter(configPath, StandardCharsets.UTF_8)) {
+                gson.toJson(tempConfig, writer);
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public List<MapConfig.MapEntry> getMaps() {
+        return maps;
+    }
+
+    public MapConfig.MapEntry getMapById(String id) {
+        if (maps != null) {
+            for (MapConfig.MapEntry entry : maps) {
+                if (entry.getId().equals(id)) {
+                    return entry;
+                }
+            }
+        }
+        return null;
+    }
+}

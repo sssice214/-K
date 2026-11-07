@@ -1,0 +1,947 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.register;
+
+import io.wifi.starrailexpress.SRE;
+import io.wifi.starrailexpress.api.RoleSkill;
+import io.wifi.starrailexpress.api.data.RoleData;
+import io.wifi.starrailexpress.api.replay.GameReplayUtils;
+import io.wifi.starrailexpress.cca.SREAbilityPlayerComponent;
+import io.wifi.starrailexpress.cca.SREGameWorldComponent;
+import io.wifi.starrailexpress.cca.SREPlayerShopComponent;
+import io.wifi.starrailexpress.content.block_entity.DoorBlockEntity;
+import io.wifi.starrailexpress.game.GameUtils;
+import io.wifi.starrailexpress.index.TMMItems;
+import io.wifi.starrailexpress.util.SREItemUtils;
+import io.wifi.starrailexpress.util.SRENetworkMessageUtils;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.minecraft.ChatFormatting;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.phys.Vec3;
+import org.agmas.noellesroles.ConfigWorldComponent;
+import org.agmas.noellesroles.client.screen.DetectiveInspectScreenHandler;
+import org.agmas.noellesroles.client.screen.PostmanScreenHandler;
+import org.agmas.noellesroles.component.ModComponents;
+import org.agmas.noellesroles.content.entity.LockEntityManager;
+import org.agmas.noellesroles.content.entity.NiaoshoushouMissileEntity;
+import org.agmas.noellesroles.role_data.innocence.AthleteRoleData;
+import org.agmas.noellesroles.role_data.innocence.AyayayaRoleData;
+import org.agmas.noellesroles.role_data.innocence.BoxerRoleData;
+import org.agmas.noellesroles.role_data.innocence.AgentRoleData;
+import org.agmas.noellesroles.role_data.innocence.GreatDetectiveRoleData;
+import org.agmas.noellesroles.role_data.innocence.PsychologistRoleData;
+import org.agmas.noellesroles.role_data.innocence.SingerRoleData;
+import org.agmas.noellesroles.role_data.innocence.LocksmithInspirationRoleData;
+import org.agmas.noellesroles.role_data.innocence.SuperStarRoleData;
+import org.agmas.noellesroles.role_data.innocence.TelegrapherRoleData;
+import org.agmas.noellesroles.game.roles.innocence.veteran.VeteranKnifeHandler;
+import org.agmas.noellesroles.role_data.killer.ConspiratorRoleData;
+import org.agmas.noellesroles.role_data.killer.StalkerRoleData;
+import org.agmas.noellesroles.role_data.killer.TrapperRoleData;
+import org.agmas.noellesroles.role_data.killer.ImitatorRoleData;
+import org.agmas.noellesroles.role_data.neutral.AdmirerRoleData;
+import org.agmas.noellesroles.game.roles.neutral.puppeteer.PuppeteerPlayerComponent;
+import org.agmas.noellesroles.init.ModItems;
+import org.agmas.noellesroles.packet.GreatDetectiveRevealC2SPacket;
+import org.agmas.noellesroles.packet.MechanicalBirdControlC2SPacket;
+import org.agmas.noellesroles.packet.NiaoshoushouMissileControlC2SPacket;
+import org.agmas.noellesroles.role.ModRoles;
+import org.agmas.noellesroles.role.bouns.BounsRoles;
+
+import static org.agmas.noellesroles.RicesRoleRhapsody.*;
+
+/**
+ * Rice's Role Rhapsody 服务端网络包接收器注册，
+ * 从 {@link org.agmas.noellesroles.RicesRoleRhapsody} 的 registerPackets() 中按类别剥离归一化而来。
+ *
+ * <p>数据包 Type 常量（CONSPIRATOR_PACKET 等）通过对
+ * {@link org.agmas.noellesroles.RicesRoleRhapsody} 的静态导入解析。
+ */
+public class RiceReceiverRegister {
+
+    private static final int VETERAN_DASH_COOLDOWN_TICKS = 60 * 20;
+    private static final double VETERAN_DASH_SPEED = 1.25D;
+
+    public static void registerReceivers() {
+        ServerPlayNetworking.registerGlobalReceiver(org.agmas.noellesroles.packet.SpeakerC2SPacket.ID,
+                (payload, context) -> {
+                    context.server().execute(() -> org.agmas.noellesroles.content.speaker.SpeakerPlayback
+                            .apply(context.player(), payload.trackId(), payload.playing(), payload.volume()));
+                });
+
+        // 鸟兽兽巡飞弹控制：只接受发射者本人、且仍在追踪范围内的控制输入。
+        ServerPlayNetworking.registerGlobalReceiver(NiaoshoushouMissileControlC2SPacket.ID, (payload, context) -> {
+            context.server().execute(() -> {
+                ServerPlayer player = context.player();
+                Entity entity = player.serverLevel().getEntity(payload.entityId());
+                if (entity instanceof NiaoshoushouMissileEntity missile
+                        && missile.controlledBy(player)
+                        && player.distanceToSqr(missile) <= 128.0D * 128.0D) {
+                    missile.setControlRotation(payload.yaw(), payload.pitch(), payload.steering());
+                }
+            });
+        });
+
+        ServerPlayNetworking.registerGlobalReceiver(MechanicalBirdControlC2SPacket.ID, (payload, context) -> {
+            context.server().execute(() -> {
+                ServerPlayer player = context.player();
+                Entity entity = player.serverLevel().getEntity(payload.entityId());
+                if (entity instanceof org.agmas.noellesroles.content.entity.MechanicalBirdEntity bird
+                        && bird.controlledBy(player)
+                        && player.distanceToSqr(bird) <= 128.0D * 128.0D) {
+                    bird.setControlInput(payload.yaw(), payload.pitch(), payload.movementBits());
+                }
+            });
+        });
+
+        // 撬锁
+        ServerPlayNetworking.registerGlobalReceiver(LOCK_GAME_PACKET, (payload, context) -> {
+            ServerPlayer player = context.player();
+            ItemStack lockPick = player.getItemInHand(InteractionHand.MAIN_HAND);
+            boolean isLockPick = false;
+            for (var item : LockEntityManager.getInstance().getCanBeUsedToUnLock()) {
+                if (lockPick.is(item)) {
+                    isLockPick = true;
+                    break;
+                }
+            }
+            if (payload.result()) {
+                context.player().displayClientMessage(
+                        Component.translatable("message.lock.unlock").withStyle(ChatFormatting.GREEN), true);
+                // context.player().playSound(SoundEvents.ANVIL_PLACE, 1f, 2f);
+                context.server().execute(() -> {
+                    context.player().playNotifySound(SoundEvents.ANVIL_PLACE, SoundSource.BLOCKS, 0.5f, 2f);
+                });
+                LockEntityManager.getInstance().removeLockEntity(payload.pos(), payload.entityId());
+                // 把锁附近的门解锁（如果还有锁则不会成功解锁）
+                Level world = context.player().level();
+                BlockEntity blockEntity = world.getBlockEntity(payload.pos().below());
+                if (blockEntity instanceof DoorBlockEntity door) {
+                    LockEntityManager.lockNearByDoors(door, world, false);
+                }
+
+            } else if (isLockPick) {
+                context.server().execute(() -> {
+                    context.player().playNotifySound(SoundEvents.ANVIL_DESTROY, SoundSource.BLOCKS, 0.5f, 1f);
+                });
+                context.player().displayClientMessage(
+                        Component.translatable("message.lock.failed").withStyle(ChatFormatting.RED), true);
+                if (!lockPick.is(ModItems.MASTER_KEY)) {
+                    lockPick.shrink(1);
+                }
+            }
+        });
+
+        // 配钥
+        ServerPlayNetworking.registerGlobalReceiver(KEY_FORGE_GAME_PACKET, (payload, context) -> {
+            ServerPlayer player = context.player();
+            int difficulty = payload.difficulty();
+            if (difficulty < 1 || difficulty > 6) {
+                return;
+            }
+
+            int inspirationCost;
+            switch (difficulty) {
+                case 1:
+                    inspirationCost = 2;
+                    break;
+                case 2:
+                    inspirationCost = 3;
+                    break;
+                case 3:
+                    inspirationCost = 4;
+                    break;
+                case 4:
+                    inspirationCost = 7;
+                    break;
+                case 5:
+                    inspirationCost = 8;
+                    break;
+                case 6:
+                    inspirationCost = 9;
+                    break;
+                default:
+                    inspirationCost = 0;
+                    break;
+            }
+
+            ItemStack mainHand = player.getItemInHand(InteractionHand.MAIN_HAND);
+            ItemStack offHand = player.getItemInHand(InteractionHand.OFF_HAND);
+            InteractionHand consumeHand = null;
+            if (mainHand.is(ModItems.NOELL_KEY_BLANK)) {
+                consumeHand = InteractionHand.MAIN_HAND;
+            } else if (offHand.is(ModItems.NOELL_KEY_BLANK)) {
+                consumeHand = InteractionHand.OFF_HAND;
+            }
+            if (consumeHand == null) {
+                return;
+            }
+
+            LocksmithInspirationRoleData inspirationComponent = RoleData.getNullable(LocksmithInspirationRoleData.class, player);
+            if (inspirationComponent == null) {
+                return;
+            }
+            if (!player.isCreative() && !inspirationComponent.consumeInspiration(inspirationCost)) {
+                player.displayClientMessage(
+                        Component.translatable("message.noellesroles.locksmith.inspiration_insufficient",
+                                inspirationCost, inspirationComponent.getInspirationPoints())
+                                .withStyle(ChatFormatting.RED),
+                        true);
+                return;
+            }
+
+            ItemStack keyBlank = player.getItemInHand(consumeHand);
+            if (!player.isCreative()) {
+                keyBlank.shrink(1);
+            }
+
+            if (!payload.success()) {
+                player.displayClientMessage(
+                        Component.translatable("message.noellesroles.key_forge.failed").withStyle(ChatFormatting.RED),
+                        true);
+                return;
+            }
+
+            ItemStack reward = switch (difficulty) {
+                case 1 -> ModItems.MASTER_KEY_P.getDefaultInstance();
+                case 2 -> TMMItems.IRON_DOOR_KEY.getDefaultInstance();
+                case 3 -> TMMItems.CROWBAR.getDefaultInstance();
+                case 4 -> ModItems.MASTER_KEY.getDefaultInstance();
+                case 5 -> TMMItems.LOCKPICK.getDefaultInstance();
+                case 6 -> ModItems.NOELL_ARTISAN_KEY.getDefaultInstance();
+                default -> ItemStack.EMPTY;
+            };
+            if (reward.isEmpty()) {
+                return;
+            }
+
+            if (!player.addItem(reward)) {
+                player.drop(reward, false);
+            }
+            player.displayClientMessage(
+                    Component.translatable("message.noellesroles.key_forge.success").withStyle(ChatFormatting.GREEN),
+                    true);
+        });
+
+        // 处理阴谋家猜测包
+        ServerPlayNetworking.registerGlobalReceiver(CONSPIRATOR_PACKET, (payload, context) -> {
+            SREGameWorldComponent gameWorld = SREGameWorldComponent.KEY.get(context.player().level());
+
+            // 验证玩家是阴谋家
+            if (!gameWorld.isRole(context.player(), ModRoles.CONSPIRATOR))
+                return;
+
+            // 验证玩家存活
+            if (!GameUtils.isPlayerAliveAndSurvival(context.player()))
+                return;
+
+            // 验证目标玩家
+            if (payload.targetPlayer() == null)
+                return;
+            Player target = context.player().level().getPlayerByUUID(payload.targetPlayer());
+            if (target == null)
+                return;
+
+            // 验证角色 ID
+            if (payload.roleId() == null || payload.roleId().isEmpty())
+                return;
+            ResourceLocation roleId = ResourceLocation.tryParse(payload.roleId());
+            if (roleId == null)
+                return;
+
+            // 验证玩家持有书页物品
+            ItemStack mainHand = context.player().getItemInHand(InteractionHand.MAIN_HAND);
+            ItemStack offHand = context.player().getItemInHand(InteractionHand.OFF_HAND);
+            boolean hasPage = mainHand.is(ModItems.CONSPIRACY_PAGE) || offHand.is(ModItems.CONSPIRACY_PAGE);
+
+            if (!hasPage)
+                return;
+
+            // 执行猜测
+            RoleData.getOptional(ConspiratorRoleData.class, context.player()).ifPresent(
+                    component -> component.makeGuess(payload.targetPlayer(), roleId));
+            // 消耗书页物品
+            if (mainHand.is(ModItems.CONSPIRACY_PAGE)) {
+                mainHand.shrink(1);
+            } else if (offHand.is(ModItems.CONSPIRACY_PAGE)) {
+                offHand.shrink(1);
+            }
+        });
+
+        // 处理电报员消息包
+        ServerPlayNetworking.registerGlobalReceiver(TELEGRAPHER_PACKET, (payload, context) -> {
+            SREGameWorldComponent gameWorld = SREGameWorldComponent.KEY.get(context.player().level());
+
+            // 验证玩家存活
+            if (!GameUtils.isPlayerAliveAndSurvivalIgnoreShitSplit(context.player()))
+                return;
+
+            // 验证消息不为空
+            if (payload.message() == null || payload.message().trim().isEmpty())
+                return;
+
+            // 模仿者使用电报员能力
+            if (gameWorld.isRole(context.player(), ModRoles.IMITATOR)) {
+                RoleData.getOptional(ImitatorRoleData.class, context.player())
+                        .ifPresent(d -> d.useMessageAbility(context.player(), payload.message()));
+                return;
+            }
+
+            // 验证玩家是电报员
+            if (!gameWorld.isRole(context.player(), BounsRoles.TELEGRAPHER))
+                return;
+
+            // 获取电报员数据并发送消息
+            RoleData.getOptional(TelegrapherRoleData.class, context.player())
+                    .ifPresent(d -> d.sendAnonymousMessage(payload.message()));
+        });
+
+        // 处理射命丸文传递包
+        ServerPlayNetworking.registerGlobalReceiver(POSTMAN_PACKET, (payload, context) -> {
+            if (!GameUtils.isPlayerAliveAndSurvival(context.player()))
+                return;
+
+            switch (payload.action()) {
+                case OPEN_DELIVERY -> {
+                    AyayayaRoleData postmanComp = RoleData.getNullable(AyayayaRoleData.class, context.player());
+                    if (postmanComp == null)
+                        return;
+
+                    Player target = context.player().level().getPlayerByUUID(payload.targetPlayer());
+                    if (target == null || !GameUtils.isPlayerAliveAndSurvival(target))
+                        return;
+
+                    postmanComp.startDelivery(payload.targetPlayer(), target.getName().getString());
+
+                    if (context.player() instanceof ServerPlayer serverPlayer) {
+                        serverPlayer.openMenu(
+                                new net.fabricmc.fabric.api.screenhandler.v1.ExtendedScreenHandlerFactory<java.util.UUID>() {
+                                    @Override
+                                    public Component getDisplayName() {
+                                        return Component.translatable("screen.noellesroles.postman.title");
+                                    }
+
+                                    @Override
+                                    public net.minecraft.world.inventory.AbstractContainerMenu createMenu(int syncId,
+                                            net.minecraft.world.entity.player.Inventory playerInventory,
+                                            Player player) {
+                                        return new PostmanScreenHandler(syncId, playerInventory,
+                                                payload.targetPlayer());
+                                    }
+
+                                    @Override
+                                    public java.util.UUID getScreenOpeningData(ServerPlayer player) {
+                                        return payload.targetPlayer();
+                                    }
+                                });
+                    }
+
+                    if (target instanceof ServerPlayer serverTarget) {
+                        final java.util.UUID postmanUuid = context.player().getUUID();
+                        serverTarget.openMenu(
+                                new net.fabricmc.fabric.api.screenhandler.v1.ExtendedScreenHandlerFactory<java.util.UUID>() {
+                                    @Override
+                                    public Component getDisplayName() {
+                                        return Component.translatable("screen.noellesroles.postman.title");
+                                    }
+
+                                    @Override
+                                    public net.minecraft.world.inventory.AbstractContainerMenu createMenu(int syncId,
+                                            net.minecraft.world.entity.player.Inventory playerInventory,
+                                            Player player) {
+                                        return new PostmanScreenHandler(syncId, playerInventory, postmanUuid);
+                                    }
+
+                                    @Override
+                                    public java.util.UUID getScreenOpeningData(ServerPlayer player) {
+                                        return postmanUuid;
+                                    }
+                                });
+                    }
+                }
+                case SET_ITEM -> {
+                    AyayayaRoleData session = AyayayaRoleData.resolve(context.player());
+                    if (session == null || !session.isDeliveryActive())
+                        return;
+                    session.setItem(payload.item(), !session.isViewerReceiver(context.player()));
+                }
+                case CONFIRM -> {
+                    AyayayaRoleData session = AyayayaRoleData.resolve(context.player());
+                    if (session == null || !session.isDeliveryActive() || session.deliveryTarget == null)
+                        return;
+                    Player target = context.player().level().getPlayerByUUID(session.deliveryTarget);
+                    if (target == null)
+                        return;
+
+                    boolean isPostman = !session.isViewerReceiver(context.player());
+                    session.confirm(isPostman);
+
+                    if (session.isBothConfirmed()) {
+                        ItemStack postmanItem = session.putItem.copy();
+                        ItemStack targetItem = session.targetItem.copy();
+
+                        Player postmanPlayer = session.getPlayer();
+                        Player receiverPlayer = target;
+
+                        if (!targetItem.isEmpty()) {
+                            postmanPlayer.addItem(targetItem);
+                        }
+                        if (!postmanItem.isEmpty()) {
+                            receiverPlayer.addItem(postmanItem);
+                        }
+
+                        consumeDeliveryBox(postmanPlayer);
+
+                        session.init();
+
+                        // 交换已结算：清空双方页面中央槽中残留的物品副本，
+                        // 避免随后关闭页面时把已互换物品的副本返还给玩家（造成复制）
+                        clearTradeSlot(postmanPlayer);
+                        clearTradeSlot(receiverPlayer);
+                        clearTradeSlot(context.player());
+                        SRE.REPLAY_MANAGER.recordCustomEvent(
+                            Component.translatable("replay.event.shameimaru.exchange_box",
+                                GameReplayUtils.getReplayPlayerDisplayText(postmanPlayer, true),
+                                GameReplayUtils.getReplayPlayerDisplayText(receiverPlayer, true)));
+
+                        if (context.player() instanceof ServerPlayer serverPlayer) {
+                            serverPlayer.closeContainer();
+                        }
+                        if (target instanceof ServerPlayer serverTarget) {
+                            serverTarget.closeContainer();
+                        }
+                        if (postmanPlayer instanceof ServerPlayer serverPostman && serverPostman != context.player()) {
+                            serverPostman.closeContainer();
+                        }
+                    }
+                }
+                case CANCEL -> {
+                    AyayayaRoleData session = AyayayaRoleData.resolve(context.player());
+                    if (session == null || !session.isDeliveryActive())
+                        return;
+                    session.init();
+                }
+            }
+        });
+
+        // 处理探员审查包
+        ServerPlayNetworking.registerGlobalReceiver(DETECTIVE_PACKET, (payload, context) -> {
+            SREGameWorldComponent gameWorld = SREGameWorldComponent.KEY.get(context.player().level());
+
+            // 验证玩家是探员
+            if (!gameWorld.isRole(context.player(), ModRoles.AGENT))
+                return;
+
+            // 验证玩家存活
+            if (!GameUtils.isPlayerAliveAndSurvival(context.player()))
+                return;
+
+            // 获取探员组件
+            AgentRoleData component = RoleData.getNullable(AgentRoleData.class, context.player());
+            if (component == null)
+                return;
+
+            // 检查技能冷却
+            if (!component.canUseAbility()) {
+                context.player()
+                        .displayClientMessage(Component.translatable("message.noellesroles.detective.on_cooldown",
+                                String.format("%.1f", component.getCooldownSeconds())), true);
+                return;
+            }
+
+            // 获取玩家商店组件，检查金币
+            SREPlayerShopComponent shopComponent = SREPlayerShopComponent.KEY.get(context.player());
+            if (shopComponent.balance < AgentRoleData.INSPECT_COST) {
+                context.player().displayClientMessage(
+                        Component.translatable("message.noellesroles.detective.insufficient_funds"), true);
+                return;
+            }
+
+            // 验证目标玩家
+            Player target = context.player().level().getPlayerByUUID(payload.targetUuid());
+            if (target == null || !GameUtils.isPlayerAliveAndSurvival(target)) {
+                context.player().displayClientMessage(
+                        Component.translatable("message.noellesroles.detective.invalid_target"), true);
+                return;
+            }
+
+            // 不能审查自己
+            if (target.getUUID().equals(context.player().getUUID())) {
+                context.player().displayClientMessage(
+                        Component.translatable("message.noellesroles.detective.cannot_inspect_self"), true);
+                return;
+            }
+
+            // 扣除金币
+            shopComponent.addToBalance(-AgentRoleData.INSPECT_COST);
+
+            // 设置冷却
+            component.setCooldown(AgentRoleData.INSPECT_COOLDOWN);
+
+            // 开始审查
+            component.startInspecting((ServerPlayer) target);
+            // 回放记录：探员审查玩家物品栏
+            SRE.REPLAY_MANAGER.recordCustomEvent(
+                Component.translatable("replay.event.agent.inspect_inventory",
+                    GameReplayUtils.getReplayPlayerDisplayText(context.player(), true),
+                    GameReplayUtils.getReplayPlayerDisplayText(target, true)));
+
+            // 打开只读的侦探审查界面
+            if (context.player() instanceof ServerPlayer serverPlayer) {
+                serverPlayer.openMenu(
+                        new net.fabricmc.fabric.api.screenhandler.v1.ExtendedScreenHandlerFactory<java.util.UUID>() {
+                            @Override
+                            public Component getDisplayName() {
+                                return Component.translatable("container.noellesroles.detective.inspect",
+                                        target.getName());
+                            }
+
+                            @Override
+                            public net.minecraft.world.inventory.AbstractContainerMenu createMenu(int syncId,
+                                    net.minecraft.world.entity.player.Inventory playerInventory, Player player) {
+                                return new DetectiveInspectScreenHandler(syncId, playerInventory,
+                                        (ServerPlayer) target);
+                            }
+
+                            @Override
+                            public java.util.UUID getScreenOpeningData(ServerPlayer player) {
+                                return target.getUUID();
+                            }
+                        });
+            }
+        });
+
+        // 处理大侦探「目标情况」包：方位快照或生死，每名凶手只能查明一项
+        ServerPlayNetworking.registerGlobalReceiver(GreatDetectiveRevealC2SPacket.ID, (payload, context) -> {
+            ServerPlayer player = context.player();
+            SREGameWorldComponent gameWorld = SREGameWorldComponent.KEY.get(player.level());
+
+            if (!gameWorld.isRole(player, ModRoles.GREAT_DETECTIVE))
+                return;
+            if (!GameUtils.isPlayerAliveAndSurvival(player))
+                return;
+            if (payload.killer() == null)
+                return;
+
+            GreatDetectiveRoleData comp = RoleData.getNullable(GreatDetectiveRoleData.class, player);
+            if (comp == null)
+                return;
+
+            if (comp.clueCount(payload.killer()) < 3)
+                return;
+            if (comp.hasTargetReveal(payload.killer()))
+                return;
+
+            Player killer = player.level().getPlayerByUUID(payload.killer());
+            boolean killerAlive = killer != null && killer.level() == player.level()
+                    && GameUtils.isPlayerAliveAndSurvival(killer);
+
+            if (payload.mode() == GreatDetectiveRevealC2SPacket.MODE_VITAL) {
+                comp.setRevealedVital(payload.killer(), killerAlive);
+                SRENetworkMessageUtils.sendBroadcast(player,
+                        Component.translatable(killerAlive
+                                        ? "message.noellesroles.great_detective.target_vital_alive"
+                                        : "message.noellesroles.great_detective.target_vital_dead")
+                                .withStyle(killerAlive ? ChatFormatting.GREEN : ChatFormatting.GRAY));
+            } else {
+                int distance = -1;
+                if (killerAlive) {
+                    distance = (int) Math.round(player.distanceTo(killer));
+                }
+                comp.setRevealedDistance(payload.killer(), distance);
+                if (distance < 0) {
+                    SRENetworkMessageUtils.sendBroadcast(player,
+                            Component.translatable("message.noellesroles.great_detective.target_distance_unknown")
+                                    .withStyle(ChatFormatting.GRAY));
+                } else {
+                    SRENetworkMessageUtils.sendBroadcast(player,
+                            Component.translatable("message.noellesroles.great_detective.target_distance", distance)
+                                    .withStyle(ChatFormatting.AQUA));
+                }
+            }
+        });
+
+        // 处理斗士技能包
+        ServerPlayNetworking.registerGlobalReceiver(BOXER_ABILITY_PACKET, (payload, context) -> {
+            if (RoleSkill.blockForSpectator(context.player()))
+                return;
+            SREGameWorldComponent gameWorld = SREGameWorldComponent.KEY.get(context.player().level());
+
+            // 验证玩家是斗士
+            if (!gameWorld.isRole(context.player(), ModRoles.FIGHTER))
+                return;
+
+            // 验证玩家存活
+            if (!GameUtils.isPlayerAliveAndSurvival(context.player()))
+                return;
+
+            // 获取斗士组件
+            var boxerData = RoleData.getOptional(BoxerRoleData.class, context.player());
+
+            // 在服务端使用技能
+            if (boxerData.map(BoxerRoleData::useAbility).orElse(false)) {
+                ConfigWorldComponent.onPlayerUsedSkill(context.player());
+            }
+        });
+
+        // 处理跟踪者窥视包
+        ServerPlayNetworking.registerGlobalReceiver(STALKER_GAZE_PACKET, (payload, context) -> {
+            if (RoleSkill.blockForSpectator(context.player()))
+                return;
+            // 获取跟踪者组件
+            StalkerRoleData stalkerComp = RoleData.getNullable(StalkerRoleData.class, context.player());
+            if (stalkerComp == null)
+                return;
+
+            // 验证是跟踪者
+            if (!stalkerComp.isActiveStalker())
+                return;
+
+            // 验证玩家存活
+            if (!GameUtils.isPlayerAliveAndSurvival(context.player()))
+                return;
+
+            // 只有一阶段和二阶段能使用窥视
+            if (stalkerComp.phase > 2)
+                return;
+
+            if (payload.gazing()) {
+                stalkerComp.startGazing();
+                ConfigWorldComponent.onPlayerUsedSkill(context.player());
+            } else {
+                stalkerComp.stopGazing();
+            }
+        });
+
+        // 处理跟踪者突进包
+        ServerPlayNetworking.registerGlobalReceiver(STALKER_DASH_PACKET, (payload, context) -> {
+            if (RoleSkill.blockForSpectator(context.player()))
+                return;
+            // 获取跟踪者组件
+            StalkerRoleData stalkerComp = RoleData.getNullable(StalkerRoleData.class, context.player());
+            if (stalkerComp == null)
+                return;
+
+            // 验证是跟踪者
+            if (!stalkerComp.isActiveStalker())
+                return;
+
+            // 验证玩家存活
+            if (!GameUtils.isPlayerAliveAndSurvival(context.player()))
+                return;
+
+            // 只有刺客形态且手持潜行者匕首时能用右键蓄力冲刺。
+            if (!stalkerComp.isAssassinFormActive()
+                    || !StalkerRoleData.isHoldingHuntingKnife(context.player()))
+                return;
+
+            if (payload.charging()) {
+                stalkerComp.startAttackDashCharge();
+            } else if (stalkerComp.releaseAttackDash()) {
+                ConfigWorldComponent.onPlayerUsedSkill(context.player());
+            }
+        });
+
+        // 处理运动员技能包
+        ServerPlayNetworking.registerGlobalReceiver(ATHLETE_ABILITY_PACKET, (payload, context) -> {
+            if (RoleSkill.blockForSpectator(context.player()))
+                return;
+            SREGameWorldComponent gameWorld = SREGameWorldComponent.KEY.get(context.player().level());
+
+            // 验证玩家是运动员
+            if (!gameWorld.isRole(context.player(), ModRoles.ATHLETE))
+                return;
+
+            // 验证玩家存活
+            if (!GameUtils.isPlayerAliveAndSurvival(context.player()))
+                return;
+
+            // 获取运动员数据
+            var athleteData = RoleData.getOptional(AthleteRoleData.class, context.player());
+
+            // 在服务端使用技能
+            if (athleteData.map(AthleteRoleData::useAbility).orElse(false)) {
+                ConfigWorldComponent.onPlayerUsedSkill(context.player());
+            }
+        });
+
+        // 处理慕恋者窥视包
+        ServerPlayNetworking.registerGlobalReceiver(ADMIRER_GAZE_PACKET, (payload, context) -> {
+            if (RoleSkill.blockForSpectator(context.player()))
+                return;
+            // 获取慕恋者组件
+            AdmirerRoleData admirerComp = RoleData.getNullable(AdmirerRoleData.class, context.player());
+            if (admirerComp == null)
+                return;
+
+            // 验证是慕恋者
+            if (!admirerComp.isActiveAdmirer())
+                return;
+            // 验证玩家存活
+            if (!GameUtils.isPlayerAliveAndSurvival(context.player()))
+                return;
+
+            if (payload.gazing()) {
+                admirerComp.startGazing();
+                ConfigWorldComponent.onPlayerUsedSkill(context.player());
+            } else {
+                admirerComp.stopGazing();
+            }
+        });
+
+        // 处理设陷者技能包
+        ServerPlayNetworking.registerGlobalReceiver(TRAPPER_PACKET, (payload, context) -> {
+            if (RoleSkill.blockForSpectator(context.player()))
+                return;
+            SREGameWorldComponent gameWorld = SREGameWorldComponent.KEY.get(context.player().level());
+
+            // 验证玩家是设陷者
+            if (!gameWorld.isRole(context.player(), ModRoles.TRAPPER))
+                return;
+
+            // 验证玩家存活
+            if (!GameUtils.isPlayerAliveAndSurvival(context.player()))
+                return;
+
+            // 获取设陷者组件并尝试放置陷阱
+            TrapperRoleData trapperComp = RoleData.getNullable(TrapperRoleData.class, context.player());
+            if (trapperComp != null && trapperComp.tryPlaceTrap()) {
+                ConfigWorldComponent.onPlayerUsedSkill(context.player());
+            }
+        });
+
+        // 处理设陷者切换陷阱类型包
+        ServerPlayNetworking.registerGlobalReceiver(TRAPPER_SWITCH_PACKET, (payload, context) -> {
+            if (RoleSkill.blockForSpectator(context.player()))
+                return;
+            SREGameWorldComponent gameWorld = SREGameWorldComponent.KEY.get(context.player().level());
+
+            // 验证玩家是设陷者
+            if (!gameWorld.isRole(context.player(), ModRoles.TRAPPER))
+                return;
+
+            // 验证玩家存活
+            if (!GameUtils.isPlayerAliveAndSurvival(context.player()))
+                return;
+
+            // 获取设陷者组件并切换陷阱类型（模式切换，不计入技能释放）
+            TrapperRoleData trapperComp = RoleData.getNullable(TrapperRoleData.class, context.player());
+            if (trapperComp != null) {
+                trapperComp.switchTrapType();
+            }
+        });
+
+        // 处理明星技能包
+        ServerPlayNetworking.registerGlobalReceiver(STAR_ABILITY_PACKET, (payload, context) -> {
+            if (RoleSkill.blockForSpectator(context.player()))
+                return;
+            SREGameWorldComponent gameWorld = SREGameWorldComponent.KEY.get(context.player().level());
+
+            // 验证玩家是明星
+            if (!gameWorld.isRole(context.player(), ModRoles.SUPERSTAR))
+                return;
+
+            // 验证玩家存活
+            if (!GameUtils.isPlayerAliveAndSurvival(context.player()))
+                return;
+
+            // 获取明星数据并使用技能
+            if (RoleData.getOptional(SuperStarRoleData.class, context.player())
+                    .map(SuperStarRoleData::useAbility).orElse(false)) {
+                ConfigWorldComponent.onPlayerUsedSkill(context.player());
+            }
+        });
+
+        // 处理歌手技能包
+        ServerPlayNetworking.registerGlobalReceiver(SINGER_ABILITY_PACKET, (payload, context) -> {
+            if (RoleSkill.blockForSpectator(context.player()))
+                return;
+            SREGameWorldComponent gameWorld = SREGameWorldComponent.KEY.get(context.player().level());
+
+            // 验证玩家是歌手
+            if (!gameWorld.isRole(context.player(), ModRoles.SINGER))
+                return;
+
+            // 验证玩家存活
+            if (!GameUtils.isPlayerAliveAndSurvival(context.player()))
+                return;
+
+            // 获取歌手数据并使用技能
+            RoleData.getOptional(SingerRoleData.class, context.player())
+                    .ifPresent(SingerRoleData::useAbility);
+        });
+
+        // 处理退伍军人持刀冲刺包
+        ServerPlayNetworking.registerGlobalReceiver(VETERAN_DASH_PACKET, (payload, context) -> {
+            handleVeteranDash(context.player());
+        });
+
+        // 处理心理学家治疗包
+        ServerPlayNetworking.registerGlobalReceiver(PSYCHOLOGIST_PACKET, (payload, context) -> {
+            SREGameWorldComponent gameWorld = SREGameWorldComponent.KEY.get(context.player().level());
+
+            // 验证玩家是心理学家
+            if (!gameWorld.isRole(context.player(), ModRoles.PSYCHOLOGIST))
+                return;
+
+            // 验证玩家存活
+            if (!GameUtils.isPlayerAliveAndSurvival(context.player()))
+                return;
+
+            // 验证目标玩家
+            Player target = context.player().level().getPlayerByUUID(payload.targetUuid());
+            if (target == null) {
+                context.player().displayClientMessage(
+                        Component.translatable("message.noellesroles.psychologist.invalid_target"), true);
+                return;
+            }
+
+            // 获取心理学家组件并开始治疗
+            PsychologistRoleData psychComp = RoleData.getNullable(PsychologistRoleData.class, context.player());
+            if (psychComp != null) {
+                psychComp.startHealing(target);
+            }
+            ConfigWorldComponent.onPlayerUsedSkill(context.player());
+        });
+
+        // 处理傀儡师技能包
+        ServerPlayNetworking.registerGlobalReceiver(PUPPETEER_PACKET, (payload, context) -> {
+            SREGameWorldComponent gameWorld = SREGameWorldComponent.KEY.get(context.player().level());
+
+            // 获取傀儡师组件
+            PuppeteerPlayerComponent puppeteerComp = ModComponents.PUPPETEER.get(context.player());
+
+            // 验证玩家是傀儡师（通过角色检查或组件检查，与客户端保持一致）
+            boolean isPuppeteer = gameWorld.isRole(context.player(), ModRoles.PUPPETEER);
+            boolean isActivePuppeteer = puppeteerComp.isActivePuppeteer();
+
+            if (!isPuppeteer && !isActivePuppeteer) {
+                return;
+            }
+
+            // 验证玩家存活
+            if (!GameUtils.isPlayerAliveAndSurvival(context.player()))
+                return;
+
+            switch (payload.action()) {
+                case USE_PUPPET -> {
+                    // 使用假人技能 - 详细验证在 usePuppetAbility() 中处理
+                    if (puppeteerComp.phase == 2) {
+                        puppeteerComp.usePuppetAbility();
+                        ConfigWorldComponent.onPlayerUsedSkill(context.player());
+                    }
+                }
+                case RETURN_TO_BODY -> {
+                    // 主动返回本体
+                    if (puppeteerComp.isControllingPuppet) {
+                        puppeteerComp.returnToBody(false);
+                    }
+                }
+            }
+        });
+    }
+
+    private static void handleVeteranDash(ServerPlayer player) {
+        SREGameWorldComponent gameWorld = SREGameWorldComponent.KEY.get(player.level());
+        if (!gameWorld.isRole(player, ModRoles.VETERAN)) {
+            return;
+        }
+        if (!GameUtils.isPlayerAliveAndSurvival(player)) {
+            return;
+        }
+        if (!VeteranKnifeHandler.isHeldKnife(player.getMainHandItem())
+                && !VeteranKnifeHandler.isHeldKnife(player.getOffhandItem())) {
+            player.displayClientMessage(
+                    Component.translatable("message.noellesroles.veteran_dash.no_knife")
+                            .withStyle(ChatFormatting.RED),
+                    true);
+            return;
+        }
+
+        SREAbilityPlayerComponent ability = SREAbilityPlayerComponent.KEY.get(player);
+        if (ability.cooldown > 0) {
+            player.displayClientMessage(
+                    Component.translatable("message.noellesroles.veteran_dash.cooldown",
+                            String.format("%.1f", ability.cooldown / 20.0F))
+                            .withStyle(ChatFormatting.RED),
+                    true);
+            return;
+        }
+
+        Vec3 direction = getVeteranDashDirection(player);
+        if (direction.lengthSqr() < 1.0E-4D) {
+            return;
+        }
+
+        Vec3 current = player.getDeltaMovement();
+        Vec3 dashMotion = new Vec3(
+                direction.x * VETERAN_DASH_SPEED,
+                current.y,
+                direction.z * VETERAN_DASH_SPEED);
+        player.setDeltaMovement(dashMotion);
+        player.hurtMarked = true;
+        player.connection.send(new ClientboundSetEntityMotionPacket(player.getId(), dashMotion));
+        player.level().playSound(null, player.blockPosition(), SoundEvents.TRIDENT_THROW.value(), SoundSource.PLAYERS, 0.7F, 1.4F);
+
+        ability.setCooldown(VETERAN_DASH_COOLDOWN_TICKS);
+        ConfigWorldComponent.onPlayerUsedSkill(player);
+    }
+
+    private static Vec3 getVeteranDashDirection(ServerPlayer player) {
+        Vec3 movement = player.getDeltaMovement();
+        Vec3 horizontal = new Vec3(movement.x, 0.0D, movement.z);
+        if (horizontal.lengthSqr() < 0.0025D) {
+            Vec3 look = player.getLookAngle();
+            horizontal = new Vec3(look.x, 0.0D, look.z);
+        }
+        if (horizontal.lengthSqr() < 1.0E-4D) {
+            return Vec3.ZERO;
+        }
+        return horizontal.normalize();
+    }
+
+    /**
+     * 消耗射命丸文的传递盒
+     * 在传递成功完成后调用
+     *
+     * @param postmanPlayer 射命丸文玩家
+     */
+    private static void consumeDeliveryBox(Player postmanPlayer) {
+        // 先检查主手
+        SREItemUtils.clearItem(postmanPlayer, ModItems.DELIVERY_BOX, 1);
+    }
+
+    /**
+     * 清空指定玩家当前打开的快递交换页面中央槽的物品副本。
+     * 在交换结算完成、页面即将关闭时调用，防止关闭页面时把已互换物品的副本再次返还。
+     */
+    private static void clearTradeSlot(Player player) {
+        if (player != null && player.containerMenu instanceof org.agmas.noellesroles.client.screen.PostmanScreenHandler menu) {
+            menu.getTradeInventory().removeItemNoUpdate(org.agmas.noellesroles.client.screen.PostmanScreenHandler.TRADE_SLOT_INDEX);
+        }
+    }
+}

@@ -1,0 +1,82 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.content.command;
+
+import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.context.CommandContext;
+import io.wifi.starrailexpress.game.data.WaypointManager;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.commands.Commands;
+import net.minecraft.commands.arguments.coordinates.BlockPosArgument;
+import net.minecraft.core.BlockPos;
+import net.minecraft.network.chat.Component;
+
+import java.util.Arrays;
+import java.util.Random;
+
+public class CreateWaypointCommand {
+    public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
+        dispatcher.register(Commands.literal("tmm:createpoint")
+                .requires(ctx -> ctx.hasPermission(2))
+                .then(Commands.argument("pos", BlockPosArgument.blockPos())
+                        .then(Commands.argument("path", StringArgumentType.greedyString())
+                                .executes(context -> createWaypoint(
+                                        context,
+                                        BlockPosArgument.getLoadedBlockPos(context, "pos"),
+                                        StringArgumentType.getString(context, "path"))))));
+    }
+
+    private static int createWaypoint(CommandContext<CommandSourceStack> context, BlockPos pos, String pathName) {
+        CommandSourceStack source = context.getSource();
+
+        try {
+            // 解析路径和名称
+            String[] parts = pathName.split("/");
+            if (parts.length < 2) {
+                source.sendFailure(Component.literal("路径格式错误，请使用格式: path/name 或 更深层级的路径"));
+                return 0;
+            }
+
+            // 最后一部分作为名称，其余部分作为路径
+            String name = parts[parts.length - 1];
+            String path = String.join("/", Arrays.copyOf(parts, parts.length - 1));
+
+            // 生成随机颜色
+            int color = generateRandomColor();
+
+            // 获取路径点管理器并添加路径点
+            WaypointManager manager = WaypointManager.get(source.getServer());
+            manager.addWaypoint(path, name, pos, color);
+
+            // 向玩家发送成功消息
+            source.sendSuccess(() -> Component.literal("成功创建路径点: " + path + "/" + name + " 在位置 " + pos), false);
+
+            // 同步到所有玩家（统一走 WaypointSync 全量重广播）
+            io.wifi.starrailexpress.util.WaypointSync.syncToAll(source.getServer());
+
+            return 1;
+        } catch (Exception e) {
+            source.sendFailure(Component.literal("创建路径点时出错: " + e.getMessage()));
+            return 0;
+        }
+    }
+
+    private static int generateRandomColor() {
+        Random random = new Random();
+        return 0xFF000000 | random.nextInt(0xFFFFFF); // ARGB格式，确保不透明度为FF
+    }
+}

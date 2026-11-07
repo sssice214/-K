@@ -1,0 +1,137 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.api.replay;
+
+import net.minecraft.ChatFormatting;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.resources.ResourceLocation;
+import org.agmas.noellesroles.utils.RoleUtils;
+
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+
+public class ReplayDisplayUtils {
+
+    public static MutableComponent getPlayerNames(GameReplayManager replayManager, Iterable<UUID> playerUUIDs) {
+        MutableComponent names = Component.empty().copy();
+        boolean first = true;
+
+        for (UUID uuid : playerUUIDs) {
+            if (!first) {
+                names = names.append(Component.literal(", ").withStyle(ChatFormatting.GRAY));
+            }
+            names = names.append(replayManager.getPlayerName(uuid));
+            first = false;
+        }
+
+        return names;
+    }
+
+    public static String getRolePath(String roleId) {
+        if (roleId == null)
+            return null;
+        ResourceLocation id = ResourceLocation.tryParse(roleId);
+        if (id == null) {
+            return (roleId);
+        }
+        return id.getPath();
+    }
+
+    public static MutableComponent getRoleDisplayName(String roleId) {
+        if (roleId == null)
+            return Component.literal("");
+        ResourceLocation id = ResourceLocation.tryParse(roleId);
+        if (id == null) {
+            // id是不规范的应该直接返回
+            return Component.literal(roleId);
+        }
+        // 如果解析出的命名空间不是 customrole，但可能是剥离了命名空间的自定义职业路径
+        return RoleUtils.getRoleName(id).copy();
+    }
+
+    public static MutableComponent buildTeamPlayerRoles(GameReplayManager replayManager, List<UUID> teamPlayers,
+            Map<UUID, String> playerRoles, String prefix) {
+        if (teamPlayers.isEmpty()) {
+            return null;
+        }
+        MutableComponent text = Component.empty().copy();
+        text.append(Component.literal(prefix).withStyle(ChatFormatting.WHITE));
+        boolean first = true;
+        for (UUID uuid : teamPlayers) {
+            if (!first) {
+                text.append(Component.literal(", ").withStyle(ChatFormatting.GRAY));
+            }
+            Component playerName = replayManager.getPlayerName(uuid);
+            String roleId = playerRoles.get(uuid);
+            Component roleName = roleId != null ? getRoleDisplayName(roleId) : Component.translatable("unknown_role");
+            text.append(playerName).append(Component.literal(" (").withStyle(ChatFormatting.GRAY))
+                    .append(roleName).append(Component.literal(")").withStyle(ChatFormatting.GRAY));
+            first = false;
+        }
+        return text;
+    }
+
+    // 添加一个新的方法来处理带死亡状态的显示
+    public static MutableComponent buildTeamPlayerRolesWithDeathStatus(GameReplayManager replayManager,
+            List<UUID> teamPlayers, Map<UUID, String> playerRoles, String prefix, GameReplayData replayData,
+            boolean isAlive) {
+        if (teamPlayers.isEmpty()) {
+            return null;
+        }
+        MutableComponent text = Component.empty().copy();
+        text.append(Component.literal(prefix).withStyle(ChatFormatting.WHITE));
+        boolean first = true;
+        for (UUID uuid : teamPlayers) {
+            if (!first) {
+                text.append(Component.literal(", ").withStyle(ChatFormatting.GRAY));
+            }
+            // 获取玩家名称和角色
+            MutableComponent playerName = GameReplayUtils
+                    .getReplayPlayerDisplayText(uuid, replayManager, replayData, false, null, true)
+                    .copy();
+
+            // 添加死亡标记
+            if (!isAlive) {
+                playerName.append(
+                        Component.translatable("message.replay_manager.dead").withStyle(ChatFormatting.DARK_RED));
+            }
+            text.append(playerName);
+            first = false;
+        }
+        return text;
+    }
+
+    public static long findGameStartTime(GameReplayData replayData) {
+        for (GameReplayData.ReplayEvent event : replayData.getTimeline()) {
+            if (event.getType() == GameReplayData.EventType.GAME_START) {
+                return event.getTimestamp();
+            }
+        }
+        if (!replayData.getTimeline().isEmpty()) {
+            return replayData.getTimeline().getFirst().getTimestamp();
+        }
+        return 0;
+    }
+
+    public static String formatTime(long milliseconds) {
+        long totalSeconds = milliseconds / 1000;
+        long minutes = totalSeconds / 60;
+        long seconds = totalSeconds % 60;
+        return String.format("%d:%02d", minutes, seconds);
+    }
+}

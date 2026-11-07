@@ -1,0 +1,243 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.utils;
+
+import io.wifi.starrailexpress.SRE;
+import io.wifi.starrailexpress.cca.AreasWorldComponent;
+import io.wifi.starrailexpress.cca.SREGameWorldComponent;
+import io.wifi.starrailexpress.content.block.*;
+import io.wifi.starrailexpress.content.block.api.TaskInstinctShowableInterface;
+import io.wifi.starrailexpress.content.block_entity.BeveragePlateBlockEntity;
+import io.wifi.starrailexpress.content.block_entity.MinigameQuestBlockEntity;
+import io.wifi.starrailexpress.content.block_entity.SmallDoorBlockEntity;
+import io.wifi.starrailexpress.content.item.CocktailItem;
+import io.wifi.starrailexpress.event.OnTrainAreaHaveReseted;
+import io.wifi.starrailexpress.game.GameUtils;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.BlockTags;
+import net.minecraft.world.food.FoodProperties;
+import net.minecraft.world.item.HoneyBottleItem;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.item.PotionItem;
+import net.minecraft.world.item.ThrowablePotionItem;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.LecternBlock;
+import net.minecraft.world.level.block.state.properties.BedPart;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.minecraft.world.level.block.state.properties.DoubleBlockHalf;
+import net.minecraft.world.level.levelgen.structure.BoundingBox;
+import org.agmas.noellesroles.Noellesroles;
+import org.agmas.noellesroles.content.block.VendingMachinesBlock;
+import org.agmas.noellesroles.game.modes.ChairWheelRaceGame;
+import org.agmas.noellesroles.init.ModBlocks;
+import org.agmas.noellesroles.init.ModSceneBlocks;
+import org.agmas.noellesroles.packet.ScanAllTaskPointsPayload;
+
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+
+public class MapScanner {
+    public static void registerMapScanEvent() {
+        OnTrainAreaHaveReseted.EVENT.register((serverLevel) -> {
+            if (SREGameWorldComponent.KEY.get(serverLevel).getGameMode() instanceof ChairWheelRaceGame) {
+                Noellesroles.LOGGER.info("Skip scanner (wheel game)");
+                return;
+            }
+            // scanAllTaskBlocks(serverLevel);
+            var areas = AreasWorldComponent.KEY.get(serverLevel);
+            MapScannerManager.loadOrScanAndSaveScannerArea(serverLevel, areas);
+            for (var player : serverLevel.players()) {
+                ServerPlayNetworking.send(player, new ScanAllTaskPointsPayload(org.agmas.noellesroles.game.modes.echo.content.EchoMachineTasks.snapshot(serverLevel,GameUtils.taskBlocks)));
+            }
+        });
+    }
+
+    public static void scanAllTaskBlocks(ServerLevel serverLevel) {
+        SRE.LOGGER.info("Start to scan points!");
+        ServerLevel localLevel = serverLevel;
+        if (GameUtils.taskBlocks == null) {
+            GameUtils.taskBlocks = new HashMap<>();
+        }
+        GameUtils.taskBlocks.clear();
+        var areas = AreasWorldComponent.KEY.get(serverLevel);
+        HashSet<String> collectedMinigameIds = new HashSet<>();
+        HashSet<String> sabotageMinigameIds = new HashSet<>();
+        BlockPos backupMinPos = BlockPos.containing(areas.getResetTemplateArea().getMinPosition());
+        BlockPos backupMaxPos = BlockPos.containing(areas.getResetTemplateArea().getMaxPosition());
+        BoundingBox backupTrainBox = BoundingBox.fromCorners(backupMinPos, backupMaxPos);
+        BlockPos trainMinPos = BlockPos.containing(areas.getResetPasteArea().getMinPosition());
+        BlockPos trainMaxPos = trainMinPos.offset(backupTrainBox.getLength());
+        BoundingBox trainBox = BoundingBox.fromCorners(trainMinPos, trainMaxPos);
+        for (int k = trainBox.minZ(); k <= trainBox.maxZ(); k++) {
+            for (int l = trainBox.minY(); l <= trainBox.maxY(); l++) {
+                for (int m = trainBox.minX(); m <= trainBox.maxX(); m++) {
+                    BlockPos blockPos6 = new BlockPos(m, l, k);
+                    testTaskBlocksAndAddToGameUtils(sabotageMinigameIds, collectedMinigameIds, localLevel,
+                            blockPos6, blockPos6);
+                }
+            }
+        }
+        // 将扫描到的小游戏种类 ID 存入 AreasWorldComponent 并同步
+        collectedMinigameIds.removeAll(sabotageMinigameIds);
+        areas.availableMinigameIds.clear();
+        areas.availableMinigameIds.addAll(collectedMinigameIds);
+        areas.sabotageMinigameIds.clear();
+        areas.sabotageMinigameIds.addAll(sabotageMinigameIds);
+        areas.sync();
+        SRE.LOGGER.info("Successed scanned task points! Total {}. Minigame types: {}. Sabotage minigame types: {}.",
+                GameUtils.taskBlocks.size(), collectedMinigameIds.size(), sabotageMinigameIds.size());
+    }
+
+    public static void testTaskBlocksAndAddToGameUtils(HashSet<String> sabotageMinigameIds,
+            HashSet<String> collectedMinigameIds, ServerLevel level, BlockPos checkPos, BlockPos savePos) {
+        var blockState = level.getBlockState(checkPos);
+        if (blockState.isAir())
+            return;
+        // blockCounts++;
+        if (blockState.is(ModBlocks.VENDING_MACHINES_BLOCK)
+                && blockState.getValue(VendingMachinesBlock.HALF).equals(DoubleBlockHalf.LOWER)) {
+            GameUtils.taskBlocks.put(savePos, 11);
+        } else if (blockState.is(ModBlocks.LOTTERY_MACHINE_BLOCK)) {
+            GameUtils.taskBlocks.put(savePos, 23);
+        } else if (blockState.is(ModBlocks.SUPPLY_CRATE_BLOCK)) {
+            GameUtils.taskBlocks.put(savePos, 12);
+        } else if (blockState.is(Blocks.NOTE_BLOCK)) {
+            GameUtils.taskBlocks.put(savePos, 10);
+        } else if (blockState.is(Blocks.BLACK_CONCRETE)) {
+            BlockPos blockPos7 = checkPos.above();
+            var blockState2 = level.getBlockState(blockPos7);
+            if (blockState2.is(BlockTags.WOOL_CARPETS) || blockState2.is(BlockTags.AIR)) {
+                GameUtils.taskBlocks.put(savePos, 5);
+            }
+        } else if (blockState.getBlock() instanceof TrimmedBedBlock
+                && blockState.getValue(BlockStateProperties.BED_PART).equals(BedPart.HEAD)) {
+            GameUtils.taskBlocks.put(savePos, 4);
+        } else if (blockState.getBlock() instanceof ToiletBlock) {
+            GameUtils.taskBlocks.put(savePos, 8);
+        } else if (blockState.getBlock() instanceof MountableBlock) {
+            GameUtils.taskBlocks.put(savePos, 9);
+        } else if (blockState.getBlock() instanceof SmallDoorBlock
+                && blockState.getValue(SmallDoorBlock.HALF).equals(DoubleBlockHalf.LOWER)) {
+            if (level.getBlockEntity(checkPos) instanceof SmallDoorBlockEntity entity) {
+                if (entity.getKeyName() != null && !entity.getKeyName().isEmpty())
+                    GameUtils.taskBlocks.put(savePos, 7);
+            }
+        } else if (blockState.getBlock() instanceof FoodPlatterBlock) {
+            if (level.getBlockEntity(checkPos) instanceof BeveragePlateBlockEntity entity) {
+                var items = entity.getStoredItems();
+                if (items.size() > 0) {
+                    // 场景任务要用的原版工具（刷子 / 剪刀）常被放在食物盘、饮料盘上：
+                    // 只把装着该工具的盘子登记成对应任务类型（17 灰尘 / 21 灌木），
+                    // 这样拥有「清扫灰尘」/「修剪灌木」任务的玩家也能透视到它们
+                    int toolTaskType = sceneToolTaskType(items);
+                    if (toolTaskType != 0) {
+                        GameUtils.taskBlocks.put(savePos, toolTaskType);
+                    } else {
+                        ItemStack item_0 = items.get(0);
+                        Item item_ = item_0.getItem();
+                        if ((item_ instanceof CocktailItem)
+                                || ((item_ instanceof PotionItem) && !(item_ instanceof ThrowablePotionItem))
+                                || (item_ instanceof HoneyBottleItem)) {
+                            GameUtils.taskBlocks.put(savePos, 2);
+                        } else {
+                            FoodProperties foodPro = item_0.get(DataComponents.FOOD);
+                            if (foodPro != null) {
+                                GameUtils.taskBlocks.put(savePos, 1);
+                            }
+                        }
+                    }
+                }
+
+            }
+        } else if (blockState.getBlock() instanceof LecternBlock) {
+            if (blockState.getValue(LecternBlock.HAS_BOOK)) {
+                GameUtils.taskBlocks.put(savePos, 6);
+            }
+        } else if (blockState.getBlock() instanceof SprinklerBlock) {
+            GameUtils.taskBlocks.put(savePos, 3);
+        } else if (blockState.getBlock() instanceof TaskInstinctShowableInterface it) {
+            if (!it.isTaskInstinctAnchor(blockState)) return;
+            int instinctId = it.taskInstinctId();
+            GameUtils.taskBlocks.put(savePos, instinctId);
+            // 收集小游戏任务点方块的 minigameId（type 14 = MinigameQuestBlock, 15 =
+            // MinigameQuestPanelBlock）
+            if (instinctId == 14 || instinctId == 15) {
+                if (level.getBlockEntity(checkPos) instanceof MinigameQuestBlockEntity questBe) {
+                    String mgId = questBe.getMinigameId();
+                    if (mgId != null && !mgId.isEmpty()) {
+                        if (questBe.isSabotageTrigger()) {
+                            sabotageMinigameIds.add(mgId);
+                        } else {
+                            collectedMinigameIds.add(mgId);
+                        }
+                    }
+                }
+            }
+        }
+        // ───── 场景任务方块扫描 ─────
+        if (blockState.is(ModSceneBlocks.STOVE)) {
+            GameUtils.taskBlocks.put(savePos, 16); // 炉灶 — 取暖
+        } else if (blockState.is(ModSceneBlocks.DUST)) {
+            GameUtils.taskBlocks.put(savePos, 17); // 灰尘 — 清扫
+        } else if (blockState.is(ModSceneBlocks.TRANSPORT_POINT)) {
+            if (blockState.getValue(org.agmas.noellesroles.content.block.scene.TransportPointBlock.END)) {
+                GameUtils.taskBlocks.put(savePos, 19); // 运输点终点 — 深红色
+            } else {
+                GameUtils.taskBlocks.put(savePos, 18); // 运输点起点 — 亮绿色
+            }
+        } else if (blockState.is(ModSceneBlocks.STATUE)) {
+            GameUtils.taskBlocks.put(savePos, 20); // 雕像 — 祷告
+        } else if (blockState.is(ModSceneBlocks.BUSH)) {
+            GameUtils.taskBlocks.put(savePos, 21); // 灌木 — 修剪
+        } else if (blockState.is(ModSceneBlocks.CROP)) {
+            GameUtils.taskBlocks.put(savePos, 22); // 草垫 — 活动筋骨
+        } else if (blockState.is(Blocks.BELL)) {
+            GameUtils.taskBlocks.put(savePos, 24); // 钟 — 摇铃会议
+        }
+    }
+
+    /**
+     * 盘子上是否放着场景任务需要的原版工具。
+     *
+     * <p>
+     * 刷子（{@link Items#BRUSH}）对应「清扫灰尘」，剪刀（{@link Items#SHEARS}）对应「修剪灌木」；
+     * 两者同时存在时按刷子优先。
+     *
+     * @param items 盘子里的物品
+     * @return 任务点类型（{@code 17} 灰尘 / {@code 21} 灌木），都不是则返回 {@code 0}
+     */
+    private static int sceneToolTaskType(List<ItemStack> items) {
+        boolean shears = false;
+        if (items.isEmpty())
+            return 0;
+        ItemStack stack = items.getFirst();
+        {
+            if (stack.is(Items.BRUSH)) {
+                return 17;
+            }
+            if (stack.is(Items.SHEARS)) {
+                shears = true;
+            }
+        }
+        return shears ? 21 : 0;
+    }
+}

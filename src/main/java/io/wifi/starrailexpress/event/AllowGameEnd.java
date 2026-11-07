@@ -1,0 +1,104 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.event;
+
+import io.wifi.starrailexpress.game.GameUtils;
+import io.wifi.starrailexpress.game.GameUtils.WinStatus;
+import net.fabricmc.fabric.api.event.Event;
+import net.minecraft.server.level.ServerLevel;
+import org.agmas.noellesroles.game.command_block.CommandBlockDirector;
+import org.agmas.noellesroles.game.command_block.CommandBlockWinPriority;
+
+import static net.fabricmc.fabric.api.event.EventFactory.createArrayBacked;
+
+/**
+ * 事件接口：决定是否允许游戏结束，以及最终的胜利状态。
+ * 首个返回非 {@link WinStatus#NOT_MODIFY} 结果的监听器决定最终胜利状态。
+ * 命令方块模式例外：普通胜负与锁局结果会暂存，优先查找已达成的独立胜利。
+ *
+ * <p>
+ * Event interface to determine whether the game is allowed to end and what the
+ * win status should be.
+ * The first listener returning a value other than {@link WinStatus#NOT_MODIFY}
+ * determines the outcome.
+ */
+public class AllowGameEnd {
+
+    /**
+     * 决定游戏是否允许结束及最终胜利状态的事件。
+     * 当前支持的胜利状态：
+     * NONE（不结束）、NOT_MODIFY（不修改，默认）、KILLERS、PASSENGERS、
+     * TIME、LOOSE_END、GAMBLER、RECORDER、
+     * CUSTOM（记得修改 RoundEndComponent.CustomWinnerID 和
+     * RoundEndComponent.CustomWinnersPredicates）。
+     *
+     * <p>
+     * Event callback to determine if a game is allowed to stop and what the win
+     * status should be.
+     * Supported win statuses:
+     * NONE - DO NOT END,
+     * NOT_MODIFY - DO NOT MODIFY (DEFAULT),
+     * KILLERS, PASSENGERS, TIME, LOOSE_END, GAMBLER, RECORDER,
+     * CUSTOM - remember to set RoundEndComponent.CustomWinnerID and
+     * RoundEndComponent.CustomWinnersPredicates.
+     *
+     * @see io.wifi.starrailexpress.game.GameUtils.WinStatus
+     */
+    public static final Event<AllowGameEndInterface> EVENT_END = createArrayBacked(AllowGameEndInterface.class,
+            listeners -> (serverWorld, winStatus, isLooseEndsMode) ->
+                    invokeListeners(listeners, serverWorld, winStatus, isLooseEndsMode));
+
+    public static final Event<AllowGameEndInterface> EVENT_START = createArrayBacked(AllowGameEndInterface.class,
+            listeners -> (serverWorld, winStatus, isLooseEndsMode) ->
+                    invokeListeners(listeners, serverWorld, winStatus, isLooseEndsMode));
+
+    /** 命令方块模式暂存普通结果，继续查找独立胜利；其它模式保留首次返回规则。 */
+    private static WinStatus invokeListeners(AllowGameEndInterface[] listeners, ServerLevel level,
+            WinStatus proposed, boolean looseEnds) {
+        boolean prioritize = CommandBlockDirector.holdsTheRound(level);
+        WinStatus deferred = WinStatus.NOT_MODIFY;
+        for (AllowGameEndInterface listener : listeners) {
+            WinStatus result = listener.allowGameEnd(level, proposed, looseEnds);
+            if (result == null || result == WinStatus.NOT_MODIFY) {
+                continue;
+            }
+            if (!prioritize || CommandBlockWinPriority.isIndependentWin(level, result)) {
+                return result;
+            }
+            deferred = CommandBlockWinPriority.defer(deferred, result);
+        }
+        return deferred;
+    }
+
+    /**
+     * 决定游戏是否允许结束以及最终胜利状态。
+     *
+     * <p>
+     * Determines whether the game is allowed to end and what the final win status
+     * should be.
+     *
+     * @param serverWorld     游戏所在的服务端世界 / the server level where the game is taking
+     *                        place
+     * @param winStatus       当前拟定的胜利状态 / the currently proposed win status
+     * @param isLooseEndsMode 是否处于散局模式 / whether the game is in loose-ends mode
+     * @return 最终胜利状态；返回 {@link WinStatus#NOT_MODIFY} 则不修改 /
+     *         the final win status; return {@link WinStatus#NOT_MODIFY} to leave it
+     *         unchanged
+     */
+    public interface AllowGameEndInterface {
+        WinStatus allowGameEnd(ServerLevel serverWorld, GameUtils.WinStatus winStatus, boolean isLooseEndsMode);
+    }
+}

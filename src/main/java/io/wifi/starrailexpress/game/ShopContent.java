@@ -1,0 +1,194 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.game;
+
+import io.wifi.starrailexpress.SREConfig;
+import io.wifi.starrailexpress.api.SRERole;
+import io.wifi.starrailexpress.api.TMMRoles;
+import io.wifi.starrailexpress.cca.SREPlayerShopComponent;
+import io.wifi.starrailexpress.index.TMMItems;
+import io.wifi.starrailexpress.util.SREItemUtils;
+import io.wifi.starrailexpress.util.ShopEntry;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
+import org.agmas.noellesroles.init.ModItems;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+public class ShopContent {
+    private static List<ShopEntry> defaultKnifeEntries = new ArrayList<>();
+
+    public static List<ShopEntry> getDefaultKnifeEntries() {
+        if (defaultKnifeEntries.isEmpty())
+            register();
+        return new ArrayList<>(defaultKnifeEntries);
+    }
+
+    public static void register() {
+        {
+            defaultKnifeEntries.clear();
+            // 杀手刀使用动态商店条目：murder 模式下带 3 点耐久、可替换耗尽的刀、首购后 -50%。
+            // Killer knife uses the dynamic entry: 3 durability in murder modes, replaces
+            // depleted
+            // knives, and -50% after the first purchase. See KillerKnifeShopEntry /
+            // DynamicShopComponent.
+            defaultKnifeEntries.add(new KillerKnifeShopEntry(SREConfig.instance().knifePrice));
+            defaultKnifeEntries.add(new ShopEntry(TMMItems.REVOLVER.getDefaultInstance(),
+                    SREConfig.instance().revolverPrice, ShopEntry.Type.WEAPON));
+            defaultKnifeEntries.add(new ShopEntry(TMMItems.GRENADE.getDefaultInstance(),
+                    SREConfig.instance().grenadePrice, ShopEntry.Type.WEAPON));
+
+            defaultKnifeEntries.add(new ShopEntry(ModItems.SHORT_SHOTGUN.getDefaultInstance(),
+                    SREConfig.instance().shortShotgunPrice, ShopEntry.Type.WEAPON));
+            defaultKnifeEntries.add(getPsychoShopEntry());
+            defaultKnifeEntries.add(new ShopEntry(TMMItems.FIRECRACKER.getDefaultInstance(),
+                    SREConfig.instance().firecrackerPrice, ShopEntry.Type.TOOL));
+            defaultKnifeEntries.add(new ShopEntry(TMMItems.LOCKPICK.getDefaultInstance(),
+                    SREConfig.instance().lockpickPrice, ShopEntry.Type.TOOL));
+            defaultKnifeEntries.add(new ShopEntry(TMMItems.CROWBAR.getDefaultInstance(),
+                    SREConfig.instance().crowbarPrice, ShopEntry.Type.TOOL));
+            defaultKnifeEntries.add(new ShopEntry(TMMItems.BODY_BAG.getDefaultInstance(),
+                    SREConfig.instance().bodyBagPrice, ShopEntry.Type.TOOL));
+            defaultKnifeEntries.add(getBlackoutShopEntry());
+            defaultKnifeEntries.add(new ShopEntry(TMMItems.MONITOR_BROKEN.getDefaultInstance(),
+                    SREConfig.instance().monitorBrokenPrice, ShopEntry.Type.TOOL) {
+                @Override
+                public boolean onBuy(@NotNull Player player) {
+                    return SREPlayerShopComponent.useMonitorBroken(player,
+                            SREConfig.instance().monitorBrokenDuration * 20);
+                }
+            });
+            defaultKnifeEntries.add(new ShopEntry(new ItemStack(TMMItems.NOTE, 4), SREConfig.instance().notePrice,
+                    ShopEntry.Type.TOOL));
+        }
+    }
+
+    public static ShopEntry getPsychoShopEntry() {
+        return new ShopEntry(TMMItems.PSYCHO_MODE.getDefaultInstance(),
+                SREConfig.instance().psychoModePrice, ShopEntry.Type.WEAPON) {
+            @Override
+            public boolean canBuy(@NotNull Player player) {
+                if (player.getCooldowns().isOnCooldown(TMMItems.PSYCHO_MODE)) {
+                    return false;
+                }
+                return super.canBuy(player);
+            }
+
+            @Override
+            public boolean onBuy(@NotNull Player player) {
+                if (player.getCooldowns().isOnCooldown(TMMItems.PSYCHO_MODE)) {
+                    return false;
+                }
+
+                return SREPlayerShopComponent.usePsychoMode(player);
+            }
+        };
+    }
+
+    public static ShopEntry getBlackoutShopEntry() {
+        return getBlackoutShopEntry(1f);
+    }
+
+    /** 杀手关灯，按配置价格计，每次加价20%，最多加价3次。 */
+    public static ShopEntry getBlackoutShopEntry(int basePrice) {
+        return getBlackoutShopEntry(basePrice, -20);
+    }
+
+    /** 杀手关灯，指定基础价与每次加价幅度（discount 为负表示加价），最多加价3次。 */
+    public static ShopEntry getBlackoutShopEntry(int basePrice, int discount) {
+        return getBlackoutShopEntry(basePrice, discount, 3);
+    }
+
+    /** 杀手关灯，每次加价20%，最多加价3次（120*1.2*1.2*1.2 = 207） */
+    public static ShopEntry getBlackoutShopEntry(int basePrice, int discount, int maxDiscountCount) {
+        return new DiscountShopEntry(TMMItems.BLACKOUT.getDefaultInstance(),
+                basePrice, discount, maxDiscountCount, false,
+                ShopEntry.Type.TOOL) {
+            @Override
+            public boolean onBuy(@NotNull Player player) {
+                if (SREPlayerShopComponent.useBlackout(player)) {
+                    super.applyPurchaseDiscount(player);
+                    return true;
+                }
+                return false;
+            }
+        };
+    }
+
+    public static ShopEntry getBlackoutShopEntry(float priceModifier) {
+        return getBlackoutShopEntry(priceModifier, -20);
+    }
+
+    public static ShopEntry getBlackoutShopEntry(float priceModifier, int discount) {
+        return getBlackoutShopEntry(priceModifier, discount, 3);
+    }
+
+    /** 杀手关灯，按配置价格的倍率计，每次加价20%，最多加价3次（120*1.2*1.2*1.2 = 207） */
+    public static ShopEntry getBlackoutShopEntry(float priceModifier, int discount, int maxDiscountCount) {
+        return getBlackoutShopEntry((int) (SREConfig.instance().blackoutPrice * priceModifier), discount,
+                maxDiscountCount);
+    }
+
+    public static Map<ResourceLocation, List<ShopEntry>> customEntries = new HashMap<>();
+
+    public static List<ShopEntry> getShopEntries(SRERole role) {
+        return getShopEntries(role, null);
+    }
+
+    public static List<ShopEntry> getShopEntries(ResourceLocation role) {
+        return getShopEntries(role, null);
+    }
+
+    public static List<ShopEntry> getShopEntries(ResourceLocation role, @Nullable Player player) {
+        SRERole sreRole = TMMRoles.ROLES.get(role);
+        if (sreRole == null) {
+            return List.of();
+        }
+        return getShopEntries(sreRole, player);
+    }
+
+    public static List<ShopEntry> getShopEntries(SRERole role, @Nullable Player player) {
+        final var shopEntries = role.getShopEntries(player);
+        List<ShopEntry> result = List.of();
+        if (shopEntries != null) {
+            result = shopEntries;
+        } else if (customEntries.containsKey(role.identifier())) {
+            result = customEntries.get(role.identifier());
+        } else {
+            if (role.canUseKiller()) {
+                result = getDefaultKnifeEntries();
+            }
+        }
+        return result;
+    }
+
+    public static ShopEntry createSheriffBulletEntry() {
+        return new ShopEntry(ModItems.BULLET.getDefaultInstance(), SREConfig.instance().sheriffBulletPrice,
+                ShopEntry.Type.WEAPON) {
+            @Override
+            public boolean canBuy(@NotNull Player player) {
+                int maxCarry = Math.max(0, SREConfig.instance().sheriffBulletMaxCarry);
+                return super.canBuy(player) && SREItemUtils.countItem(player, ModItems.BULLET) < maxCarry;
+            }
+        };
+    }
+}

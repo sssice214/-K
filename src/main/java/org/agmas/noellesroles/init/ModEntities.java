@@ -1,0 +1,801 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.init;
+
+import net.fabricmc.fabric.api.object.builder.v1.entity.FabricDefaultAttributeRegistry;
+import net.fabricmc.fabric.api.object.builder.v1.entity.FabricEntityTypeBuilder;
+import net.minecraft.core.Registry;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.entity.EntityDimensions;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.MobCategory;
+
+import org.agmas.noellesroles.Noellesroles;
+import org.agmas.noellesroles.content.block_entity.DevilRouletteTableEntity;
+import org.agmas.noellesroles.game.command_block.CommandBlockThrownEntity;
+import org.agmas.noellesroles.content.entity.*;
+
+public class ModEntities {
+    public static final EntityType<Error404PuppetEntity> ERROR404_PUPPET = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE, Noellesroles.id("error404_puppet"),
+            EntityType.Builder.of(Error404PuppetEntity::new, MobCategory.MISC)
+                    .sized(0.6F, 1.8F).clientTrackingRange(16).updateInterval(1)
+                    .noSave().build("error404_puppet"));
+
+    public static final EntityType<RoleMineEntity> ROLE_MINE_ENTITY_ENTITY_TYPE = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            ResourceLocation.fromNamespaceAndPath(Noellesroles.MOD_ID, "cube"),
+            EntityType.Builder.of(RoleMineEntity::new, MobCategory.MISC).sized(0.75f, 0.75f).build("cube"));
+
+    public static final EntityType<SREMinecart> MINECART = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            ResourceLocation.fromNamespaceAndPath(Noellesroles.MOD_ID, "sre_minecart"),
+            EntityType.Builder.<SREMinecart>of(SREMinecart::new, MobCategory.MISC)
+                    .sized(0.98F, 0.7F)
+                    .passengerAttachments(0.1875F).clientTrackingRange(8)
+                    .build("sre_minecart"));
+
+    public static final EntityType<WheelchairEntity> WHEELCHAIR = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("wheelchair"),
+            EntityType.Builder.of(WheelchairEntity::new, MobCategory.MISC).sized(0.8f, 1.6f) // 0.8 宽度，1.6
+                                                                                             // 高度
+                    .build("wheelchair"));
+
+    public static final EntityType<WheelchairFieldItemEntity> WHEELCHAIR_FIELD_ITEM = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("wheelchair_field_item"),
+            EntityType.Builder
+                    .<WheelchairFieldItemEntity>of(WheelchairFieldItemEntity::new, MobCategory.MISC)
+                    .sized(0.25f, 0.25f)
+                    .build("wheelchair_field_item"));
+
+    @SuppressWarnings("deprecation")
+    public static final EntityType<SmokeGrenadeEntity> SMOKE_GRENADE = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            ResourceLocation.fromNamespaceAndPath(Noellesroles.MOD_ID, "smoke_grenade"),
+            FabricEntityTypeBuilder.<SmokeGrenadeEntity>create(MobCategory.MISC, SmokeGrenadeEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.25F, 0.25F))
+                    .trackRangeBlocks(4)
+                    .trackedUpdateRate(10)
+                    .build());
+
+    @SuppressWarnings("deprecation")
+    public static final EntityType<IncendiaryGrenadeEntity> INCENDIARY_GRENADE = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("incendiary_grenade"),
+            FabricEntityTypeBuilder
+                    .<IncendiaryGrenadeEntity>create(MobCategory.MISC, IncendiaryGrenadeEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.25F, 0.25F))
+                    .trackRangeBlocks(4)
+                    .trackedUpdateRate(10)
+                    .build());
+
+    /** 鸟兽兽专属燃烧弹实体，使用更快的燃烧击杀计时。 */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<NiaoshoushouIncendiaryGrenadeEntity> NIAOSHOU_SHOU_INCENDIARY_GRENADE = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("niaoshoushou_incendiary_grenade"),
+            FabricEntityTypeBuilder
+                    .<NiaoshoushouIncendiaryGrenadeEntity>create(MobCategory.MISC,
+                            NiaoshoushouIncendiaryGrenadeEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.25F, 0.25F))
+                    .trackRangeBlocks(4)
+                    .trackedUpdateRate(10)
+                    .build());
+
+    /** 鸟兽兽巡飞弹实体。 */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<NiaoshoushouMissileEntity> NIAOSHOU_SHOU_MISSILE = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("niaoshoushou_missile"),
+            FabricEntityTypeBuilder
+                    .<NiaoshoushouMissileEntity>create(MobCategory.MISC, NiaoshoushouMissileEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.35F, 0.35F))
+                    .trackRangeBlocks(128)
+                    .trackedUpdateRate(1)
+                    .build());
+
+    @SuppressWarnings("deprecation")
+    public static final EntityType<SlimeGrenadeEntity> SLIME_GRENADE = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("slime_grenade"),
+            FabricEntityTypeBuilder.<SlimeGrenadeEntity>create(MobCategory.MISC, SlimeGrenadeEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.25F, 0.25F))
+                    .trackRangeBlocks(4)
+                    .trackedUpdateRate(10)
+                    .build());
+
+    @SuppressWarnings("deprecation")
+    public static final EntityType<WallBreakGrenadeEntity> WALL_BREAK_GRENADE = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("wall_break_grenade"),
+            FabricEntityTypeBuilder
+                    .<WallBreakGrenadeEntity>create(MobCategory.MISC, WallBreakGrenadeEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.25F, 0.25F))
+                    .trackRangeBlocks(4)
+                    .trackedUpdateRate(10)
+                    .build());
+
+    @SuppressWarnings("deprecation")
+    public static final EntityType<ThrowingKnifeEntity> THROWING_KNIFE = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            ResourceLocation.fromNamespaceAndPath(Noellesroles.MOD_ID, "throwing_knife"),
+            FabricEntityTypeBuilder.<ThrowingKnifeEntity>create(MobCategory.MISC, ThrowingKnifeEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.2F, 0.2F))
+                    .trackRangeBlocks(4)
+                    .trackedUpdateRate(10)
+                    .build());
+
+    /** 飞斧实体 - 强盗蓄力投掷武器：直线飞行、穿透击杀 2 名玩家、撞墙钉住 5 秒后消失；渲染为翻滚的斧头物品模型 */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<FlyingAxeEntity> FLYING_AXE = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            ResourceLocation.fromNamespaceAndPath(Noellesroles.MOD_ID, "flying_axe"),
+            FabricEntityTypeBuilder.<FlyingAxeEntity>create(MobCategory.MISC, FlyingAxeEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.4F, 0.4F))
+                    .trackRangeBlocks(4)
+                    .trackedUpdateRate(10)
+                    .build());
+
+    /** 投掷竹子：直线飞行，途中最多挂上 2 名玩家，撞墙后钉在墙上，从发射起 12 秒后消失 */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<ThrownBambooEntity> THROWN_BAMBOO = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            ResourceLocation.fromNamespaceAndPath(Noellesroles.MOD_ID, "thrown_bamboo"),
+            FabricEntityTypeBuilder.<ThrownBambooEntity>create(MobCategory.MISC, ThrownBambooEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.5F, 0.5F))
+                    .trackRangeBlocks(8)
+                    .trackedUpdateRate(1)
+                    .build());
+
+    /**
+     * 竹枪延伸体：沿视线伸长最多 10 格 / 3 秒。
+     * <p>
+     * 追踪范围要盖住「伸长后能看到杆尖」的距离：杆最长 10 格，站在 16 格外的旁观者会整根都收不到实体
+     * （表现为别人戳出去的竹枪在自己画面上根本不出现），这里放宽到 32 格。
+     * 更新速率保持 1 tick，否则别的玩家看到的伸长过程会一顿一顿的。
+     */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<BambooSpearEntity> BAMBOO_SPEAR = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            ResourceLocation.fromNamespaceAndPath(Noellesroles.MOD_ID, "bamboo_spear"),
+            FabricEntityTypeBuilder.<BambooSpearEntity>create(MobCategory.MISC, BambooSpearEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.2F, 0.2F))
+                    .trackRangeBlocks(32)
+                    .trackedUpdateRate(1)
+                    .build());
+    @SuppressWarnings("deprecation")
+
+    public static final EntityType<DanmukuEntity> DANMUKU = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            ResourceLocation.fromNamespaceAndPath(Noellesroles.MOD_ID, "danmuku"),
+            FabricEntityTypeBuilder.<DanmukuEntity>create(MobCategory.MISC, DanmukuEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.4F, 0.4F))
+                    .trackRangeBlocks(4)
+                    .trackedUpdateRate(10)
+                    .build());
+    /**
+     * 氯气弹实体 - 可投掷物品，落地时使范围内玩家中毒
+     */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<ChlorineBombEntity> CHLORINE_BOMB = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            ResourceLocation.fromNamespaceAndPath(Noellesroles.MOD_ID, "chlorine_bomb"),
+            FabricEntityTypeBuilder.<ChlorineBombEntity>create(MobCategory.MISC, ChlorineBombEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.25F, 0.25F))
+                    .trackRangeBlocks(4)
+                    .trackedUpdateRate(10)
+                    .build());
+
+    /**
+     * 毒气瓶投掷实体 - 可投掷物品，落地时生成毒气云
+     */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<PoisonGasTankEntity> POISON_GAS_TANK_ENTITY = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            ResourceLocation.fromNamespaceAndPath(Noellesroles.MOD_ID, "poison_gas_tank"),
+            FabricEntityTypeBuilder.<PoisonGasTankEntity>create(MobCategory.MISC, PoisonGasTankEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.25F, 0.25F))
+                    .trackRangeBlocks(4)
+                    .trackedUpdateRate(10)
+                    .build());
+
+    /**
+     * 毒气云实体 - 气体扩散，60秒消散，停留8秒中毒
+     */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<PoisonGasCloudEntity> POISON_GAS_CLOUD_ENTITY = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            ResourceLocation.fromNamespaceAndPath(Noellesroles.MOD_ID, "poison_gas_cloud"),
+            FabricEntityTypeBuilder
+                    .<PoisonGasCloudEntity>create(MobCategory.MISC, PoisonGasCloudEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.5F, 0.5F))
+                    .trackRangeBlocks(64)
+                    .trackedUpdateRate(1)
+                    .build());
+
+    @SuppressWarnings("deprecation")
+    public static final EntityType<HurricaneEntity> HURRICANE = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("hurricane"),
+            FabricEntityTypeBuilder.<HurricaneEntity>create(MobCategory.MISC, HurricaneEntity::new)
+                    .dimensions(EntityDimensions.fixed(2.5F, 6.0F))
+                    .trackRangeBlocks(96)
+                    .trackedUpdateRate(1)
+                    .build());
+
+    @SuppressWarnings("deprecation")
+    public static final EntityType<MummyEntity> MUMMY = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("mummy"),
+            FabricEntityTypeBuilder.<MummyEntity>create(MobCategory.CREATURE, MummyEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.6F, 1.95F))
+                    .trackRangeBlocks(64)
+                    .trackedUpdateRate(2)
+                    .build());
+
+    /**
+     * 净化弹实体 - 可投掷物品，落地时取消范围内玩家中毒状态
+     */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<PurifyBombEntity> PURIFY_BOMB = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            ResourceLocation.fromNamespaceAndPath(Noellesroles.MOD_ID, "purify_bomb"),
+            FabricEntityTypeBuilder.<PurifyBombEntity>create(MobCategory.MISC, PurifyBombEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.25F, 0.25F))
+                    .trackRangeBlocks(4)
+                    .trackedUpdateRate(10)
+                    .build());
+
+    /**
+     * 泥沼陷阱实体 - 设陷者专属隐形陷阱，触发后范围困陷
+     */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<MudTrapEntity> MUD_TRAP = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            ResourceLocation.fromNamespaceAndPath(Noellesroles.MOD_ID, "mud_trap"),
+            FabricEntityTypeBuilder.<MudTrapEntity>create(MobCategory.MISC, MudTrapEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.5F, 0.1F))
+                    .trackRangeBlocks(32)
+                    .trackedUpdateRate(20)
+                    .build());
+
+    /**
+     * 捕网实体 - 设陷者大招捕网枪的投掷物，渲染为蜘蛛网方块
+     */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<TrapperNetEntity> TRAPPER_NET = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            ResourceLocation.fromNamespaceAndPath(Noellesroles.MOD_ID, "trapper_net"),
+            FabricEntityTypeBuilder.<TrapperNetEntity>create(MobCategory.MISC, TrapperNetEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.6F, 0.6F))
+                    .trackRangeBlocks(64)
+                    .trackedUpdateRate(2)
+                    .build());
+
+    /**
+     * 绊线陷阱实体 - 设陷者贴墙绊线，只有被枪击落才会消失
+     */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<TripwireTrapEntity> TRIPWIRE_TRAP = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            ResourceLocation.fromNamespaceAndPath(Noellesroles.MOD_ID, "tripwire_trap"),
+            FabricEntityTypeBuilder.<TripwireTrapEntity>create(MobCategory.MISC, TripwireTrapEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.5F, 0.1F))
+                    .trackRangeBlocks(32)
+                    .trackedUpdateRate(20)
+                    .build());
+
+    /** 信鸽实体 - 信使快递邮件 */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<PigeonEntity> PIGEON = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            ResourceLocation.fromNamespaceAndPath(Noellesroles.MOD_ID, "pigeon"),
+            FabricEntityTypeBuilder.<PigeonEntity>create(MobCategory.MISC, PigeonEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.5F, 0.9F))
+                    .trackRangeBlocks(128)
+                    .trackedUpdateRate(2)
+                    .build());
+
+    /**
+     * 傀儡本体实体 - 傀儡师使用假人技能时生成的本体
+     */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<PuppeteerBodyEntity> PUPPETEER_BODY = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            ResourceLocation.fromNamespaceAndPath(Noellesroles.MOD_ID, "puppeteer_body"),
+            FabricEntityTypeBuilder.<PuppeteerBodyEntity>create(MobCategory.MISC, PuppeteerBodyEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.6F, 1.8F)) // 玩家尺寸
+                    .trackRangeBlocks(64)
+                    .trackedUpdateRate(2)
+                    .build());
+
+    /**
+     * 咸鱼假尸体实体 - 咸鱼晒咸鱼技能时生成的假尸体
+     */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<SaltedFishBodyEntity> SALTED_FISH_BODY = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("salted_fish_body"),
+            FabricEntityTypeBuilder
+                    .<SaltedFishBodyEntity>create(MobCategory.MISC, SaltedFishBodyEntity::new)
+                    .dimensions(EntityDimensions.fixed(1.0F, 0.25F))
+                    .trackRangeBlocks(128)
+                    .trackedUpdateRate(2)
+                    .build());
+
+    /**
+     * 宿命的罪人假尸体实体 - 罪人死亡时替换的尸体
+     */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<DoomedSinnerBodyEntity> DOOMED_SINNER_BODY = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("doomed_sinner_body"),
+            FabricEntityTypeBuilder
+                    .<DoomedSinnerBodyEntity>create(MobCategory.MISC, DoomedSinnerBodyEntity::new)
+                    .dimensions(EntityDimensions.fixed(1.0F, 0.25F))
+                    .trackRangeBlocks(128)
+                    .trackedUpdateRate(2)
+                    .build());
+
+    // @SuppressWarnings("deprecation")
+    // public static final EntityType<ManipulatorBodyEntity> MANIPULATOR_BODY =
+    // Registry.register(
+    // BuiltInRegistries.ENTITY_TYPE,
+    // ResourceLocation.fromNamespaceAndPath(Noellesroles.MOD_ID,
+    // "manipulator_body"),
+    // FabricEntityTypeBuilder
+    // .<ManipulatorBodyEntity>create(MobCategory.MISC, ManipulatorBodyEntity::new)
+    // .dimensions(EntityDimensions.fixed(0.6F, 1.8F))
+    // .trackRangeBlocks(64)
+    // .trackedUpdateRate(2)
+    // .build());
+
+    /**
+     * 亡灵实体 - 亡灵之主召唤的无意识亡灵（玩家外观 + 追击感染 AI）
+     */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<UndeadEntity> UNDEAD = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("undead"),
+            FabricEntityTypeBuilder.<UndeadEntity>create(MobCategory.MISC, UndeadEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.6F, 1.8F)) // 玩家尺寸
+                    .trackRangeBlocks(64)
+                    .trackedUpdateRate(2)
+                    .build());
+
+    /**
+     * 垂钓者乘坐的钓竿载具
+     */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<AnglerRodMountEntity> ANGLER_ROD_MOUNT = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("angler_rod_mount"),
+            FabricEntityTypeBuilder.<AnglerRodMountEntity>create(MobCategory.MISC, AnglerRodMountEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.7F, 0.45F))
+                    .trackRangeBlocks(64)
+                    .trackedUpdateRate(1)
+                    .build());
+
+    /**
+     * 错误的垂钓者 - 垂钓者转化后的无脸坐姿实体
+     */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<ErrorAnglerEntity> ERROR_ANGLER = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("error_angler"),
+            FabricEntityTypeBuilder.<ErrorAnglerEntity>create(MobCategory.MISC, ErrorAnglerEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.6F, 1.5F))
+                    .trackRangeBlocks(64)
+                    .trackedUpdateRate(2)
+                    .build());
+
+    /**
+     * 变形者「举刀假人」实体 - 手持匕首向前突进、贴近目标即击杀的假人（玩家外观）
+     */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<MorphlingKnifeDummyEntity> MORPHLING_KNIFE_DUMMY = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("morphling_knife_dummy"),
+            FabricEntityTypeBuilder
+                    .<MorphlingKnifeDummyEntity>create(MobCategory.MISC,
+                            MorphlingKnifeDummyEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.6F, 1.8F)) // 玩家尺寸
+                    .trackRangeBlocks(64)
+                    .trackedUpdateRate(2)
+                    .build());
+
+    /**
+     * 锁实体 - 保护门不被撬锁器打开
+     */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<LockEntity> LOCK_ENTITY = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            ResourceLocation.fromNamespaceAndPath(Noellesroles.MOD_ID, "lock"),
+            FabricEntityTypeBuilder.<LockEntity>create(MobCategory.MISC, LockEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.2F, 0.2F))
+                    .trackRangeBlocks(32)
+                    .build());
+
+    /**
+     * 闪光弹实体 - 可投掷物品，落地时使范围内玩家致盲
+     */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<FlashGrenadeEntity> FLASH_GRENADE = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            ResourceLocation.fromNamespaceAndPath(Noellesroles.MOD_ID, "flash_grenade"),
+            FabricEntityTypeBuilder.<FlashGrenadeEntity>create(MobCategory.MISC, FlashGrenadeEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.25F, 0.25F))
+                    .trackRangeBlocks(4)
+                    .trackedUpdateRate(10)
+                    .build());
+
+    @SuppressWarnings("deprecation")
+    public static final EntityType<MushroomEssenceEntity> MUSHROOM_ESSENCE = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("mushroom_essence"),
+            FabricEntityTypeBuilder.<MushroomEssenceEntity>create(MobCategory.MISC, MushroomEssenceEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.25F, 0.25F))
+                    .trackRangeBlocks(8)
+                    .trackedUpdateRate(10)
+                    .build());
+
+    /** 康复试剂投掷物（护士体系）：落地 AOE 给虚拟血量恢复效果。 */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<RecoveryReagentEntity> RECOVERY_REAGENT = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("recovery_reagent"),
+            FabricEntityTypeBuilder.<RecoveryReagentEntity>create(MobCategory.MISC, RecoveryReagentEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.25F, 0.25F))
+                    .trackRangeBlocks(8)
+                    .trackedUpdateRate(10)
+                    .build());
+
+    @SuppressWarnings("deprecation")
+    public static final EntityType<TomatoProjectileEntity> TOMATO_PROJECTILE = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("tomato"),
+            FabricEntityTypeBuilder.<TomatoProjectileEntity>create(MobCategory.MISC, TomatoProjectileEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.25F, 0.25F))
+                    .trackRangeBlocks(8)
+                    .trackedUpdateRate(10)
+                    .build());
+
+    /** 毛线球抛射物（裁缝的毛线球，命中玩家给予 8 秒腿瘸）。 */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<YarnBallEntity> YARN_BALL = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("yarn_ball"),
+            FabricEntityTypeBuilder.<YarnBallEntity>create(MobCategory.MISC, YarnBallEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.25F, 0.25F))
+                    .trackRangeBlocks(8)
+                    .trackedUpdateRate(10)
+                    .build());
+
+    @SuppressWarnings("deprecation")
+    public static final EntityType<EmpBombEntity> EMP_BOMB = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("emp_bomb"),
+            FabricEntityTypeBuilder.<EmpBombEntity>create(MobCategory.MISC, EmpBombEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.25F, 0.25F))
+                    .trackRangeBlocks(8)
+                    .trackedUpdateRate(10)
+                    .build());
+
+    @SuppressWarnings("deprecation")
+    public static final EntityType<MechanicalBirdEntity> MECHANICAL_BIRD = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("mechanical_bird"),
+            FabricEntityTypeBuilder.<MechanicalBirdEntity>create(MobCategory.MISC, MechanicalBirdEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.45F, 0.45F))
+                    .trackRangeBlocks(128)
+                    .trackedUpdateRate(1)
+                    .build());
+    /**
+     * 傀戏傀儡实体类型
+     */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<KuiXiPuppetEntity> KUIXI_PUPPET = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("kuixi_puppet"),
+            FabricEntityTypeBuilder.create(MobCategory.MISC, KuiXiPuppetEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.6f, 1.8f)) // 玩家大小
+                    .trackRangeBlocks(64)
+                    .trackedUpdateRate(2)
+                    .build());
+    /**
+     * .dimensions(EntityDimensions.fixed(0.6F, 1.8F)) // 玩家尺寸
+     * .trackRangeBlocks(64)
+     * .trackedUpdateRate(2)
+     * .build()
+     * 诱饵弹实体 - 可投掷物品，落地时播放5声左轮手枪射击声
+     */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<DecoyGrenadeEntity> DECOY_GRENADE = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            ResourceLocation.fromNamespaceAndPath(Noellesroles.MOD_ID, "decoy_grenade"),
+            FabricEntityTypeBuilder.<DecoyGrenadeEntity>create(MobCategory.MISC, DecoyGrenadeEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.25F, 0.25F))
+                    .trackRangeBlocks(4)
+                    .trackedUpdateRate(10)
+                    .build());
+
+    /**
+     * 幽露锚点实体 - 贴地滑行的球形传送锚点（仅幽露本人可见）
+     */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<YouluAnchorEntity> YOULU_ANCHOR = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            ResourceLocation.fromNamespaceAndPath(Noellesroles.MOD_ID, "youlu_anchor"),
+            FabricEntityTypeBuilder.<YouluAnchorEntity>create(MobCategory.MISC, YouluAnchorEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.5F, 0.5F))
+                    .trackRangeBlocks(64)
+                    .trackedUpdateRate(2)
+                    .build());
+
+    /**
+     * 幽露烟雾波实体 - 遮天闭目：向前推进的穿墙烟雾，半径内玩家失明+黑暗
+     */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<YouluSmokeWaveEntity> YOULU_SMOKE_WAVE = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            ResourceLocation.fromNamespaceAndPath(Noellesroles.MOD_ID, "youlu_smoke_wave"),
+            FabricEntityTypeBuilder
+                    .<YouluSmokeWaveEntity>create(MobCategory.MISC, YouluSmokeWaveEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.5F, 0.5F))
+                    .trackRangeBlocks(64)
+                    .trackedUpdateRate(2)
+                    .build());
+
+    /**
+     * 幽露球烟实体 - G 键技能生成的黑色烟雾球（内部视野迷雾+黑雾）
+     */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<YouluSmokeBallEntity> YOULU_SMOKE_BALL = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            ResourceLocation.fromNamespaceAndPath(Noellesroles.MOD_ID, "youlu_smoke_ball"),
+            FabricEntityTypeBuilder
+                    .<YouluSmokeBallEntity>create(MobCategory.MISC, YouluSmokeBallEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.5F, 0.5F))
+                    .trackRangeBlocks(64)
+                    .trackedUpdateRate(10)
+                    .build());
+
+    @SuppressWarnings("deprecation")
+    public static final EntityType<SilenceTotemEntity> SILENCE_TOTEM = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            ResourceLocation.fromNamespaceAndPath(Noellesroles.MOD_ID, "silence_totem"),
+            FabricEntityTypeBuilder.<SilenceTotemEntity>create(MobCategory.MISC, SilenceTotemEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.25F, 0.25F))
+                    .trackRangeBlocks(32)
+                    .trackedUpdateRate(10)
+                    .build());
+
+    /**
+     * 照明弹实体 - 投掷后飞行，撞到方块时放置照明弹方块，10秒后消失
+     */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<FlareEntity> FLARE = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            ResourceLocation.fromNamespaceAndPath(Noellesroles.MOD_ID, "flare"),
+            FabricEntityTypeBuilder.<FlareEntity>create(MobCategory.MISC, FlareEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.25F, 0.25F))
+                    .trackRangeBlocks(4)
+                    .trackedUpdateRate(10)
+                    .build());
+
+    @SuppressWarnings("deprecation")
+    public static final EntityType<io.wifi.starrailexpress.content.entity.NoteEntity> GIANT_NOTE = Registry
+            .register(
+                    BuiltInRegistries.ENTITY_TYPE,
+                    Noellesroles.id("giant_note"),
+                    FabricEntityTypeBuilder.<io.wifi.starrailexpress.content.entity.NoteEntity>create(
+                            MobCategory.MISC,
+                            io.wifi.starrailexpress.content.entity.NoteEntity::new)
+                            .dimensions(EntityDimensions.fixed(2.5F, 2.5F))
+                            .trackRangeBlocks(128)
+                            .trackedUpdateRate(10)
+                            .build());
+
+    /** 轮盘赌展示实体 */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<DevilRouletteTableEntity.TableTextDisplay> TABLE_TEXT_DISpLAY = Registry
+            .register(
+                    BuiltInRegistries.ENTITY_TYPE,
+                    ResourceLocation.fromNamespaceAndPath(Noellesroles.MOD_ID,
+                            "table_text_display"),
+                    FabricEntityTypeBuilder.<DevilRouletteTableEntity.TableTextDisplay>create(
+                            MobCategory.MISC,
+                            DevilRouletteTableEntity.TableTextDisplay::new)
+                            // .dimensions(EntityDimensions.fixed(0.2F, 0.2F))
+                            .trackRangeBlocks(32)
+                            .build());
+    @SuppressWarnings("deprecation")
+    public static final EntityType<DevilRouletteTableEntity.TableItemDisplay> TABLE_ITEM_DISPLAY = Registry
+            .register(
+                    BuiltInRegistries.ENTITY_TYPE,
+                    ResourceLocation.fromNamespaceAndPath(Noellesroles.MOD_ID,
+                            "table_item_display"),
+                    FabricEntityTypeBuilder.<DevilRouletteTableEntity.TableItemDisplay>create(
+                            MobCategory.MISC,
+                            DevilRouletteTableEntity.TableItemDisplay::new)
+                            // .dimensions(EntityDimensions.fixed(0.2F, 0.2F))
+                            .trackRangeBlocks(32)
+                            .build());
+
+    /** 滚石实体 - 沿方向滚动碾死玩家 */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<RollingStoneEntity> ROLLING_STONE = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("rolling_stone"),
+            FabricEntityTypeBuilder.<RollingStoneEntity>create(MobCategory.MISC, RollingStoneEntity::new)
+                    .dimensions(EntityDimensions.fixed(2.0F, 2.0F))
+                    .trackRangeBlocks(128)
+                    .trackedUpdateRate(2)
+                    .build());
+
+    /**
+     * 雪傀儡推出的大雪球。
+     *
+     * <p>
+     * 碰撞箱是「基础尺寸」的固定 1.0×1.0，实际大小由实体自己的 SynchedEntityData 同步并按尺寸缩放
+     * （{@link SnowballRollEntity#getDimensions}），这样尺寸变化不需要重注册 EntityType。
+     * 追踪距离取 48（比滚石的 128 小）：雪球大部分时间是被雪傀儡推着走的，
+     * 128 格会让附近所有玩家整局都在收它的位置/元数据包。48 格已覆盖正常交战视距，
+     * 覆盖面积只有 128 的约 1/7。
+     */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<SnowballRollEntity> SNOWBALL_ROLL = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("snowball_roll"),
+            FabricEntityTypeBuilder.<SnowballRollEntity>create(MobCategory.MISC, SnowballRollEntity::new)
+                    .dimensions(EntityDimensions.fixed(1.0F, 1.0F))
+                    .trackRangeBlocks(48)
+                    .trackedUpdateRate(2)
+                    .build());
+
+    /** 命令方块投掷物：石头、火球和石枪都沿抛物线飞。石枪命中后飞回手里。 */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<CommandBlockThrownEntity> COMMAND_BLOCK_THROWN = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("command_block_thrown"),
+            FabricEntityTypeBuilder.<CommandBlockThrownEntity>create(MobCategory.MISC, CommandBlockThrownEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.25F, 0.25F))
+                    .trackRangeBlocks(64)
+                    .trackedUpdateRate(1)
+                    .build());
+
+    /** 滚木实体 - 沿方向滚动碾死玩家 */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<RollingLogEntity> ROLLING_LOG = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("rolling_log"),
+            FabricEntityTypeBuilder.<RollingLogEntity>create(MobCategory.MISC, RollingLogEntity::new)
+                    .dimensions(EntityDimensions.fixed(2.0F, 2.0F))
+                    .trackRangeBlocks(128)
+                    .trackedUpdateRate(2)
+                    .build());
+
+    /** 海曼彩虹马实体 - 彩虹马蹄铁召唤的双人坐骑，120 秒后消失 */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<RainbowHorseEntity> RAINBOW_HORSE = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("rainbow_horse"),
+            FabricEntityTypeBuilder.<RainbowHorseEntity>create(MobCategory.MISC, RainbowHorseEntity::new)
+                    .dimensions(EntityDimensions.fixed(1.4F, 1.6F))
+                    .trackRangeBlocks(128)
+                    .trackedUpdateRate(2)
+                    .build());
+
+    /** 残月萨马实体 - 残月萨马蹄铁召唤的双人坐骑，120 秒后消失 */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<CanyuesaHorseEntity> CANYUESA_HORSE = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("canyuesa_horse"),
+            FabricEntityTypeBuilder.<CanyuesaHorseEntity>create(MobCategory.MISC, CanyuesaHorseEntity::new)
+                    .dimensions(EntityDimensions.fixed(1.4F, 1.6F))
+                    .trackRangeBlocks(128)
+                    .trackedUpdateRate(2)
+                    .build());
+
+    /** 超级猪马实体 - 超级猪马蹄铁召唤的三人坐骑，120 秒后消失，属性更优 */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<SuperPigHorseEntity> SUPER_PIG_HORSE = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("super_pig_horse"),
+            FabricEntityTypeBuilder.<SuperPigHorseEntity>create(MobCategory.MISC, SuperPigHorseEntity::new)
+                    .dimensions(EntityDimensions.fixed(1.8F, 2.0F))
+                    .trackRangeBlocks(128)
+                    .trackedUpdateRate(2)
+                    .build());
+
+    /** 移动平台实体 - 可站立、往返移动 */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<MovingPlatformEntity> MOVING_PLATFORM = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("moving_platform"),
+            FabricEntityTypeBuilder
+                    .<MovingPlatformEntity>create(MobCategory.MISC, MovingPlatformEntity::new)
+                    .dimensions(EntityDimensions.fixed(1.0F, 0.2F))
+                    .trackRangeBlocks(64)
+                    .trackedUpdateRate(1)
+                    .build());
+
+    /** 命令方块裂缝。客户端用独立渲染器画裂口。 */
+    public static final EntityType<CommandBlockCrackEntity> COMMAND_BLOCK_CRACK = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("command_block_crack"),
+            EntityType.Builder.of(CommandBlockCrackEntity::new, MobCategory.MISC)
+                    .sized(1.2F, 1.8F)
+                    .clientTrackingRange(128)
+                    .updateInterval(10)
+                    .build("command_block_crack"));
+
+    /** 天上的命令方块。碰撞箱盖住模型，跟踪距离够整张地图。 */
+    public static final EntityType<CommandBlockMarkerEntity> COMMAND_BLOCK_MARKER = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("command_block_marker"),
+            EntityType.Builder.of(CommandBlockMarkerEntity::new, MobCategory.MISC)
+                    .sized(8.0F, 8.0F)
+                    .clientTrackingRange(128)
+                    .updateInterval(2)
+                    .build("command_block_marker"));
+
+    /**
+     * 摘星者的星星实体 - 追踪目标并俯冲砸死（死因 {@code noellesroles:star}）。
+     * 只有召唤者本人在客户端能看到模型，其余人只看到粒子。
+     */
+    @SuppressWarnings("deprecation")
+    public static final EntityType<StarProjectileEntity> STAR = Registry.register(
+            BuiltInRegistries.ENTITY_TYPE,
+            Noellesroles.id("star"),
+            FabricEntityTypeBuilder.<StarProjectileEntity>create(MobCategory.MISC, StarProjectileEntity::new)
+                    .dimensions(EntityDimensions.fixed(0.6F, 0.6F))
+                    .trackRangeBlocks(96)
+                    .trackedUpdateRate(1)
+                    .build());
+    /**
+     * 初始化实体
+     * 注册实体属性（LivingEntity 需要）
+     */
+    public static void init() {
+        // 轮椅
+        FabricDefaultAttributeRegistry.register(WHEELCHAIR, WheelchairEntity.createAttributes());
+        // 注册傀儡本体实体属性（LivingEntity 必须注册属性才能生成）
+        FabricDefaultAttributeRegistry.register(PUPPETEER_BODY, LivingEntity.createLivingAttributes());
+        FabricDefaultAttributeRegistry.register(SALTED_FISH_BODY,
+                io.wifi.starrailexpress.content.entity.PlayerBodyEntity.createAttributes());
+        FabricDefaultAttributeRegistry.register(DOOMED_SINNER_BODY,
+                io.wifi.starrailexpress.content.entity.PlayerBodyEntity.createAttributes());
+        FabricDefaultAttributeRegistry.register(PIGEON, PigeonEntity.createAttributes());
+        FabricDefaultAttributeRegistry.register(MECHANICAL_BIRD, MechanicalBirdEntity.createAttributes());
+        FabricDefaultAttributeRegistry.register(KUIXI_PUPPET, KuiXiPuppetEntity.createAttributes());
+        FabricDefaultAttributeRegistry.register(ERROR404_PUPPET, Error404PuppetEntity.createAttributes());
+        FabricDefaultAttributeRegistry.register(MUMMY,
+                net.minecraft.world.entity.monster.Husk.createAttributes());
+        FabricDefaultAttributeRegistry.register(UNDEAD, UndeadEntity.createAttributes());
+        FabricDefaultAttributeRegistry.register(ERROR_ANGLER, ErrorAnglerEntity.createAttributes());
+        FabricDefaultAttributeRegistry.register(ANGLER_ROD_MOUNT, AnglerRodMountEntity.createAttributes());
+        FabricDefaultAttributeRegistry.register(MORPHLING_KNIFE_DUMMY,
+                MorphlingKnifeDummyEntity.createAttributes());
+        FabricDefaultAttributeRegistry.register(RAINBOW_HORSE, RainbowHorseEntity.createAttributes());
+        FabricDefaultAttributeRegistry.register(CANYUESA_HORSE, CanyuesaHorseEntity.createAttributes());
+        FabricDefaultAttributeRegistry.register(SUPER_PIG_HORSE, SuperPigHorseEntity.createAttributes());
+    }
+}

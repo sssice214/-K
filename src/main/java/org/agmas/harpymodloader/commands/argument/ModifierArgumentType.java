@@ -1,0 +1,96 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.harpymodloader.commands.argument;
+
+import com.mojang.brigadier.StringReader;
+import com.mojang.brigadier.arguments.ArgumentType;
+import com.mojang.brigadier.context.CommandContext;
+import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import com.mojang.brigadier.exceptions.DynamicCommandExceptionType;
+import com.mojang.brigadier.suggestion.Suggestions;
+import com.mojang.brigadier.suggestion.SuggestionsBuilder;
+
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
+
+import org.agmas.harpymodloader.modifiers.HMLModifiers;
+import org.agmas.harpymodloader.modifiers.SREModifier;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+
+public class ModifierArgumentType implements ArgumentType<SREModifier> {
+    public static final DynamicCommandExceptionType MODIFIER_EMPTY = new DynamicCommandExceptionType(
+            input -> Component.translatable("argument.harpymodloader.modifier.notfound", input));
+    public static final DynamicCommandExceptionType MODIFIER_MULTIPLE = new DynamicCommandExceptionType(
+            input -> Component.translatable("argument.harpymodloader.modifier.found-multiple", input));
+    private static final Collection<String> EXAMPLES = Arrays.asList("foo", "foo:bar", "012");
+
+    public static ModifierArgumentType create() {
+        return new ModifierArgumentType();
+    }
+
+    public static SREModifier getModifier(CommandContext<CommandSourceStack> context, String name) {
+        return context.getArgument(name, SREModifier.class);
+    }
+
+    @Override
+    public SREModifier parse(final StringReader reader) throws CommandSyntaxException {
+        String input = new StringReader(reader).readString();
+        ResourceLocation modifierId = null;
+        try {
+            modifierId = ResourceLocation.read(reader);
+        } catch (CommandSyntaxException ignored) {
+        }
+        List<SREModifier> result = new ArrayList<>();
+        for (final SREModifier modifier : HMLModifiers.MODIFIERS) {
+            if (modifier.identifier().equals(modifierId) || modifier.identifier().getPath().startsWith(input)) {
+                result.add(modifier);
+            }
+        }
+        if (result.isEmpty()) {
+            throw MODIFIER_EMPTY.create(input);
+        }
+        if (result.size() > 1) {
+            throw MODIFIER_MULTIPLE.create(input);
+        }
+        return result.getFirst();
+    }
+
+    @Override
+    public <S> CompletableFuture<Suggestions> listSuggestions(final CommandContext<S> context,
+            final SuggestionsBuilder builder) {
+
+        final String remaining = builder.getRemainingLowerCase();
+        for (var modifier : HMLModifiers.MODIFIERS) {
+            if (modifier == null)
+                continue;
+            if (remaining.isEmpty() || modifier.identifier().toString().contains(remaining)) {
+                builder.suggest(modifier.identifier().toString(), modifier.getDisplayName());
+            }
+        }
+        return builder.buildFuture();
+    }
+
+    @Override
+    public Collection<String> getExamples() {
+        return EXAMPLES;
+    }
+}

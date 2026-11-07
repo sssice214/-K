@@ -1,0 +1,218 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress;
+
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+
+import io.wifi.ConfigCompact.ConfigClassHandler;
+import me.shedaniel.autoconfig.ConfigData;
+import me.shedaniel.autoconfig.annotation.Config;
+import me.shedaniel.autoconfig.annotation.ConfigEntry;
+import me.shedaniel.autoconfig.annotation.ConfigEntry.Category;
+
+/**
+ * 写翻译键 at config_translations/lang/zh_cn.json
+ * key为text.autoconfig.(Config.name).option.项
+ * 如text.autoconfig.starrailexpress-client.option.ultraPerfMode
+ */
+@Config(name = "starrailexpress-client")
+public class SREClientConfig implements ConfigData {
+
+    // 存储默认配置值 - 在静态初始化块中设置
+    public static ConfigClassHandler<SREClientConfig> HANDLER = new ConfigClassHandler<>(
+            SREClientConfig.class);
+    // 客户端专用配置 - 仅在客户端环境生效
+
+    @ConfigEntry.Gui.Tooltip
+    public boolean ultraPerfMode = false;
+    @ConfigEntry.Gui.Tooltip
+    public boolean enhancedChatHud = true;
+    public boolean bgsoundForSpectator = false;
+
+    @ConfigEntry.Gui.Excluded
+    public HashMap<Integer, Boolean> taskStatus = new LinkedHashMap<>();
+
+    // Skills configuration
+    /**
+     * Broadcaster - Broadcast message display duration in seconds
+     */
+    public enum StaminaStyle {
+        DEFAULT,
+        OLD_STYLE,
+        SPLIT_STYLE,
+        MINECRAFT_STYLE,
+        NONE
+    }
+
+    // 样式
+    @Category("style")
+    public StaminaStyle staminaStyle = StaminaStyle.DEFAULT;
+    @Category("style")
+    public int moodTopOffset = 0;
+    @Category("style")
+    public int moodLeftOffset = 0;
+    @Category("style")
+    public float playerHudScale = 0.6f;
+    @Category("style")
+    public float bodyHudScale = 0.6f;
+
+    @Category("style")
+    public int minWinCenterColumns = 3;
+    @Category("style")
+    public int maxWinCenterColumns = 8;
+    @Category("style")
+    public int winCenterColumnsDiv = 3;
+
+    @Category("style")
+    public int minWinSideColumns = 1;
+    @Category("style")
+    public int maxWinSideColumns = 5;
+    @Category("style")
+    public int winSideColumnsDiv = 2;
+
+    @Category("style")
+    @ConfigEntry.Gui.Tooltip
+    public boolean showInfoLinesInInventory = false; // 金币下方的信息行改为在物品栏界面中显示，不再显示在HUD上
+
+    @Category("style")
+    @ConfigEntry.Gui.Tooltip
+    public boolean showInfoLinesInHud = true; // 显示在HUD上
+
+    @Category("style")
+    @ConfigEntry.Gui.Tooltip
+    public boolean showDisguiseHud = true; // 伪装时在左上角信息行下方显示「当前伪装：xxx」
+
+    @Category("style")
+    @ConfigEntry.Gui.Tooltip
+    public boolean useLegacyMapSelector = false; // 使用旧版地图投票界面（卡片墙）
+
+    @Category("style")
+    @ConfigEntry.Gui.Tooltip
+    public boolean newspaperOpenAnimation = true; // 报纸界面打开时的自下而上入场动画
+
+    @Category("style")
+    public boolean showItemCooldownOverlayNum = false; // 物品栏物品上显示冷却数字
+    @Category("style")
+    public boolean showHotbarCooldown = true; // 快捷栏上方显示冷却时间
+    @Category("style")
+    public boolean showMainhandCooldown = true; // 主手物品冷却
+    // 通用
+    public int broadcasterMessageDuration = 10;
+    public boolean disableTitleScreenSound = false;
+    public boolean disableTitleScreenVideoBackground = false;
+    public boolean disableCustomTitleScreen = false;
+    public boolean disableCustomLoadingScreen = false;
+    public boolean disableScreenShake = false;
+    public boolean disableWaypoints = false;
+    public boolean creativeNoFog = true;
+    @ConfigEntry.Gui.Tooltip
+    public boolean enableMovingScenes = true;
+    // VT主播随机内置皮肤（可资源包自定义，player_skins.json）
+    public boolean enableRandomSkinForStreaming = false;
+
+    public boolean disableStaminaBarSmoothing = false;
+
+    public boolean enableSecurityCameraHUD = true; // 启用安全摄像头HUD显示
+    public boolean welcome_voice = false;
+
+    @ConfigEntry.Gui.Excluded
+    public boolean gameDisclaimerAccepted = false; // 已阅读并同意开局免责声明，确认后不再弹出
+
+    public boolean autoSortVotes = false;
+
+    @ConfigEntry.Gui.Tooltip
+    public boolean roleRotationAutoScroll = true; // 职业轮选界面：玩家列表自动滚动跟随当前选择玩家
+
+    @Category("skin")
+    @ConfigEntry.Gui.Tooltip
+    public boolean hideAllHats = false; // 不显示所有人的帽子
+
+    @Category("skin")
+    @ConfigEntry.Gui.Tooltip
+    public boolean showOwnHatOnly = false; // 只显示自己的帽子
+
+    @Category("skin")
+    @ConfigEntry.Gui.Tooltip
+    public boolean hideAllPets = false; // 不显示任何随从（包括自己的）
+
+    @Category("skin")
+    @ConfigEntry.Gui.Tooltip
+    public boolean showOwnPetOnly = false; // 只显示自己的随从，忽略他人勾选「展示给其他玩家」
+
+    /**
+     * 「隐藏指定皮肤」：这里列出的皮肤<b>类别</b>（{@link io.wifi.starrailexpress.util.ItemSkinManager.SkinTypes}
+     * 里的类型名，如 {@code knife} / {@code revolver} / {@code hat} / {@code backpack} / {@code pet}）
+     * 对其他玩家不再展示，一律回退到默认外观；<b>自己的皮肤不受影响</b>。
+     * <p>
+     * 音乐盒、称号、MVP 结算动画不参与此过滤（它们不影响他人身上的渲染）。
+     * 用 {@code List} 而非 {@code Set} 是为了让 autoconfig 的 GSON 序列化结果稳定可读。
+     */
+    @Category("skin")
+    @ConfigEntry.Gui.Excluded
+    public java.util.List<String> hiddenSkinTypes = new java.util.ArrayList<>();
+
+    /** 该皮肤类别是否被本地配置隐藏（不区分对象）。 */
+    public boolean isSkinTypeHidden(String skinType) {
+        return skinType != null && hiddenSkinTypes != null && hiddenSkinTypes.contains(skinType);
+    }
+
+    /** 设置某皮肤类别的隐藏状态；变更后立即写回本地配置文件。 */
+    public void setSkinTypeHidden(String skinType, boolean hidden) {
+        if (skinType == null || skinType.isBlank()) {
+            return;
+        }
+        if (hiddenSkinTypes == null) {
+            hiddenSkinTypes = new java.util.ArrayList<>();
+        }
+        boolean changed = hidden
+                ? !hiddenSkinTypes.contains(skinType) && hiddenSkinTypes.add(skinType)
+                : hiddenSkinTypes.remove(skinType);
+        if (changed) {
+            reload();
+        }
+    }
+    public boolean isUltraPerfMode() {
+        return ultraPerfMode;
+    }
+
+    /**
+     * 重新加载配置文件
+     * 服务端：只从文件读取，不修改
+     * 客户端：可以通过UI修改
+     */
+    public void reload() {
+        HANDLER.load();
+    }
+
+    /**
+     * 重置配置为默认值
+     * 通过精确修改配置文件内容来实现，不删除文件
+     */
+    public void reset() {
+        HANDLER.reset();
+    }
+
+    /**
+     * 接口不需要了
+     */
+    public void init() {
+    }
+
+    public static SREClientConfig instance() {
+        return HANDLER.instance();
+    }
+}

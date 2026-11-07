@@ -1,0 +1,97 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.mixin.client;
+
+import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
+import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
+import com.mojang.blaze3d.vertex.PoseStack;
+import io.wifi.starrailexpress.client.SREClient;
+import net.exmo.sre.planecrash.client.PlaneCrashClientEffects;
+import net.minecraft.client.model.EntityModel;
+import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.entity.EntityRenderer;
+import net.minecraft.client.renderer.entity.EntityRendererProvider;
+import net.minecraft.client.renderer.entity.LivingEntityRenderer;
+import net.minecraft.client.renderer.entity.layers.ItemInHandLayer;
+import net.minecraft.client.renderer.entity.layers.RenderLayer;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.player.Player;
+import pro.fazeclan.river.stupid_express.constants.SEModifiers;
+
+import org.agmas.noellesroles.init.ModEffects;
+import org.agmas.noellesroles.utils.RoleUtils;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+
+@Mixin(LivingEntityRenderer.class)
+public abstract class LivingEntityRendererMixin<T extends LivingEntity, M extends EntityModel<T>, X extends Entity>
+        extends EntityRenderer<T> {
+    protected LivingEntityRendererMixin(EntityRendererProvider.Context ctx) {
+        super(ctx);
+    }
+
+    @WrapOperation(method = "render(Lnet/minecraft/world/entity/LivingEntity;FFLcom/mojang/blaze3d/vertex/PoseStack;Lnet/minecraft/client/renderer/MultiBufferSource;I)V", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/entity/layers/RenderLayer;render(Lcom/mojang/blaze3d/vertex/PoseStack;Lnet/minecraft/client/renderer/MultiBufferSource;ILnet/minecraft/world/entity/Entity;FFFFFF)V"))
+    public void tmm$noFeaturesOnPsycho(
+            RenderLayer<T, M> instance, PoseStack matrixStack, MultiBufferSource vertexConsumerProvider, int i, X t,
+            float limbAngle,
+            float limbDistance,
+            float tickDelta,
+            float animationProgress,
+            float headYaw,
+            float headPitch, Operation<Void> original,
+            T livingEntity) {
+        boolean isPsycho = livingEntity instanceof Player player
+                && SREClient.PLAYER_PSYCHO_CACHE.getOrDefault(player.getUUID(), false);
+        boolean isItemRenderer = instance instanceof ItemInHandLayer<?, ?>;
+        if (!isPsycho || isItemRenderer) {
+            original.call(instance, matrixStack, vertexConsumerProvider, i, t, limbAngle, limbDistance, tickDelta,
+                    animationProgress, headYaw, headPitch);
+        }
+    }
+
+    @Inject(method = "isEntityUpsideDown", at = @At("HEAD"), cancellable = true)
+    private static void sre$isEntityUpsideDown(LivingEntity livingEntity, CallbackInfoReturnable<Boolean> cir) {
+        if (livingEntity instanceof Player player) {
+            // 重力颠倒：玩家自身倒过来渲染
+            if (org.agmas.noellesroles.content.effects.GravityFlipEffect.isFlipped(player)) {
+                cir.setReturnValue(true);
+                return;
+            }
+            if (SREClient.cached_player != null && SREClient.cached_player.hasEffect(ModEffects.UPSIDE_DOWN)) {
+                cir.setReturnValue(true);
+                return;
+            }
+            if (RoleUtils.isPlayerTheModifier(player, SEModifiers.DINNERBONE)) {
+                cir.setReturnValue(true);
+                return;
+            }
+        }
+    }
+
+    @Inject(method = "setupRotations(Lnet/minecraft/world/entity/LivingEntity;Lcom/mojang/blaze3d/vertex/PoseStack;FFFF)V",
+            at = @At("TAIL"))
+    private void sre$planeCrashLean(LivingEntity entity, PoseStack poseStack, float bob, float yBodyRot,
+            float partialTick, float scale, CallbackInfo ci) {
+        if (entity instanceof Player) {
+            PlaneCrashClientEffects.applyPlayerLean(poseStack, entity, partialTick);
+        }
+    }
+
+}

@@ -1,0 +1,786 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.customrole;
+
+import com.google.gson.annotations.SerializedName;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * 单个自定义职业的完整配置数据模型
+ */
+public class CustomRoleData {
+    // ============ 职业基础定义 ============
+    @SerializedName("englishId")
+    public String englishId = "";
+
+    @SerializedName("displayName")
+    public String displayName = "";
+
+    @SerializedName("goals")
+    public String goals = "";
+
+    @SerializedName("description")
+    public String description = "";
+
+    /**
+     * 自定义标签（可多个）。
+     *
+     * <p>
+     * 加载时逐条挂到运行时职业的 flags 上（{@code FlagUtils.applyCustomFlags}），介绍页的分类筛选
+     * 就能按这些标签过滤；{@code inner.*} 前缀的标签仍然具备其语义（禁用、其它模式专用等）。
+     * 没有对应翻译的标签显示成「大写下划线转空格」的原文。
+     */
+    @SerializedName("tags")
+    public List<String> tags = new ArrayList<>();
+
+    @SerializedName("initialEffects")
+    public List<EffectEntry> initialEffects = new ArrayList<>();
+
+    @SerializedName("colorR")
+    public int colorR = 255;
+    @SerializedName("colorG")
+    public int colorG = 255;
+    @SerializedName("colorB")
+    public int colorB = 255;
+
+    @SerializedName("isInnocent")
+    public boolean isInnocent = true;
+
+    @SerializedName("canUseKiller")
+    public boolean canUseKiller = false;
+
+    @SerializedName("moodType")
+    public String moodType = "REAL";
+
+    /** 该职业的心情值(san)上限，默认 1.0；对应 {@code SRERole#setMaxMood}。 */
+    @SerializedName("moodMax")
+    public float moodMax = 1.0f;
+
+    @SerializedName("sprintMultiplier")
+    public double sprintMultiplier = 1.0;
+
+    @SerializedName("infiniteSprint")
+    public boolean infiniteSprint = false;
+
+    @SerializedName("canSeeTime")
+    public boolean canSeeTime = false;
+
+    // ============ 职业高级定义 ============
+    @SerializedName("canSeeCoin")
+    public boolean canSeeCoin = true;
+
+    @SerializedName("canUseInstinct")
+    public boolean canUseInstinct = false;
+
+    @SerializedName("ableToPickUpRevolver")
+    public Boolean ableToPickUpRevolver = null;
+
+    @SerializedName("setNeutrals")
+    public Boolean setNeutrals = null;
+
+    @SerializedName("setNeutralForKiller")
+    public Boolean setNeutralForKiller = null;
+
+    @SerializedName("setVigilanteTeam")
+    public Boolean setVigilanteTeam = null;
+
+    @SerializedName("canSeeTeammateKiller")
+    public Boolean canSeeTeammateKiller = null;
+
+    @SerializedName("occupiedRoleCount")
+    public int occupiedRoleCount = 1;
+
+    @SerializedName("maxCount")
+    public int maxCount = 1;
+
+    @SerializedName("canAutoAddMoney")
+    public Boolean canAutoAddMoney = null;
+
+    /** 是否拥有被动游戏币收入（自然增长游戏币），对应 {@code SRERole#setCanAutoAddMiniGameToken}。 */
+    @SerializedName("canAutoAddMiniGameToken")
+    public Boolean canAutoAddMiniGameToken = null;
+
+    /** 是否可攀爬（爬墙），对应 {@code SRERole#setCanClimbWalls}。 */
+    @SerializedName("canClimbWalls")
+    public Boolean canClimbWalls = null;
+
+    /** 可取用手铐（取下他人手铐），对应 {@code SRERole#setCanUncuffOthers}。 */
+    @SerializedName("canUncuffOthers")
+    public Boolean canUncuffOthers = null;
+
+    @SerializedName("canBeRandomedByOtherRoles")
+    public boolean canBeRandomedByOtherRoles = true;
+
+    @SerializedName("canIgnoreBlackout")
+    public Boolean canIgnoreBlackout = null;
+
+    @SerializedName("canSeeBodyItems")
+    public Boolean canSeeBodyItems = null;
+
+    @SerializedName("canSeeBodyRoleInfo")
+    public Boolean canSeeBodyRoleInfo = null;
+
+    @SerializedName("canSeeBodyDeathReason")
+    public Boolean canSeeBodyDeathReason = null;
+
+    @SerializedName("canSeeBodyKiller")
+    public Boolean canSeeBodyKiller = null;
+
+    // ============ 职业通用属性补全（原 srerole 暴露、工具此前缺失） ============
+    @SerializedName("neutralForInnocent")
+    public Boolean neutralForInnocent = null;
+
+    /**
+     * 是否为「特殊中立」：既不属于偏好中立、也不是杀手方中立 / 事件中立的中立归类。
+     * 默认 false（与角色默认的「未标记特殊中立」一致）。
+     */
+    @SerializedName("specialNeutral")
+    public Boolean specialNeutral = false;
+
+    @SerializedName("canSeeBodyName")
+    public Boolean canSeeBodyName = null;
+
+    @SerializedName("canUseSkillWhileSpectator")
+    public Boolean canUseSkillWhileSpectator = null;
+
+    @SerializedName("mafiaTeam")
+    public Boolean mafiaTeam = null;
+
+    @SerializedName("canBePoisoned")
+    public Boolean canBePoisoned = null;
+
+    @SerializedName("hiddenForRoleRotation")
+    public Boolean hiddenForRoleRotation = null;
+
+    @SerializedName("specialMapRole")
+    public String specialMapRole = "ALL";
+
+    @SerializedName("specialVigilante")
+    public Boolean specialVigilante = null;
+
+    @SerializedName("refreshableSpecialVigilante")
+    public Boolean refreshableSpecialVigilante = null;
+
+    @SerializedName("refreshableSpecialVigilanteChance")
+    public int refreshableSpecialVigilanteChance = 0;
+
+    @SerializedName("canJumpManhole")
+    public Boolean canJumpManhole = null;
+
+    @SerializedName("canAcrossFog")
+    public Boolean canAcrossFog = null;
+
+    @SerializedName("canUseSabotage")
+    public Boolean canUseSabotage = null;
+
+    @SerializedName("defaultEnableMaxPlayerCount")
+    public int defaultEnableMaxPlayerCount = -1;
+
+    // ============ 独立胜利选项 (仅中立 && !setNeutralForKiller 时可用) ============
+    @SerializedName("enableCustomWin")
+    public boolean enableCustomWin = false;
+
+    @SerializedName("customWinTitle")
+    public String customWinTitle = "";
+
+    @SerializedName("customWinSubtitle")
+    public String customWinSubtitle = "";
+
+    @SerializedName("customWinSurviveToLast")
+    public boolean customWinSurviveToLast = false;
+
+    /**
+     * 「存活到最后」独立胜利的细分模式（取代旧的布尔开关 {@link #customWinSurviveToLast}）：
+     * <ul>
+     * <li>{@code ""}（空）= 关闭</li>
+     * <li>{@code INNOCENT} = 存活到最后顶替平民获胜：平民获胜 / 时间耗尽时，改判为本职业独立胜利；不影响杀手获胜</li>
+     * <li>{@code KILLER} = 存活到最后顶替杀手获胜：杀手获胜时，改判为本职业独立胜利；不影响平民获胜</li>
+     * <li>{@code BOTH} = 存活到最后顶替双方获胜：平民获胜 / 时间耗尽 / 杀手获胜时，均改判为本职业独立胜利</li>
+     * </ul>
+     * 为空时会回退到旧字段（{@code customWinSurviveToLast == true} 等价于 {@code BOTH}）。
+     * 该条件不会「拖延 / 阻止」游戏正常结束。
+     */
+    @SerializedName("customWinSurviveToLastMode")
+    public String customWinSurviveToLastMode = "";
+
+    @SerializedName("customWinLastAlive")
+    public boolean customWinLastAlive = false;
+
+    @SerializedName("customWinLastWithRoles")
+    public List<String> customWinLastWithRoles = new ArrayList<>();
+
+    /**
+     * 「只剩自己和指定职业时获胜」中指定职业是否需要存活。默认 {@code true}（需要存活，原行为）。
+     * 设为 {@code false} 时指定职业无需存活——指定职业全灭、场上只剩自己时也能取得该独立胜利。
+     */
+    @SerializedName("customWinLastWithRolesNeedAlive")
+    public boolean customWinLastWithRolesNeedAlive = true;
+
+    @SerializedName("customWinTagSleep")
+    public String customWinTagSleep = "";
+
+    @SerializedName("customWinHeldItem")
+    public String customWinHeldItem = "";
+
+    // ============ 跟随获胜（任何职业均可配置，不要求中立 / 独立胜利中立） ============
+    /** 是否启用跟随获胜。启用后结算时按跟随条件与跟随目标改判个人胜负。 */
+    @SerializedName("enableFollowWin")
+    public boolean enableFollowWin = false;
+
+    /**
+     * 跟随条件：
+     * <ul>
+     * <li>{@code UNCONDITIONAL} 无条件跟随（默认）</li>
+     * <li>{@code SURVIVE_TO_END} 存活到最后：结算时该职业玩家必须存活，否则失败</li>
+     * <li>{@code NEAR_FACTION} 在该阵营玩家周围：周围 6 格内需有该阵营的存活玩家（黑白同款条件）</li>
+     * </ul>
+     */
+    @SerializedName("followWinCondition")
+    public String followWinCondition = "UNCONDITIONAL";
+
+    /**
+     * 跟随阵营：
+     * <ul>
+     * <li>{@code NONE} 不设置（默认）</li>
+     * <li>{@code FINAL_EXCL_NEUTRAL} 最终结算阵营（不含中立）：平民获胜 / 时间耗尽 / 杀手获胜</li>
+     * <li>{@code FINAL_INCL_NEUTRAL} 最终结算阵营（含中立）：任何职业胜利，只要还活着就算胜利</li>
+     * <li>{@code INNOCENT_ONLY} 仅平民：仅跟随平民获胜和时间耗尽获胜</li>
+     * <li>{@code KILLER_ONLY} 仅杀手：仅跟随杀手获胜</li>
+     * </ul>
+     */
+    @SerializedName("followWinFaction")
+    public String followWinFaction = "NONE";
+
+    /** 跟随特定职业：填职业 id（支持 {@code 命名空间:路径} 或仅路径），该职业获胜则跟随获胜。为空不启用。 */
+    @SerializedName("followWinRoleId")
+    public String followWinRoleId = "";
+
+    /** 跟随带特定修饰符的玩家获胜：填修饰符 id，带有该修饰符的玩家获胜则跟随获胜。为空不启用。 */
+    @SerializedName("followWinModifierId")
+    public String followWinModifierId = "";
+
+    // ============ 职业能力选项 ============
+    @SerializedName("initialItems")
+    public List<InitialItemEntry> initialItems = new ArrayList<>();
+
+    // --- 旧版直觉系统（已废弃，保留向下兼容；优先使用 instinctModes） ---
+    @SerializedName("instinctSameColorFrame")
+    public boolean instinctSameColorFrame = false;
+
+    @SerializedName("instinctMaxRange")
+    public String instinctMaxRange = "*";
+
+    @SerializedName("instinctBeSeenMaxRange")
+    public String instinctBeSeenMaxRange = "*"; // 旧版：被别人透视（beSeen）的最大距离（格数），"*" 表示无限
+
+    @SerializedName("instinctUnlimitedTeammate")
+    public boolean instinctUnlimitedTeammate = false;
+
+    @SerializedName("instinctNightVision")
+    public Boolean instinctNightVision = null;
+
+    // --- 新版直觉系统：支持多种模式切换 ---
+    // 每个模式包含「看别人」和「被别人看」两套配置，外加范围和队友限制
+    @SerializedName("instinctModes")
+    public List<InstinctModeData> instinctModes = new ArrayList<>();
+
+    @SerializedName("enableAbility")
+    public boolean enableAbility = false;
+
+    @SerializedName("abilitySkillCommands")
+    public List<String> abilitySkillCommands = new ArrayList<>();
+
+    @SerializedName("abilityCooldownSeconds")
+    public int abilityCooldownSeconds = 30;
+
+    @SerializedName("abilityInitialCooldownSeconds")
+    public int abilityInitialCooldownSeconds = 0;
+
+    @SerializedName("abilityDelayedCommands")
+    public List<String> abilityDelayedCommands = new ArrayList<>();
+
+    @SerializedName("abilityDelaySeconds")
+    public int abilityDelaySeconds = 0;
+
+    // ============ 游戏结束自动执行指令 ============
+    @SerializedName("gameEndCommands")
+    public List<String> gameEndCommands = new ArrayList<>();
+
+    // ============ 职业技能名称与切换 ============
+    @SerializedName("abilityName")
+    public String abilityName = ""; // 技能名称（HUD 显示在冷却上方）
+
+    @SerializedName("enableSkillSwitch")
+    public boolean enableSkillSwitch = false; // 是否启用切换技能（多技能模块）
+
+    @SerializedName("skillModules")
+    public List<SkillData> skillModules = new ArrayList<>(); // 切换技能模块列表（技能1、技能2…）
+
+    // ============ 生成选项 ============
+    @SerializedName("twoWayOpposingJobs")
+    public List<String> twoWayOpposingJobs = new ArrayList<>();
+
+    @SerializedName("opposingJobs")
+    public List<String> opposingJobs = new ArrayList<>();
+
+    @SerializedName("bindWithRoles")
+    public List<String> bindWithRoles = new ArrayList<>();
+
+    @SerializedName("mapRestrictedTo")
+    public List<String> mapRestrictedTo = new ArrayList<>();
+
+    /**
+     * 组合地图特性条件：{@code MapSpecialFeatures} 名称列表（如 {@code UNDERWATER,LAB}）。
+     *
+     * <p>
+     * 与 {@link #specialMapRolesMatchAll} 配合决定「全部满足」还是「任一满足」，为空表示不限制。
+     * 对应代码里的 {@code SRERole#setSpecialMapRolesCondition}。
+     */
+    @SerializedName("specialMapRoles")
+    public List<String> specialMapRoles = new ArrayList<>();
+
+    /** 组合地图特性的匹配方式：{@code true} = 全部满足（AND），{@code false} = 任一满足（OR）。 */
+    @SerializedName("specialMapRolesMatchAll")
+    public boolean specialMapRolesMatchAll = true;
+
+    /**
+     * 自定义生成条件：每条形如 {@code 字段 运算符 值}（如 {@code snow = true}、
+     * {@code features contains LAB}），条件之间以逗号分隔。
+     *
+     * <p>
+     * 对应代码里的 {@code SRERole#setCanSpawnInMap}，支持的字段见
+     * {@link CustomRoleSpawnCondition}；为空表示不限制。
+     */
+    @SerializedName("canSpawnInMapConditions")
+    public List<String> canSpawnInMapConditions = new ArrayList<>();
+
+    /** 自定义生成条件的匹配方式：{@code true} = 全部满足（AND），{@code false} = 任一满足（OR）。 */
+    @SerializedName("canSpawnInMapMatchAll")
+    public boolean canSpawnInMapMatchAll = true;
+
+    // ==================== 相关职业 / 相关修饰符（介绍页展示） ====================
+    /** 双向相关职业（职业 id），对应 {@code SRERole#addBothRelatedRole}。 */
+    @SerializedName("bothRelatedRoles")
+    public List<String> bothRelatedRoles = new ArrayList<>();
+    /** 单向相关职业（职业 id），对应 {@code SRERole#addRelatedRole}。 */
+    @SerializedName("relatedRoles")
+    public List<String> relatedRoles = new ArrayList<>();
+    /** 移除相关职业（职业 id），对应 {@code SRERole#removeRelatedRole}。 */
+    @SerializedName("removeRelatedRoles")
+    public List<String> removeRelatedRoles = new ArrayList<>();
+    /** 双向相关修饰符（修饰符 id），对应 {@code SRERole#addBothRelatedModifier}。 */
+    @SerializedName("bothRelatedModifiers")
+    public List<String> bothRelatedModifiers = new ArrayList<>();
+    /** 单向相关修饰符（修饰符 id），对应 {@code SRERole#addRelatedModifier}。 */
+    @SerializedName("relatedModifiers")
+    public List<String> relatedModifiers = new ArrayList<>();
+    /** 移除相关修饰符（修饰符 id），对应 {@code SRERole#removeRelatedModifier}。 */
+    @SerializedName("removeRelatedModifiers")
+    public List<String> removeRelatedModifiers = new ArrayList<>();
+
+    // ==================== 关联（绑定生成）职业的移除 ====================
+    /** 移除关联（绑定生成）职业（职业 id），对应 {@code SRERole#removeOccupationRole}。 */
+    @SerializedName("removeOccupationRoles")
+    public List<String> removeOccupationRoles = new ArrayList<>();
+    /** 清空关联（绑定生成）职业，对应 {@code SRERole#clearOccupationRole}；在 bindWithRoles 之前生效。 */
+    @SerializedName("clearOccupationRoles")
+    public boolean clearOccupationRoles = false;
+
+    // ==================== 任务刷新黑 / 白名单 ====================
+    /** 任务刷新黑名单（任务枚举名，如 {@code CLEAN_DUST}），对应 {@code SRERole#addUnrefreshableTasks}。 */
+    @SerializedName("unrefreshableTasks")
+    public List<String> unrefreshableTasks = new ArrayList<>();
+    /** 任务刷新白名单（任务枚举名），对应 {@code SRERole#addOnlyRefreshableTasks}。 */
+    @SerializedName("onlyRefreshableTasks")
+    public List<String> onlyRefreshableTasks = new ArrayList<>();
+
+    // ==================== 杂项开关（null = 不设置） ====================
+    /** 小游戏任务独立计时，对应 {@code SRERole#setIndependentMinigameTiming}。 */
+    @SerializedName("independentMinigameTiming")
+    public Boolean independentMinigameTiming = null;
+    /** 被透视时隐藏职业信息，对应 {@code SRERole#setHideRoleInfoWhenSeen}。 */
+    @SerializedName("hideRoleInfoWhenSeen")
+    public Boolean hideRoleInfoWhenSeen = null;
+    /** 能否"小脑"别人，对应 {@code SRERole#setCanXiaonao}。 */
+    @SerializedName("canXiaonao")
+    public Boolean canXiaonao = null;
+    /** 能否被别人"小脑"，对应 {@code SRERole#setCanBeXiaonao}。 */
+    @SerializedName("canBeXiaonao")
+    public Boolean canBeXiaonao = null;
+    /** 结算时计入"存活好人"计数，对应 {@code SRERole#setCanIncreaseSurvivingInnocents}。 */
+    @SerializedName("canIncreaseSurvivingInnocents")
+    public Boolean canIncreaseSurvivingInnocents = null;
+    /** 结算时计入"存活杀手"计数，对应 {@code SRERole#setCanIncreaseSurvivingKillers}。 */
+    @SerializedName("canIncreaseSurvivingKillers")
+    public Boolean canIncreaseSurvivingKillers = null;
+
+    @SerializedName("enableChance")
+    public int enableChance = 100;
+
+    @SerializedName("useRareChance")
+    public boolean useRareChance = false;
+
+    @SerializedName("enableRareChance")
+    public int enableRareChance = 100;
+
+    @SerializedName("enableNeededPlayerCount")
+    public int enableNeededPlayerCount = -1;
+
+    // ============ 商店选项 ============
+    @SerializedName("shopEntries")
+    public List<ShopEntryData> shopEntries = new ArrayList<>();
+
+    // ============ 任务奖励（完成 N 个任务给物品，可不限次数） ============
+    @SerializedName("taskRewardCount")
+    public int taskRewardCount = 0; // 0 = 关闭
+
+    @SerializedName("taskRewardMaxTriggers")
+    public int taskRewardMaxTriggers = 1; // 一局最多触发次数
+
+    @SerializedName("taskRewardUnlimited")
+    public boolean taskRewardUnlimited = false; // true = 不限次数（传 -1）
+
+    @SerializedName("taskRewardMessage")
+    public String taskRewardMessage = ""; // 奖励提示翻译键，为空用默认
+
+    @SerializedName("taskRewardSilent")
+    public boolean taskRewardSilent = false; // 静默发放（不弹提示）
+
+    @SerializedName("taskRewardItems")
+    public List<InitialItemEntry> taskRewardItems = new ArrayList<>();
+
+    // ============ 免疫类 ============
+    @SerializedName("fallDamageImmune")
+    public Boolean fallDamageImmune = null; // 免疫摔落伤害
+
+    /**
+     * 该职业专属的摔落致死高度（格）：摔落距离达到该值即判死；{@code -1} = 跟随地图的
+     * {@code fallToDeathHeight} 设置。对应 {@code SRERole#setFallToDeathHeightOverride}。
+     */
+    @SerializedName("fallToDeathHeight")
+    public int fallToDeathHeight = -1;
+
+    @SerializedName("darknessImmune")
+    public Boolean darknessImmune = null; // 免疫黑暗死亡
+
+    @SerializedName("environmentalImmune")
+    public Boolean environmentalImmune = null; // 免疫环境致死（窒息/冰冻/干渴等）
+
+    // ============ 开局入场提示 ============
+    /**
+     * 开局入场提示文本：游戏开始时向持有该自定义职业的玩家显示。为空（默认）则不显示任何提示。
+     */
+    @SerializedName("entranceHint")
+    public String entranceHint = "";
+
+    /**
+     * 开局入场提示的文本颜色（{@code ChatFormatting} 枚举名，如 {@code YELLOW}/{@code RED}）。
+     * 为空或非法时回退为 {@code YELLOW}（与原版入场提示一致）。
+     */
+    @SerializedName("entranceHintColor")
+    public String entranceHintColor = "YELLOW";
+
+    // ============ 经济 / 金币 ============
+    @SerializedName("initialCoinCount")
+    public int initialCoinCount = -1; // -1 = 不修改
+
+    @SerializedName("noCoinSystem")
+    public Boolean noCoinSystem = null; // 无金币系统
+
+    @SerializedName("cannotEarnCoinFromKills")
+    public Boolean cannotEarnCoinFromKills = null; // 击杀不获得金币
+
+    @SerializedName("neutralKillCoin")
+    public int neutralKillCoin = 0; // 击杀玩家获得的额外金币（0=不给予）
+
+    // ============ 战斗 / 击杀限制 ============
+    @SerializedName("canKillWithBowAndCrossbow")
+    public Boolean canKillWithBowAndCrossbow = null; // 能用弓/弩杀人
+
+    @SerializedName("canKillWithTrident")
+    public Boolean canKillWithTrident = null; // 能用三叉戟杀人
+
+    @SerializedName("cannotKnifeLeftClick")
+    public Boolean cannotKnifeLeftClick = null; // 无法用刀左键击退人
+
+    @SerializedName("canUseDreamAxe")
+    public Boolean canUseDreamAxe = null; // 能用 Dream 铁斧削减他人虚拟血量
+
+    // ============ 杀手同伙可见性 ============
+    @SerializedName("killerTeammateVisibilityEnabled")
+    public Boolean killerTeammateVisibilityEnabled = null; // 是否启用该机制
+
+    @SerializedName("canBeSeenAsKillerTeammate")
+    public Boolean canBeSeenAsKillerTeammate = null; // 能否被看到杀手同伙
+
+    // ============ 心情颜色覆盖 ============
+    @SerializedName("moodColorR")
+    public int moodColorR = -1; // -1 = 使用默认
+
+    @SerializedName("moodColorG")
+    public int moodColorG = -1;
+
+    @SerializedName("moodColorB")
+    public int moodColorB = -1;
+
+    // ============ 内部类 ============
+
+    public static class EffectEntry {
+        @SerializedName("effectId")
+        public String effectId = "";
+        @SerializedName("amplifier")
+        public int amplifier = 0; // 0=等级I, 1=等级II...
+
+        public EffectEntry() {}
+        public EffectEntry(String id, int amp) { effectId = id; amplifier = amp; }
+    }
+
+    public static class InitialItemEntry {
+        /** 物品 id：先按自定义列车物品解析，找不到再当原版物品（两种都能填）。 */
+        @SerializedName("itemId")
+        public String itemId = "";
+        @SerializedName("count")
+        public int count = 1;
+    }
+
+    /**
+     * 单个直觉模式的配置数据。
+     * 每个模式定义了「看别人」（seeing）和「被别人看」（beSeen）的高亮类型，
+     * 分别对应 {@code SRERole.setInstinctType} 和 {@code SRERole.setBeSeenInstinctType}。
+     * 类型字符串见 {@link io.wifi.starrailexpress.api.InstinctType#valueOf(String)}，
+     * 额外支持 {@code CUSTOM(0xAARRGGBB)} 形式的自定义颜色。
+     */
+    public static class InstinctModeData {
+        /** 直觉关闭时，该职业看别人的高亮类型（如 DEFAULT/NONE/KILLER_INSTINCT/OBSERVER_ROLE_COLOR/TARGET_ROLE_COLOR/CUSTOM(0x...)） */
+        @SerializedName("seeingOff")
+        public String seeingOff = "DEFAULT";
+
+        /** 直觉开启时，该职业看别人的高亮类型 */
+        @SerializedName("seeingOn")
+        public String seeingOn = "DEFAULT";
+
+        /** 别人直觉关闭时，看到该职业的高亮类型 */
+        @SerializedName("beSeenOff")
+        public String beSeenOff = "DEFAULT";
+
+        /** 别人直觉开启时，看到该职业的高亮类型 */
+        @SerializedName("beSeenOn")
+        public String beSeenOn = "DEFAULT";
+
+        /** 看别人（透视）时的最大距离（格数），"*" 表示无限 */
+        @SerializedName("maxRange")
+        public String maxRange = "*";
+
+        /** 被别人透视（beSeen）时的最大距离（格数），"*" 表示无限；为 "*" 时回退到 maxRange */
+        @SerializedName("beSeenMaxRange")
+        public String beSeenMaxRange = "*";
+
+        /** 同阵营队友无视距离限制 */
+        @SerializedName("unlimitedTeammate")
+        public boolean unlimitedTeammate = false;
+
+        // ==================== 中立同阵营透视（参考教父家族） ====================
+        /**
+         * 是否启用「同阵营」分类。
+         *
+         * <p>启用后基础「看别人」（{@link #seeingOff}/{@link #seeingOn}）不再生效，只生效下面的同阵营自定义本能；
+         * 「被别人看」（{@link #beSeenOff} 等）与范围设置不受影响。
+         */
+        @SerializedName("factionEnabled")
+        public boolean factionEnabled = false;
+
+        /** 拉入同阵营的职业 id（逗号分隔，支持 {@code 命名空间:路径} 或仅路径）。 */
+        @SerializedName("factionRoles")
+        public String factionRoles = "";
+
+        /** 拉入同阵营的修饰符 id（逗号分隔）。 */
+        @SerializedName("factionModifiers")
+        public String factionModifiers = "";
+
+        /** 同阵营玩家无法互相伤害 */
+        @SerializedName("factionNoFriendlyFire")
+        public boolean factionNoFriendlyFire = false;
+
+        /** 看同阵营玩家不受距离限制（不受「透视范围」约束） */
+        @SerializedName("factionUnlimitedRange")
+        public boolean factionUnlimitedRange = false;
+
+        /** 仅能看同阵营玩家（非同阵营玩家无法被透视） */
+        @SerializedName("factionOnly")
+        public boolean factionOnly = false;
+
+        /** 透视同阵营玩家的颜色（直觉关）—— 与「看别人」同款，但不含杀手透视逻辑 */
+        @SerializedName("factionSeeingOff")
+        public String factionSeeingOff = "DEFAULT";
+
+        /** 透视同阵营玩家的颜色（直觉开） */
+        @SerializedName("factionSeeingOn")
+        public String factionSeeingOn = "DEFAULT";
+
+        /** 透视非同阵营玩家的颜色（直觉关）—— 与「看别人」同款，包含所有类型 */
+        @SerializedName("factionOtherSeeingOff")
+        public String factionOtherSeeingOff = "DEFAULT";
+
+        /** 透视非同阵营玩家的颜色（直觉开） */
+        @SerializedName("factionOtherSeeingOn")
+        public String factionOtherSeeingOn = "DEFAULT";
+    }
+
+    public static class ShopEntryData {
+        /**
+         * 商品类型：
+         * <ul>
+         * <li>{@code item} 物品（id 先按自定义列车物品解析，找不到再当原版物品；旧配置里的
+         * {@code custom_item} 等价于它）</li>
+         * <li>{@code psycho} 疯狂模式 / {@code blackout} 停电 / {@code monitor_fail} 监控失灵 /
+         * {@code lightup} 开灯 / {@code monitor_recovery} 监控恢复（后两者的行为与钳工商店一致）</li>
+         * <li>{@code custom} 自定义（名称+图标+指令）</li>
+         * <li>{@code killer_shop} 通用杀手商店：原样展开通用杀手商店的全部商品，无需再填价格/货币/冷却</li>
+         * <li>{@code knife} 耐久刀：与通用杀手商店的刀一致（有耐久、购买后降价）</li>
+         * </ul>
+         */
+        @SerializedName("type")
+        public String type = "item";
+
+        @SerializedName("itemId")
+        public String itemId = "";
+
+        /**
+         * 价格。<ul>
+         * <li>{@code knife}（耐久刀）下 {@code -1} = 跟随配置里的刀价；</li>
+         * <li>其它类型下 {@code 0} 起填，不允许负数。</li>
+         * </ul>
+         */
+        @SerializedName("price")
+        public int price = 0;
+
+        /**
+         * 该商品的货币类型（参考网警商店）：{@code money} 金币（默认）/ {@code minigame_token} 游戏币。
+         * 见 {@code ShopEntry.Currency#fromSerializedName}。
+         */
+        @SerializedName("currency")
+        public String currency = "money";
+
+        /**
+         * 购买冷却（秒）：购买成功后给该商品挂的原版物品冷却。
+         * <ul>
+         * <li>{@code -1} = 使用该商品类型的默认冷却（当前配置值，见
+         * {@code CustomRoleLoader#defaultCooldownSeconds}）；</li>
+         * <li>对 {@code psycho} / {@code blackout} / {@code monitor_fail} / {@code lightup} /
+         * {@code monitor_recovery} 有意义；{@code item} / {@code custom} 下 {@code 0} 表示无冷却。</li>
+         * </ul>
+         */
+        @SerializedName("cooldownSeconds")
+        public int cooldownSeconds = 0;
+
+        /**
+         * 是否允许重复购买（{@code item} / {@code knife} 专用）：false 时背包/快捷栏里已有该商品就拒绝购买。
+         */
+        @SerializedName("allowDuplicate")
+        public boolean allowDuplicate = true;
+
+        /**
+         * 折扣模式：{@code none} 无折扣（默认）/ {@code raise} 每次购买后涨价 /
+         * {@code lower} 每次购买后降价。金额见 {@link #discountAmount}。
+         */
+        @SerializedName("discountMode")
+        public String discountMode = "none";
+
+        /**
+         * 每次购买后涨价/降价的金额（{@link #discountMode} 非 {@code none} 时生效）。
+         * <ul>
+         * <li>涨价：单次增量需保证「价格 + 增量」不超出 int 上限；</li>
+         * <li>降价：单次增量不超过商品本身价格（商品最低降到 0）。</li>
+         * </ul>
+         */
+        @SerializedName("discountAmount")
+        public int discountAmount = 0;
+
+        /**
+         * 价格变动次数：购买多少次之后价格不再变动（{@code "*"} = 不受限制，默认）。
+         * 仅 {@link #discountMode} 非 {@code none} 时生效。
+         */
+        @SerializedName("priceChangeCount")
+        public String priceChangeCount = "*";
+
+        // 自定义类型专用
+        @SerializedName("displayName")
+        public String displayName = "";
+
+        @SerializedName("commands")
+        public List<String> commands = new ArrayList<>();
+    }
+
+    /**
+     * 单个技能模块的配置（用于「启用切换技能」时的多技能）。
+     * 包含：技能名称、技能执行指令、技能冷却、技能初始冷却、延迟执行秒数、延迟执行指令、游戏结束执行指令。
+     */
+    public static class SkillData {
+        @SerializedName("name")
+        public String name = ""; // 技能名称（HUD 显示）
+
+        @SerializedName("commands")
+        public List<String> commands = new ArrayList<>(); // 技能执行指令
+
+        @SerializedName("cooldownSeconds")
+        public int cooldownSeconds = 30; // 技能冷却（秒）
+
+        @SerializedName("initialCooldownSeconds")
+        public int initialCooldownSeconds = 0; // 技能初始冷却（秒）
+
+        @SerializedName("delaySeconds")
+        public int delaySeconds = 0; // 延迟执行秒数
+
+        @SerializedName("delayedCommands")
+        public List<String> delayedCommands = new ArrayList<>(); // 延迟执行指令
+
+        @SerializedName("gameEndCommands")
+        public List<String> gameEndCommands = new ArrayList<>(); // 游戏结束执行指令
+    }
+
+    /**
+     * 返回实际生效的技能列表（供 HUD 显示名称与加载器注册使用）。
+     * - 启用切换技能：遍历 skillModules，跳过没有任何指令的空模块。
+     * - 否则：由旧版单技能字段（ability*）合成一个技能。
+     */
+    public List<SkillData> getEffectiveSkills() {
+        List<SkillData> result = new ArrayList<>();
+        if (enableSkillSwitch && !skillModules.isEmpty()) {
+            for (SkillData sd : skillModules) {
+                if (sd.commands.isEmpty() && sd.delayedCommands.isEmpty())
+                    continue;
+                result.add(sd);
+            }
+        } else {
+            if (!abilitySkillCommands.isEmpty() || !abilityDelayedCommands.isEmpty()) {
+                SkillData sd = new SkillData();
+                sd.name = abilityName;
+                sd.commands = abilitySkillCommands;
+                sd.cooldownSeconds = abilityCooldownSeconds;
+                sd.initialCooldownSeconds = abilityInitialCooldownSeconds;
+                sd.delaySeconds = abilityDelaySeconds;
+                sd.delayedCommands = abilityDelayedCommands;
+                result.add(sd);
+            }
+        }
+        return result;
+    }
+
+    public String getFullIdentifier() {
+        return "customrole:" + englishId;
+    }
+}

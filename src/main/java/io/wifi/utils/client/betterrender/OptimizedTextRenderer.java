@@ -1,0 +1,1080 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.utils.client.betterrender;
+
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.blaze3d.vertex.*;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.renderer.GameRenderer;
+import net.minecraft.client.renderer.LightTexture;
+import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.texture.TextureAtlasSprite;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.Style;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.util.FormattedCharSequence;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.inventory.tooltip.TooltipComponent;
+import net.minecraft.world.item.ItemStack;
+import org.jetbrains.annotations.Nullable;
+import org.joml.Matrix4f;
+import org.joml.Vector4f;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+
+/**
+ * Frame-level batch renderer with tick-rate caching.
+ *
+ * <h2>Optimizations:</h2>
+ * <ul>
+ * <li>Tick-rate caching - reuses cached render list when tick hasn't
+ * changed</li>
+ * <li>Batch rendering - same-type operations merged into single draw calls</li>
+ * <li>Minimal allocations - pre-allocated lists, direct matrix copy</li>
+ * </ul>
+ *
+ * <h2>Lifecycle (managed by GuiRenderMixin):</h2>
+ * 
+ * <pre>
+ *   ClientTickEvent  →  markTickDirty()    ← called every game tick
+ *   Gui.render HEAD  →  beginFrame()       ← opens batch window
+ *     FakeGuiGraphics →  enqueue(...)      ← only runs if tick is dirty
+ *   Gui.render RETURN →  endFrame()        ← submits batched draw calls
+ * </pre>
+ */
+public class OptimizedTextRenderer {
+
+    public static final OptimizedTextRenderer INSTANCE = new OptimizedTextRenderer();
+
+    private OptimizedTextRenderer() {
+    }
+
+    // ── Tick-rate gate ─────────────────────────────────────────────────────────
+
+    private boolean tickDirty = true;
+    private final List<RenderAction> tickCache = new ArrayList<>(128);
+    private final List<RenderAction> pending = new ArrayList<>(128);
+
+    private GuiGraphics frameGraphics = null;
+    private boolean inFrame = false;
+
+    /** Tracks if any draw calls were made this frame */
+    private boolean hasDrawCallsThisFrame = false;
+
+    // ── Tick lifecycle (called by ClientTickMixin) ─────────────────────────────
+
+    public void markTickDirty() {
+        tickDirty = true;
+    }
+
+    public boolean isTickDirty() {
+        return tickDirty;
+    }
+
+    // ── Frame lifecycle (called by GuiRenderMixin) ─────────────────────────────
+
+    public void beginFrame(GuiGraphics graphics) {
+        frameGraphics = graphics;
+        inFrame = true;
+        pending.clear();
+        hasDrawCallsThisFrame = false;
+    }
+
+    public void endFrame() {
+        if (!inFrame)
+            return;
+
+        // Check if HUD should be hidden (F1 key)
+        boolean hideGui = Minecraft.getInstance().options.hideGui;
+
+        if (tickDirty) {
+            // Update cache: if there were draw calls and HUD is visible, store them;
+            // otherwise clear the cache
+            // This ensures that when nothing should be drawn (or HUD is hidden), the cache
+            // is empty
+            tickCache.clear();
+            if (hasDrawCallsThisFrame && !hideGui) {
+                tickCache.addAll(pending);
+            }
+            tickDirty = false;
+        }
+
+        // Only render if there's content in the cache and HUD is not hidden
+        if (!tickCache.isEmpty() && !hideGui) {
+            flushCache();
+        }
+
+        pending.clear();
+        inFrame = false;
+        frameGraphics = null;
+    }
+
+    private void flushCache() {
+        if (frameGraphics == null || tickCache.isEmpty())
+            return;
+
+        final Font font = Minecraft.getInstance().font;
+        final MultiBufferSource.BufferSource bufferSource = frameGraphics.bufferSource();
+        final TextBatchingBuffer textSink = new TextBatchingBuffer();
+        final int size = tickCache.size();
+
+        int i = 0;
+        while (i < size) {
+            RenderAction action = tickCache.get(i);
+
+            // Batch consecutive FillActions
+            if (action instanceof FillAction) {
+                i = flushBatchedFills(i, size);
+                continue;
+            }
+
+            // Batch consecutive BlitActions with same texture
+            if (action instanceof BlitAction) {
+                i = flushBatchedBlits(i, size);
+                continue;
+            }
+
+            // Batch consecutive TextActions
+            if (action instanceof TextAction) {
+                i = flushBatchedText(i, size, font, textSink);
+                continue;
+            }
+
+            // Batch consecutive FillGradientActions
+            if (action instanceof FillGradientAction) {
+                i = flushBatchedGradients(i, size);
+                continue;
+            }
+
+            // Execute other actions individually
+            action.execute(frameGraphics, font, bufferSource);
+            i++;
+        }
+
+        RenderSystem.disableDepthTest();
+        bufferSource.endBatch();
+        // Text is drawn last, matching the original deferred flush order.
+        textSink.flush();
+        RenderSystem.enableDepthTest();
+    }
+
+    /**
+     * Batch consecutive FillActions into a single draw call.
+     */
+    private int flushBatchedFills(int start, int size) {
+        RenderSystem.enableBlend();
+        RenderSystem.setShader(GameRenderer::getPositionColorShader);
+        BufferBuilder bb = Tesselator.getInstance().begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
+
+        int i = start;
+        while (i < size && tickCache.get(i) instanceof FillAction f) {
+            Matrix4f m = f.matrix;
+            bb.addVertex(m, f.x1, f.y2, f.z).setColor(f.color);
+            bb.addVertex(m, f.x2, f.y2, f.z).setColor(f.color);
+            bb.addVertex(m, f.x2, f.y1, f.z).setColor(f.color);
+            bb.addVertex(m, f.x1, f.y1, f.z).setColor(f.color);
+            i++;
+        }
+
+        BufferUploader.drawWithShader(bb.buildOrThrow());
+        return i;
+    }
+
+    /**
+     * Batch consecutive FillGradientActions into a single draw call.
+     */
+    private int flushBatchedGradients(int start, int size) {
+        RenderSystem.enableBlend();
+        RenderSystem.setShader(GameRenderer::getPositionColorShader);
+        BufferBuilder bb = Tesselator.getInstance().begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
+
+        int i = start;
+        while (i < size && tickCache.get(i) instanceof FillGradientAction g) {
+            Matrix4f m = g.matrix;
+            bb.addVertex(m, g.x2, g.y1, g.z).setColor(g.colorFrom);
+            bb.addVertex(m, g.x1, g.y1, g.z).setColor(g.colorFrom);
+            bb.addVertex(m, g.x1, g.y2, g.z).setColor(g.colorTo);
+            bb.addVertex(m, g.x2, g.y2, g.z).setColor(g.colorTo);
+            i++;
+        }
+
+        BufferUploader.drawWithShader(bb.buildOrThrow());
+        return i;
+    }
+
+    /**
+     * Batch consecutive BlitActions with the same texture into a single draw call.
+     */
+    private int flushBatchedBlits(int start, int size) {
+        BlitAction first = (BlitAction) tickCache.get(start);
+        ResourceLocation tex = first.texture;
+
+        RenderSystem.setShaderTexture(0, tex);
+        RenderSystem.setShader(GameRenderer::getPositionTexColorShader);
+        RenderSystem.enableBlend();
+        BufferBuilder bb = Tesselator.getInstance().begin(VertexFormat.Mode.QUADS,
+                DefaultVertexFormat.POSITION_TEX_COLOR);
+
+        int i = start;
+        while (i < size && tickCache.get(i) instanceof BlitAction b && b.texture.equals(tex)) {
+            Matrix4f m = b.matrix;
+            bb.addVertex(m, b.x1, b.y2, b.z).setUv(b.u0, b.v1).setColor(b.r, b.g, b.b, b.a);
+            bb.addVertex(m, b.x2, b.y2, b.z).setUv(b.u1, b.v1).setColor(b.r, b.g, b.b, b.a);
+            bb.addVertex(m, b.x2, b.y1, b.z).setUv(b.u1, b.v0).setColor(b.r, b.g, b.b, b.a);
+            bb.addVertex(m, b.x1, b.y1, b.z).setUv(b.u0, b.v0).setColor(b.r, b.g, b.b, b.a);
+            i++;
+        }
+
+        BufferUploader.drawWithShader(bb.buildOrThrow());
+        return i;
+    }
+
+    /**
+     * Renders consecutive TextActions through the vanilla {@link Font} pipeline
+     * into a per-render-type batching buffer. Only the vertex sink differs from
+     * vanilla — the string decomposition, glyph lookup and quad emission are
+     * byte-for-byte identical to a direct {@code drawInBatch} call.
+     */
+    private int flushBatchedText(int start, int size, Font font, TextBatchingBuffer sink) {
+        int i = start;
+        while (i < size && tickCache.get(i) instanceof TextAction t) {
+            if (t.seq != null) {
+                font.drawInBatch(t.seq, t.x, t.y, t.color, t.shadow,
+                        t.matrix, sink, Font.DisplayMode.NORMAL, 0,
+                        LightTexture.FULL_BRIGHT);
+            } else if (t.text != null) {
+                font.drawInBatch(t.text, t.x, t.y, t.color, t.shadow,
+                        t.matrix, sink, Font.DisplayMode.NORMAL, 0,
+                        LightTexture.FULL_BRIGHT);
+            }
+            i++;
+        }
+        return i;
+    }
+
+    // ── Enqueue API (called by FakeGuiGraphics) ────────────────────────────────
+
+    public void enqueue(GuiGraphics graphics, Component text,
+            float x, float y, int color, boolean shadow) {
+        if (!inFrame) {
+            graphics.drawString(Minecraft.getInstance().font, text, (int) x, (int) y, color, shadow);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new TextAction(null, text, x, y, color, shadow,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueSeq(GuiGraphics graphics, FormattedCharSequence seq,
+            float x, float y, int color, boolean shadow) {
+        if (!inFrame) {
+            graphics.drawString(Minecraft.getInstance().font, seq, (int) x, (int) y, color, shadow);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new TextAction(seq, null, x, y, color, shadow,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueBlit(GuiGraphics graphics, ResourceLocation texture,
+            int x1, int x2, int y1, int y2, int z,
+            float u0, float u1, float v0, float v1,
+            float r, float g, float b, float a) {
+        if (!inFrame) {
+            graphics.innerBlit(texture, x1, x2, y1, y2, z, u0, u1, v0, v1, r, g, b, a);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new BlitAction(texture,
+                x1, x2, y1, y2, z,
+                u0, u1, v0, v1,
+                r, g, b, a,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueFill(GuiGraphics graphics, int x1, int y1, int x2, int y2, int z, int color) {
+        if (!inFrame) {
+            graphics.fill(x1, y1, x2, y2, z, color);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new FillAction(x1, y1, x2, y2, z, color,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueFillWithRenderType(GuiGraphics graphics, RenderType rt, int x1, int y1, int x2, int y2, int z,
+            int color) {
+        if (!inFrame) {
+            graphics.fill(rt, x1, y1, x2, y2, z, color);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new FillRenderTypeAction(rt, x1, y1, x2, y2, z, color,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueFillGradient(GuiGraphics graphics, int x1, int y1, int x2, int y2, int z, int colorFrom,
+            int colorTo) {
+        if (!inFrame) {
+            graphics.fillGradient(x1, y1, x2, y2, z, colorFrom, colorTo);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new FillGradientAction(x1, y1, x2, y2, z, colorFrom, colorTo,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueFillGradientWithRenderType(GuiGraphics graphics, RenderType rt, int x1, int y1, int x2, int y2,
+            int colorFrom, int colorTo, int z) {
+        if (!inFrame) {
+            graphics.fillGradient(rt, x1, y1, x2, y2, colorFrom, colorTo, z);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new FillGradientRenderTypeAction(rt, x1, y1, x2, y2, colorFrom, colorTo, z,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueHLine(GuiGraphics graphics, int x1, int x2, int y, int color) {
+        if (!inFrame) {
+            graphics.hLine(x1, x2, y, color);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new HLineAction(null, x1, x2, y, color,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueHLineWithRenderType(GuiGraphics graphics, RenderType rt, int x1, int x2, int y, int color) {
+        if (!inFrame) {
+            graphics.hLine(rt, x1, x2, y, color);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new HLineAction(rt, x1, x2, y, color,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueVLine(GuiGraphics graphics, int x, int y1, int y2, int color) {
+        if (!inFrame) {
+            graphics.vLine(x, y1, y2, color);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new VLineAction(null, x, y1, y2, color,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueVLineWithRenderType(GuiGraphics graphics, RenderType rt, int x, int y1, int y2, int color) {
+        if (!inFrame) {
+            graphics.vLine(rt, x, y1, y2, color);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new VLineAction(rt, x, y1, y2, color,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueRenderOutline(GuiGraphics graphics, int x, int y, int w, int h, int color) {
+        if (!inFrame) {
+            graphics.renderOutline(x, y, w, h, color);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new RenderOutlineAction(x, y, w, h, color,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueFillRenderType(GuiGraphics graphics, RenderType rt, int x1, int y1, int x2, int y2, int z) {
+        if (!inFrame) {
+            graphics.fillRenderType(rt, x1, y1, x2, y2, z);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new FillRenderTypeOnlyAction(rt, x1, y1, x2, y2, z,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    // ── Scissor operations ─────────────────────────────────────────────────────
+
+    public void enqueueEnableScissor(GuiGraphics graphics, int x1, int y1, int x2, int y2) {
+        if (!inFrame) {
+            graphics.enableScissor(x1, y1, x2, y2);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new EnableScissorAction(x1, y1, x2, y2,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueDisableScissor(GuiGraphics graphics) {
+        if (!inFrame) {
+            graphics.disableScissor();
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new DisableScissorAction());
+    }
+
+    // ── Blit / Sprite operations ───────────────────────────────────────────────
+
+    public void enqueueBlitSprite(GuiGraphics graphics, ResourceLocation loc, int x, int y, int w, int h) {
+        if (!inFrame) {
+            graphics.blitSprite(loc, x, y, w, h);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(
+                new BlitSpriteAction(loc, x, y, 0, w, h, -1, -1, -1, -1, new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueBlitSpriteZ(GuiGraphics graphics, ResourceLocation loc, int x, int y, int z, int w, int h) {
+        if (!inFrame) {
+            graphics.blitSprite(loc, x, y, z, w, h);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(
+                new BlitSpriteAction(loc, x, y, z, w, h, -1, -1, -1, -1, new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueBlitSpriteRegion(GuiGraphics graphics, ResourceLocation loc, int tw, int th, int u, int v, int x,
+            int y, int w, int h) {
+        if (!inFrame) {
+            graphics.blitSprite(loc, tw, th, u, v, x, y, w, h);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(
+                new BlitSpriteAction(loc, x, y, 0, w, h, tw, th, u, v, new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueBlitSpriteRegionZ(GuiGraphics graphics, ResourceLocation loc, int tw, int th, int u, int v,
+            int x, int y, int z, int w, int h) {
+        if (!inFrame) {
+            graphics.blitSprite(loc, tw, th, u, v, x, y, z, w, h);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(
+                new BlitSpriteAction(loc, x, y, z, w, h, tw, th, u, v, new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueBlitTexAtlas(GuiGraphics graphics, int x, int y, int z, int w, int h,
+            TextureAtlasSprite sprite) {
+        if (!inFrame) {
+            graphics.blit(x, y, z, w, h, sprite);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new BlitTexAtlasAction(x, y, z, w, h, sprite, 1f, 1f, 1f, 1f,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueBlitTexAtlasColor(GuiGraphics graphics, int x, int y, int z, int w, int h,
+            TextureAtlasSprite sprite, float r, float g, float b, float a) {
+        if (!inFrame) {
+            graphics.blit(x, y, z, w, h, sprite, r, g, b, a);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new BlitTexAtlasAction(x, y, z, w, h, sprite, r, g, b, a,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueBlitResource(GuiGraphics graphics, ResourceLocation loc, int x, int y, int z, float u, float v,
+            int w, int h, int tw, int th) {
+        if (!inFrame) {
+            graphics.blit(loc, x, y, z, u, v, w, h, tw, th);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new BlitResourceAction(loc, x, y, z, u, v, w, h, w, h, tw, th,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueBlitResourceRegion(GuiGraphics graphics, ResourceLocation loc, int x, int y, int w, int h,
+            float u, float v, int rw, int rh, int tw, int th) {
+        if (!inFrame) {
+            graphics.blit(loc, x, y, w, h, u, v, rw, rh, tw, th);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new BlitResourceAction(loc, x, y, 0, u, v, w, h, rw, rh, tw, th,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueBlitResourceSimple(GuiGraphics graphics, ResourceLocation loc, int x, int y, float u, float v,
+            int w, int h, int tw, int th) {
+        if (!inFrame) {
+            graphics.blit(loc, x, y, u, v, w, h, tw, th);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new BlitResourceAction(loc, x, y, 0, u, v, w, h, w, h, tw, th,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    // ── Item rendering operations ──────────────────────────────────────────────
+
+    public void enqueueRenderItem(GuiGraphics graphics, ItemStack stack, int x, int y) {
+        if (!inFrame) {
+            graphics.renderItem(stack, x, y);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new RenderItemAction(stack.copy(), x, y, 0, 0, null,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueRenderItemSeed(GuiGraphics graphics, ItemStack stack, int x, int y, int seed) {
+        if (!inFrame) {
+            graphics.renderItem(stack, x, y, seed);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new RenderItemAction(stack.copy(), x, y, seed, 0, null,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueRenderItemSeedZ(GuiGraphics graphics, ItemStack stack, int x, int y, int seed, int z) {
+        if (!inFrame) {
+            graphics.renderItem(stack, x, y, seed, z);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new RenderItemAction(stack.copy(), x, y, seed, z, null,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueRenderItemEntity(GuiGraphics graphics, LivingEntity entity, ItemStack stack, int x, int y,
+            int seed) {
+        // Item rendering with entity context cannot be easily cached due to entity
+        // state
+        // Fall back to direct rendering
+        hasDrawCallsThisFrame = true;
+        graphics.renderItem(entity, stack, x, y, seed);
+    }
+
+    public void enqueueRenderFakeItem(GuiGraphics graphics, ItemStack stack, int x, int y) {
+        if (!inFrame) {
+            graphics.renderFakeItem(stack, x, y);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new RenderFakeItemAction(stack.copy(), x, y, 0,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueRenderFakeItemSeed(GuiGraphics graphics, ItemStack stack, int x, int y, int seed) {
+        if (!inFrame) {
+            graphics.renderFakeItem(stack, x, y, seed);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new RenderFakeItemAction(stack.copy(), x, y, seed,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueRenderItemDecorations(GuiGraphics graphics, Font font, ItemStack stack, int x, int y,
+            @Nullable String label) {
+        if (!inFrame) {
+            graphics.renderItemDecorations(font, stack, x, y, label);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new RenderItemDecorationsAction(stack.copy(), x, y, label,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    // ── Tooltip rendering operations ───────────────────────────────────────────
+
+    public void enqueueRenderTooltipItem(GuiGraphics graphics, Font font, ItemStack stack, int x, int y) {
+        if (!inFrame) {
+            graphics.renderTooltip(font, stack, x, y);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new RenderTooltipItemAction(stack.copy(), x, y,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueRenderTooltipLines(GuiGraphics graphics, Font font, List<Component> lines,
+            Optional<TooltipComponent> image, int x, int y) {
+        if (!inFrame) {
+            graphics.renderTooltip(font, lines, image, x, y);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new RenderTooltipLinesAction(new ArrayList<>(lines), image, x, y,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueRenderTooltipComponent(GuiGraphics graphics, Font font, Component component, int x, int y) {
+        if (!inFrame) {
+            graphics.renderTooltip(font, component, x, y);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new RenderTooltipComponentAction(component, x, y,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueRenderComponentTooltip(GuiGraphics graphics, Font font, List<Component> lines, int x, int y) {
+        if (!inFrame) {
+            graphics.renderComponentTooltip(font, lines, x, y);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new RenderComponentTooltipAction(new ArrayList<>(lines), x, y,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueRenderTooltipSeq(GuiGraphics graphics, Font font, List<? extends FormattedCharSequence> lines,
+            int x, int y) {
+        if (!inFrame) {
+            graphics.renderTooltip(font, lines, x, y);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new RenderTooltipSeqAction(new ArrayList<>(lines), x, y,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueRenderComponentHoverEffect(GuiGraphics graphics, Font font, @Nullable Style style, int x,
+            int y) {
+        if (!inFrame) {
+            graphics.renderComponentHoverEffect(font, style, x, y);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new RenderComponentHoverEffectAction(style, x, y,
+                new Matrix4f(graphics.pose().last().pose())));
+    }
+
+    public void enqueueSetColor(GuiGraphics graphics, float r, float g, float b, float a) {
+        if (!inFrame) {
+            graphics.setColor(r, g, b, a);
+            return;
+        }
+        hasDrawCallsThisFrame = true;
+        pending.add(new SetColorAction(r, g, b, a));
+    }
+
+    @SuppressWarnings("deprecation")
+    public void enqueueDrawManaged(GuiGraphics graphics, Runnable runnable) {
+        // Managed drawing cannot be cached as it may contain arbitrary state changes
+        // Execute directly
+        hasDrawCallsThisFrame = true;
+        graphics.drawManaged(runnable);
+    }
+
+    // ── RenderAction interface ─────────────────────────────────────────────────
+
+    private interface RenderAction {
+        void execute(GuiGraphics graphics, Font font, MultiBufferSource.BufferSource bufferSource);
+    }
+
+    /** Applies the captured pose matrix to a draw call executed at flush time. */
+    private static void withMatrix(GuiGraphics graphics, Matrix4f matrix, Runnable draw) {
+        graphics.pose().pushPose();
+        graphics.pose().mulPose(matrix);
+        draw.run();
+        graphics.pose().popPose();
+    }
+
+    // ── Text rendering action ──────────────────────────────────────────────────
+
+    private static final class TextAction implements RenderAction {
+        final @Nullable FormattedCharSequence seq;
+        final @Nullable Component text;
+        final float x, y;
+        final int color;
+        final boolean shadow;
+        final Matrix4f matrix;
+
+        TextAction(@Nullable FormattedCharSequence seq, @Nullable Component text,
+                float x, float y, int color, boolean shadow, Matrix4f matrix) {
+            this.seq = seq;
+            this.text = text;
+            this.x = x;
+            this.y = y;
+            this.color = color;
+            this.shadow = shadow;
+            this.matrix = matrix;
+        }
+
+        @Override
+        public void execute(GuiGraphics graphics, Font font, MultiBufferSource.BufferSource bufferSource) {
+            // Handled by flushBatchedText
+        }
+    }
+
+    // ── Fill action ────────────────────────────────────────────────────────────
+
+    private static final class FillAction implements RenderAction {
+        final int x1, y1, x2, y2, z, color;
+        final Matrix4f matrix;
+
+        FillAction(int x1, int y1, int x2, int y2, int z, int color, Matrix4f matrix) {
+            this.x1 = x1;
+            this.y1 = y1;
+            this.x2 = x2;
+            this.y2 = y2;
+            this.z = z;
+            this.color = color;
+            this.matrix = matrix;
+        }
+
+        @Override
+        public void execute(GuiGraphics graphics, Font font, MultiBufferSource.BufferSource bufferSource) {
+            // Handled by flushBatchedFills
+        }
+    }
+
+    private record FillRenderTypeAction(
+            RenderType rt, int x1, int y1, int x2, int y2, int z, int color, Matrix4f matrix)
+            implements RenderAction {
+        @Override
+        public void execute(GuiGraphics graphics, Font font, MultiBufferSource.BufferSource bufferSource) {
+            withMatrix(graphics, matrix, () -> graphics.fill(rt, x1, y1, x2, y2, z, color));
+        }
+    }
+
+    private record FillRenderTypeOnlyAction(
+            RenderType rt, int x1, int y1, int x2, int y2, int z, Matrix4f matrix) implements RenderAction {
+        @Override
+        public void execute(GuiGraphics graphics, Font font, MultiBufferSource.BufferSource bufferSource) {
+            withMatrix(graphics, matrix, () -> graphics.fillRenderType(rt, x1, y1, x2, y2, z));
+        }
+    }
+
+    // ── Fill gradient action ───────────────────────────────────────────────────
+
+    private static final class FillGradientAction implements RenderAction {
+        final int x1, y1, x2, y2, z, colorFrom, colorTo;
+        final Matrix4f matrix;
+
+        FillGradientAction(int x1, int y1, int x2, int y2, int z, int colorFrom, int colorTo, Matrix4f matrix) {
+            this.x1 = x1;
+            this.y1 = y1;
+            this.x2 = x2;
+            this.y2 = y2;
+            this.z = z;
+            this.colorFrom = colorFrom;
+            this.colorTo = colorTo;
+            this.matrix = matrix;
+        }
+
+        @Override
+        public void execute(GuiGraphics graphics, Font font, MultiBufferSource.BufferSource bufferSource) {
+            // Handled by flushBatchedGradients
+        }
+    }
+
+    private record FillGradientRenderTypeAction(
+            RenderType rt, int x1, int y1, int x2, int y2, int colorFrom, int colorTo, int z, Matrix4f matrix)
+            implements RenderAction {
+        @Override
+        public void execute(GuiGraphics graphics, Font font, MultiBufferSource.BufferSource bufferSource) {
+            withMatrix(graphics, matrix,
+                    () -> graphics.fillGradient(rt, x1, y1, x2, y2, colorFrom, colorTo, z));
+        }
+    }
+
+    // ── Line actions ───────────────────────────────────────────────────────────
+
+    private record HLineAction(
+            @Nullable RenderType rt, int x1, int x2, int y, int color, Matrix4f matrix) implements RenderAction {
+        @Override
+        public void execute(GuiGraphics graphics, Font font, MultiBufferSource.BufferSource bufferSource) {
+            withMatrix(graphics, matrix, () -> {
+                if (rt != null) {
+                    graphics.hLine(rt, x1, x2, y, color);
+                } else {
+                    graphics.hLine(x1, x2, y, color);
+                }
+            });
+        }
+    }
+
+    private record VLineAction(
+            @Nullable RenderType rt, int x, int y1, int y2, int color, Matrix4f matrix) implements RenderAction {
+        @Override
+        public void execute(GuiGraphics graphics, Font font, MultiBufferSource.BufferSource bufferSource) {
+            withMatrix(graphics, matrix, () -> {
+                if (rt != null) {
+                    graphics.vLine(rt, x, y1, y2, color);
+                } else {
+                    graphics.vLine(x, y1, y2, color);
+                }
+            });
+        }
+    }
+
+    private record RenderOutlineAction(
+            int x, int y, int w, int h, int color, Matrix4f matrix) implements RenderAction {
+        @Override
+        public void execute(GuiGraphics graphics, Font font, MultiBufferSource.BufferSource bufferSource) {
+            withMatrix(graphics, matrix, () -> graphics.renderOutline(x, y, w, h, color));
+        }
+    }
+
+    // ── Blit action ────────────────────────────────────────────────────────────
+
+    private static final class BlitAction implements RenderAction {
+        final ResourceLocation texture;
+        final int x1, x2, y1, y2, z;
+        final float u0, u1, v0, v1;
+        final float r, g, b, a;
+        final Matrix4f matrix;
+
+        BlitAction(ResourceLocation texture, int x1, int x2, int y1, int y2, int z,
+                float u0, float u1, float v0, float v1,
+                float r, float g, float b, float a, Matrix4f matrix) {
+            this.texture = texture;
+            this.x1 = x1;
+            this.x2 = x2;
+            this.y1 = y1;
+            this.y2 = y2;
+            this.z = z;
+            this.u0 = u0;
+            this.u1 = u1;
+            this.v0 = v0;
+            this.v1 = v1;
+            this.r = r;
+            this.g = g;
+            this.b = b;
+            this.a = a;
+            this.matrix = matrix;
+        }
+
+        @Override
+        public void execute(GuiGraphics graphics, Font font, MultiBufferSource.BufferSource bufferSource) {
+            // Handled by flushBatchedBlits
+        }
+    }
+
+    // ── BlitSprite action ──────────────────────────────────────────────────────
+
+    private record BlitSpriteAction(
+            ResourceLocation loc, int x, int y, int z, int w, int h,
+            int tw, int th, int u, int v, Matrix4f matrix) implements RenderAction {
+
+        @Override
+        public void execute(GuiGraphics graphics, Font font, MultiBufferSource.BufferSource bufferSource) {
+            graphics.pose().pushPose();
+            graphics.pose().mulPose(matrix());
+            if (tw < 0) {
+                if (z != 0) {
+                    graphics.blitSprite(loc, x, y, z, w, h);
+                } else {
+                    graphics.blitSprite(loc, x, y, w, h);
+                }
+            } else {
+                if (z != 0) {
+                    graphics.blitSprite(loc, tw, th, u, v, x, y, z, w, h);
+                } else {
+                    graphics.blitSprite(loc, tw, th, u, v, x, y, w, h);
+                }
+            }
+            graphics.pose().popPose();
+        }
+    }
+
+    // ── BlitTexAtlas action ────────────────────────────────────────────────────
+
+    private record BlitTexAtlasAction(
+            int x, int y, int z, int w, int h, TextureAtlasSprite sprite,
+            float r, float g, float b, float a, Matrix4f matrix) implements RenderAction {
+        @Override
+        public void execute(GuiGraphics graphics, Font font, MultiBufferSource.BufferSource bufferSource) {
+            withMatrix(graphics, matrix, () -> {
+                if (r == 1f && g == 1f && b == 1f && a == 1f) {
+                    graphics.blit(x, y, z, w, h, sprite);
+                } else {
+                    graphics.blit(x, y, z, w, h, sprite, r, g, b, a);
+                }
+            });
+        }
+    }
+
+    // ── BlitResource action ────────────────────────────────────────────────────
+
+    private record BlitResourceAction(
+            ResourceLocation loc, int x, int y, int z, float u, float v,
+            int w, int h, int rw, int rh, int tw, int th, Matrix4f matrix) implements RenderAction {
+        @Override
+        public void execute(GuiGraphics graphics, Font font, MultiBufferSource.BufferSource bufferSource) {
+            withMatrix(graphics, matrix, () -> {
+                if (z != 0) {
+                    graphics.blit(loc, x, y, z, u, v, w, h, tw, th);
+                } else if (w != rw || h != rh) {
+                    graphics.blit(loc, x, y, w, h, u, v, rw, rh, tw, th);
+                } else {
+                    graphics.blit(loc, x, y, u, v, w, h, tw, th);
+                }
+            });
+        }
+    }
+
+    // ── Scissor actions ────────────────────────────────────────────────────────
+
+    private record EnableScissorAction(int x1, int y1, int x2, int y2, Matrix4f matrix) implements RenderAction {
+        @Override
+        public void execute(GuiGraphics graphics, Font font, MultiBufferSource.BufferSource bufferSource) {
+            // Scissor rect is expressed in the pose space captured at enqueue time;
+            // transform its corners to screen space so it lines up with the cached draws.
+            Vector4f p = new Vector4f();
+            matrix.transform(p.set(x1, y1, 0, 1));
+            float minX = p.x, minY = p.y, maxX = p.x, maxY = p.y;
+            matrix.transform(p.set(x2, y1, 0, 1));
+            minX = Math.min(minX, p.x);
+            minY = Math.min(minY, p.y);
+            maxX = Math.max(maxX, p.x);
+            maxY = Math.max(maxY, p.y);
+            matrix.transform(p.set(x1, y2, 0, 1));
+            minX = Math.min(minX, p.x);
+            minY = Math.min(minY, p.y);
+            maxX = Math.max(maxX, p.x);
+            maxY = Math.max(maxY, p.y);
+            matrix.transform(p.set(x2, y2, 0, 1));
+            minX = Math.min(minX, p.x);
+            minY = Math.min(minY, p.y);
+            maxX = Math.max(maxX, p.x);
+            maxY = Math.max(maxY, p.y);
+            graphics.enableScissor(Math.round(minX), Math.round(minY), Math.round(maxX), Math.round(maxY));
+        }
+    }
+
+    private record DisableScissorAction() implements RenderAction {
+        @Override
+        public void execute(GuiGraphics graphics, Font font, MultiBufferSource.BufferSource bufferSource) {
+            graphics.disableScissor();
+        }
+    }
+
+    // ── Item rendering actions ─────────────────────────────────────────────────
+
+    private record RenderItemAction(
+            ItemStack stack, int x, int y, int seed, int z,
+            @Nullable LivingEntity entity, Matrix4f matrix) implements RenderAction {
+        @Override
+        public void execute(GuiGraphics graphics, Font font, MultiBufferSource.BufferSource bufferSource) {
+            withMatrix(graphics, matrix, () -> {
+                if (z != 0) {
+                    graphics.renderItem(stack, x, y, seed, z);
+                } else if (seed != 0) {
+                    graphics.renderItem(stack, x, y, seed);
+                } else {
+                    graphics.renderItem(stack, x, y);
+                }
+            });
+        }
+    }
+
+    private record RenderFakeItemAction(
+            ItemStack stack, int x, int y, int seed, Matrix4f matrix) implements RenderAction {
+        @Override
+        public void execute(GuiGraphics graphics, Font font, MultiBufferSource.BufferSource bufferSource) {
+            withMatrix(graphics, matrix, () -> {
+                if (seed != 0) {
+                    graphics.renderFakeItem(stack, x, y, seed);
+                } else {
+                    graphics.renderFakeItem(stack, x, y);
+                }
+            });
+        }
+    }
+
+    private record RenderItemDecorationsAction(
+            ItemStack stack, int x, int y, @Nullable String label, Matrix4f matrix) implements RenderAction {
+        @Override
+        public void execute(GuiGraphics graphics, Font font, MultiBufferSource.BufferSource bufferSource) {
+            withMatrix(graphics, matrix, () -> {
+                if (label != null) {
+                    graphics.renderItemDecorations(font, stack, x, y, label);
+                } else {
+                    graphics.renderItemDecorations(font, stack, x, y);
+                }
+            });
+        }
+    }
+
+    // ── Tooltip rendering actions ──────────────────────────────────────────────
+
+    private record RenderTooltipItemAction(ItemStack stack, int x, int y, Matrix4f matrix) implements RenderAction {
+        @Override
+        public void execute(GuiGraphics graphics, Font font, MultiBufferSource.BufferSource bufferSource) {
+            withMatrix(graphics, matrix, () -> graphics.renderTooltip(font, stack, x, y));
+        }
+    }
+
+    private record RenderTooltipLinesAction(
+            List<Component> lines, Optional<TooltipComponent> image, int x, int y, Matrix4f matrix)
+            implements RenderAction {
+        @Override
+        public void execute(GuiGraphics graphics, Font font, MultiBufferSource.BufferSource bufferSource) {
+            withMatrix(graphics, matrix, () -> graphics.renderTooltip(font, lines, image, x, y));
+        }
+    }
+
+    private record RenderTooltipComponentAction(Component component, int x, int y, Matrix4f matrix)
+            implements RenderAction {
+        @Override
+        public void execute(GuiGraphics graphics, Font font, MultiBufferSource.BufferSource bufferSource) {
+            withMatrix(graphics, matrix, () -> graphics.renderTooltip(font, component, x, y));
+        }
+    }
+
+    private record RenderComponentTooltipAction(List<Component> lines, int x, int y, Matrix4f matrix)
+            implements RenderAction {
+        @Override
+        public void execute(GuiGraphics graphics, Font font, MultiBufferSource.BufferSource bufferSource) {
+            withMatrix(graphics, matrix, () -> graphics.renderComponentTooltip(font, lines, x, y));
+        }
+    }
+
+    private record RenderTooltipSeqAction(List<FormattedCharSequence> lines, int x, int y, Matrix4f matrix)
+            implements RenderAction {
+        @Override
+        public void execute(GuiGraphics graphics, Font font, MultiBufferSource.BufferSource bufferSource) {
+            withMatrix(graphics, matrix, () -> graphics.renderTooltip(font, lines, x, y));
+        }
+    }
+
+    private record RenderComponentHoverEffectAction(@Nullable Style style, int x, int y, Matrix4f matrix)
+            implements RenderAction {
+        @Override
+        public void execute(GuiGraphics graphics, Font font, MultiBufferSource.BufferSource bufferSource) {
+            withMatrix(graphics, matrix, () -> graphics.renderComponentHoverEffect(font, style, x, y));
+        }
+    }
+
+    // ── Set color action ───────────────────────────────────────────────────────
+
+    private record SetColorAction(float r, float g, float b, float a) implements RenderAction {
+        @Override
+        public void execute(GuiGraphics graphics, Font font, MultiBufferSource.BufferSource bufferSource) {
+            graphics.setColor(r, g, b, a);
+        }
+    }
+}

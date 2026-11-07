@@ -1,0 +1,256 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.client.commands;
+
+import io.wifi.ConfigCompact.ui.SettingMenuScreen;
+import io.wifi.ConfigCompact.ui.TestScreen;
+import io.wifi.rhythm.client.RhythmMapManager;
+import io.wifi.rhythm.client.screen.RhythmGameListScreen;
+import io.wifi.rhythm.client.screen.RhythmGameScreen;
+import io.wifi.starrailexpress.cca.AreasWorldComponent;
+import io.wifi.starrailexpress.client.gui.screen.NewspaperScreen;
+import io.wifi.starrailexpress.client.util.ClientScheduler;
+import io.wifi.starrailexpress.scenery.client.SceneAssetClient;
+import io.wifi.utils.client.betterrender.FakeGuiGraphics;
+import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
+import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
+import net.minecraft.ChatFormatting;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
+
+import org.agmas.noellesroles.client.screen.GameManagementScreen;
+import org.agmas.noellesroles.client.screen.RoleIntroduceScreen;
+
+import com.google.gson.GsonBuilder;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.arguments.StringArgumentType;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Random;
+
+public class SREClientCommand {
+  public static void register() {
+    ClientCommandRegistrationCallback.EVENT.register(
+        (dispatcher, registryAccess) -> {
+          dispatcher.register(ClientCommandManager.literal("sre:echo_bag").executes(ctx -> {
+            var data=org.agmas.noellesroles.game.modes.echo.client.EchoBagClient.data();
+            if(data==null || data.matchId()==null) { ctx.getSource().sendError(Component.translatable("echo.error.no_active_session")); return 0; }
+            var client=ctx.getSource().getClient();
+            client.setScreen(new io.wifi.starrailexpress.client.gui.screen.ingame.LimitedInventoryScreen(client.player));
+            return 1;
+          }));
+          dispatcher.register(ClientCommandManager.literal("sre:echo_spec").executes(ctx -> {
+            var client=ctx.getSource().getClient();
+            if(!org.agmas.noellesroles.game.modes.echo.client.EchoSpecializationClient.openFromCommand(client)) {
+              ctx.getSource().sendError(Component.translatable("echo.error.too_late")); return 0;
+            }
+            return 1;
+          }));
+          dispatcher.register(ClientCommandManager.literal("sre:client")
+              .then(
+                  ClientCommandManager.literal("resource")
+                      .then(ClientCommandManager.literal("reload")
+                          .executes((ctx) -> {
+                            ctx.getSource().getClient().reloadResourcePacks();
+                            return 1;
+                          })))
+              .then(
+                  ClientCommandManager.literal("chat")
+                      .then(ClientCommandManager.literal("clear")
+                          .executes((ctx) -> {
+                            ctx.getSource().getClient().gui.getChat().clearMessages(false);
+                            return 1;
+                          })))
+              .then(SceneAssetClient.sceneSubcommand())
+              .then(
+                  ClientCommandManager.literal("customblock")
+                      .executes((ctx) -> {
+                        // 打开自定义方块管理界面（与方块工具物品右键等价）
+                        ctx.getSource().getClient().setScreen(
+                            new io.wifi.starrailexpress.customblock.CustomBlockManageScreen(
+                                () -> new io.wifi.starrailexpress.customblock.CustomBlockScreen()));
+                        return 1;
+                      }))
+              .then(ClientCommandManager.literal("debug")
+                  .then(ClientCommandManager.literal("rhythm_game")
+                      .executes((ctx) -> {
+                        ClientScheduler.schedule(() -> {
+                          ctx.getSource().getClient().setScreen(new RhythmGameListScreen(null));
+                        }, 1);
+                        return 1;
+                      })
+                      .then(ClientCommandManager.literal("random")
+                          .executes((ctx) -> {
+                            var mapDatas = new ArrayList<>(RhythmMapManager.MAP_NAMES.keySet());
+                            if (mapDatas.isEmpty()) {
+                              ctx.getSource().sendError(Component.literal("No available maps foun!"));
+                              return 0;
+                            }
+                            final var mapKey = mapDatas.get(new Random().nextInt(0, mapDatas.size()));
+                            final var mapData = RhythmMapManager.MAP_NAMES.get(mapKey);
+                            if (mapData == null) {
+                              ctx.getSource().sendError(Component.literal("Not a vaild src!"));
+                              return 0;
+                            }
+                            ClientScheduler.schedule(() -> {
+                              RhythmGameScreen.open(mapData);
+                            }, 1);
+                            ctx.getSource().sendFeedback(Component.literal("Successfully!"));
+                            return 1;
+                          }))
+                      .then(ClientCommandManager.argument("src", StringArgumentType.greedyString()).suggests((c, b) -> {
+                        for (final var t : RhythmMapManager.MAP_NAMES.keySet()) {
+                          b.suggest(t.toString());
+                        }
+                        return b.buildFuture();
+                      })
+                          .executes((ctx) -> {
+                            String str = StringArgumentType.getString(ctx, "src");
+                            var t = ResourceLocation.tryParse(str);
+                            if (t == null) {
+                              ctx.getSource().sendError(Component.literal("Not a vaild src!"));
+                              return 0;
+                            }
+                            var mapData = RhythmMapManager.MAP_NAMES.get(t);
+
+                            if (mapData == null) {
+                              ctx.getSource().sendError(Component.literal("Not a vaild src!"));
+                              return 0;
+                            }
+                            ClientScheduler.schedule(() -> {
+                              RhythmGameScreen.open(mapData);
+                            }, 1);
+                            ctx.getSource().sendFeedback(Component.literal("Successfully!"));
+                            return 1;
+                          })))
+                  .then(ClientCommandManager.literal("track_pose")
+                      .requires(ctx -> ctx.hasPermission(2))
+                      .then(ClientCommandManager.argument("count", IntegerArgumentType.integer(0, 1024))
+                          .executes((ctx) -> {
+                            int count = IntegerArgumentType.getInteger(ctx, "count");
+                            FakeGuiGraphics.trackCount = count;
+                            return 0;
+                          })))
+                  .then(ClientCommandManager.literal("client_area_config")
+                      .requires(ctx -> ctx.hasPermission(2))
+                      .executes((ctx) -> {
+                        var key = AreasWorldComponent.KEY.get(ctx.getSource().getWorld());
+                        final var GSON = new GsonBuilder().setPrettyPrinting().create();
+
+                        ctx.getSource()
+                            .sendFeedback(Component
+                                .translatable("Map ID: %s\nMap Display Name Key: %s", key.mapName, key.mapDisplayName)
+                                .withStyle(ChatFormatting.GREEN));
+                        String result = GSON.toJson(key.areasSettings);
+                        ctx.getSource()
+                            .sendFeedback(Component.literal(result)
+                                .withStyle(ChatFormatting.GREEN));
+                        return 1;
+                      })))
+              .then(ClientCommandManager.literal("screen")
+                  .then(ClientCommandManager.literal("role_introduction")
+                      .executes(context -> openRoleIntroduction(context, ""))
+                      .then(ClientCommandManager.argument("role", StringArgumentType.word())
+                          .executes(context -> openRoleIntroduction(context,
+                              StringArgumentType.getString(context, "role")))))
+                  .then(ClientCommandManager.literal("GameManagePanel")
+                      .executes(context -> {
+                        if (context.getSource().getPlayer().hasPermissions(2)) {
+                          ClientScheduler.schedule(() -> {
+                            context.getSource().getClient()
+                                .setScreen(new GameManagementScreen());
+                          }, 1);
+                        } else {
+                          context.getSource()
+                              .sendError(
+                                  Component.literal(
+                                      "You do not have permission to do that!")
+                                      .withStyle(ChatFormatting.RED));
+                        }
+                        return 1;
+                      }))
+                  .then(ClientCommandManager.literal("settings")
+                      .executes(context -> {
+                        ClientScheduler.schedule(() -> {
+                          context.getSource().getClient()
+                              .setScreen(new SettingMenuScreen(null));
+                        }, 1);
+                        return 1;
+                      }))
+                  .then(ClientCommandManager.literal("AreaMap")
+                      .executes(context -> {
+                        ClientScheduler.schedule(() -> {
+                          context.getSource().getClient()
+                              .setScreen(new org.agmas.noellesroles.client.screen.AreaMapScreen());
+                        }, 1);
+                        return 1;
+                      }))
+                  .then(ClientCommandManager.literal("speaker")
+                      .executes(context -> {
+                        ClientScheduler.schedule(() -> {
+                          context.getSource().getClient()
+                              .setScreen(new org.agmas.noellesroles.client.screen.SpeakerScreen());
+                        }, 1);
+                        return 1;
+                      }))
+                  .then(ClientCommandManager.literal("test")
+                      .executes(context -> {
+                        ClientScheduler.schedule(() -> {
+                          context.getSource().getClient()
+                              .setScreen(new TestScreen(null));
+                        }, 1);
+                        return 1;
+                      }))
+
+                  .then(ClientCommandManager.literal("newspaper_test")
+                      .then(ClientCommandManager.literal("editing").executes(context -> {
+                        ClientScheduler.schedule(() -> {
+                          context.getSource().getClient()
+                              .setScreen(new NewspaperScreen(new ArrayList<>(List.of("这是报纸测试页面"))));
+                        }, 1);
+                        return 1;
+                      })).then(ClientCommandManager.literal("view").executes(context -> {
+                        ClientScheduler.schedule(() -> {
+                          var msg = new ArrayList<Component>();
+                          msg.add(Component.translatable("Hello %s from %s", 1, 2).withStyle(ChatFormatting.RED));
+                          context.getSource().getClient()
+                              .setScreen(
+                                  new NewspaperScreen(msg, Component.literal("hello"), Component.literal("author")));
+                        }, 1);
+                        return 1;
+                      })))));
+        });
+  }
+
+  private static int openRoleIntroduction(
+      com.mojang.brigadier.context.CommandContext<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource> context,
+      String path) {
+    ClientScheduler.schedule(() -> {
+      var client = context.getSource().getClient();
+      if (path == null || path.isEmpty()) {
+        client.setScreen(new RoleIntroduceScreen(client.player));
+        return;
+      }
+      var role = io.wifi.starrailexpress.api.TMMRoles.getRoleByPath(path);
+      if (role == null) {
+        client.setScreen(new RoleIntroduceScreen(client.player));
+        return;
+      }
+      RoleIntroduceScreen.openOn(role);
+    }, 1);
+    return 1;
+  }
+}

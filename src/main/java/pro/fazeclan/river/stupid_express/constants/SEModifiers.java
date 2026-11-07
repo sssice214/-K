@@ -1,0 +1,575 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package pro.fazeclan.river.stupid_express.constants;
+
+import io.wifi.starrailexpress.SREConfig;
+import io.wifi.starrailexpress.api.RoleTeam;
+import io.wifi.starrailexpress.api.TMMRoles;
+import io.wifi.starrailexpress.cca.SREGameWorldComponent;
+import io.wifi.starrailexpress.event.OnGameEnd;
+import io.wifi.starrailexpress.game.GameUtils;
+import io.wifi.starrailexpress.rules.CollisionRules;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.entity.ai.attributes.AttributeModifier;
+import net.minecraft.world.entity.ai.attributes.Attributes;
+import org.agmas.harpymodloader.component.WorldModifierComponent;
+import org.agmas.harpymodloader.events.GameInitializeEvent;
+import org.agmas.harpymodloader.events.ModifierAssigned;
+import org.agmas.harpymodloader.events.ModifierRemoved;
+import org.agmas.harpymodloader.events.ResetPlayerEvent;
+import org.agmas.harpymodloader.modifiers.HMLModifiers;
+import org.agmas.harpymodloader.modifiers.SREModifier;
+import org.agmas.noellesroles.init.ModEffects;
+import org.agmas.noellesroles.role.ModRoles;
+import org.agmas.noellesroles.role.touhou.THLostForestRoles;
+import org.agmas.noellesroles.role.touhou.THMiscRoles;
+import org.agmas.noellesroles.utils.RoleUtils;
+
+import pro.fazeclan.river.stupid_express.StupidExpress;
+import pro.fazeclan.river.stupid_express.modifier.lovers.cca.LoversComponent;
+import pro.fazeclan.river.stupid_express.modifier.refugee.cca.RefugeeComponent;
+import pro.fazeclan.river.stupid_express.modifier.split_personality.cca.SkinSplitPersonalityComponent;
+import pro.fazeclan.river.stupid_express.modifier.split_personality.cca.SplitPersonalityComponent;
+import pro.fazeclan.river.stupid_express.modifier.twin_children.TwinChildrenHandler;
+
+import java.awt.*;
+import java.util.*;
+import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+
+public class SEModifiers {
+
+    // Attribute modifier for tiny players
+    public static AttributeModifier TINY_MODIFIER = new AttributeModifier(
+            StupidExpress.id("tiny_modifier"), -0.15, AttributeModifier.Operation.ADD_VALUE);
+
+    // Attribute modifier for tall players
+    public static AttributeModifier TALL_MODIFIER = new AttributeModifier(
+            StupidExpress.id("tall_modifier"), 0.0763, AttributeModifier.Operation.ADD_VALUE);
+
+    public static SREModifier LOVERS = HMLModifiers.registerModifier(new SREModifier(
+            StupidExpress.id("lovers"),
+            0xf38aff,
+            Set.of(THLostForestRoles.KAGUYA, THLostForestRoles.MOKOU),
+            null,
+            false,
+            false)).setCanSetSpawnInfoInConfig(false);
+
+    public static SREModifier REFUGEE = HMLModifiers.registerModifier(new SREModifier(
+            StupidExpress.id("refugee"),
+            0x55ff55,
+            null,
+            null,
+            false,
+            false))
+            .setDefaultEnableChance(1000)
+            .setDefaultEnableNeededPlayerCount(16)
+            .setHidden(true)
+            .addBothRelatedRole(TMMRoles.LOOSE_END);
+
+    public static SREModifier TINY = HMLModifiers.registerModifier(new SREModifier(
+            StupidExpress.id("tiny"),
+            new Color(255, 166, 0).getRGB(),
+            Set.of(THMiscRoles.IBUKI_SUIKA),
+            null,
+            false,
+            false)).setCanSetSpawnInfoInConfig(false);
+
+    public static SREModifier TALL = HMLModifiers.registerModifier(new SREModifier(
+            StupidExpress.id("tall"),
+            new Color(0, 255, 0).getRGB(),
+            Set.of(THMiscRoles.IBUKI_SUIKA),
+            null,
+            false,
+            false)).setCanSetSpawnInfoInConfig(false);
+
+    public static SREModifier FEATHER = HMLModifiers.registerModifier(new SREModifier(
+            StupidExpress.id("feather"),
+            new Color(255, 236, 161).getRGB(),
+            null,
+            null,
+            false,
+            false)).setCanSetSpawnInfoInConfig(false);
+
+    public static SREModifier MAGNATE = HMLModifiers.registerModifier(new SREModifier(
+            StupidExpress.id("magnate"),
+            new Color(255, 255, 0).getRGB(),
+            null,
+            null,
+            false,
+            false))
+            .setDefaultEnableChance(5000).setDefaultMax(2);
+
+    public static SREModifier TASKMASTER = HMLModifiers.registerModifier(new SREModifier(
+            StupidExpress.id("taskmaster"),
+            new Color(255, 51, 153).getRGB(),
+            null,
+            null,
+            false,
+            false)).setCanSetSpawnInfoInConfig(false);
+
+    public static SREModifier JEB_ = HMLModifiers.registerModifier(new SREModifier(
+            StupidExpress.id("jeb_"),
+            new Color(64, 224, 208).getRGB(),
+            List.of(ModRoles.MORPHLING),
+            null,
+            false,
+            false))
+            .setDefaultMax(1)
+            .setDefaultEnableChance(3000);
+
+    public static SREModifier DINNERBONE = HMLModifiers.registerModifier(new SREModifier(
+            StupidExpress.id("dinnerbone"),
+            new Color(64, 224, 208).getRGB(),
+            null,
+            null,
+            false,
+            false))
+            .setDefaultMax(1)
+            .setDefaultEnableChance(4000);
+    public static SREModifier ALLERGIST = HMLModifiers.registerModifier(new SREModifier(
+            StupidExpress.id("allergist"),
+            new Color(112, 255, 162).getRGB(),
+            null,
+            null,
+            false,
+            false))
+            .setDefaultEnableChance(2000).setDefaultMax(1);
+
+    public static SREModifier CURSED = HMLModifiers.registerModifier(new SREModifier(
+            StupidExpress.id("cursed"),
+            new Color(75, 0, 130).getRGB(),
+            null,
+            null,
+            false,
+            false))
+            .setDefaultEnableChance(3000)
+            .setDefaultEnableNeededPlayerCount(12).setDefaultMax(1);
+
+    public static SREModifier SECRETIVE = HMLModifiers.registerModifier(new SREModifier(
+            StupidExpress.id("secretive"),
+            new Color(50, 50, 50).getRGB(),
+            null,
+            null,
+            false,
+            false))
+            .setCanSetSpawnInfoInConfig(false);
+
+    public static SREModifier KNIGHT = HMLModifiers.registerModifier(new SREModifier(
+            StupidExpress.id("knight"),
+            new Color(192, 192, 192).getRGB(),
+            null,
+            null,
+            false,
+            false))
+            .setDefaultEnableChance(1000)
+            .setDefaultEnableNeededPlayerCount(12).setDefaultMax(1);
+
+    public static SREModifier SPLIT_PERSONALITY = HMLModifiers.registerModifier(new SREModifier(
+            StupidExpress.id("split_personality"),
+            new Color(138, 43, 226).getRGB(),
+            null,
+            null,
+            false,
+            true))
+            .setDefaultEnableChance(0)
+            .setDefaultEnableNeededPlayerCount(12);
+
+    // 新增修饰符：矫健（体力上限更多、恢复更快）
+    public static SREModifier VIGOROUS = HMLModifiers.registerModifier(new SREModifier(
+            StupidExpress.id("vigorous"),
+            new Color(80, 200, 120).getRGB(),
+            null,
+            null,
+            false,
+            false))
+            .setDefaultEnableChance(8000).setDefaultMax(2);
+
+    // 新增修饰符：不屈（一次性免疫被平民误杀；对杀手阵营攻击免疫）
+    public static SREModifier UNYIELDING = HMLModifiers.registerModifier(new SREModifier(
+            StupidExpress.id("unyielding"),
+            new Color(200, 80, 80).getRGB(),
+            new HashSet<>(List.of(ModRoles.PUPPETEER)),
+            null,
+            false,
+            false))
+            .setDefaultEnableChance(8000).setDefaultMax(2).setHidden(true);
+
+    public static SREModifier BLACK_WHITE = HMLModifiers.registerModifier(new SREModifier(
+            StupidExpress.id("black_white"),
+            Color.BLACK.getRGB(),
+            null,
+            new HashSet<>(List.of(ModRoles.SHERIFF, TMMRoles.VIGILANTE)),
+            false,
+            true))
+            .setDefaultMax(1)
+            .setDefaultEnableChance(1000)
+            .setDefaultEnableNeededPlayerCount(10).setHidden(true);
+
+    // 标记不屈的一次性免疫是否已被消耗（基于 UUID 的运行时集合）
+    public static Set<UUID> UNYIELDING_IMMUNITY_USED = ConcurrentHashMap.newKeySet();
+
+    // 新增修饰符：偏执（占位，移植外部代码以实现声音/客户端效果）
+    public static SREModifier PARANOID = HMLModifiers.registerModifier(new SREModifier(
+            StupidExpress.id("paranoid"),
+            new Color(180, 160, 220).getRGB(),
+            null,
+            null,
+            false,
+            false))
+            .setDefaultEnableChance(1000).setDefaultMax(1);
+
+    /** 双生之子：两名同阵营玩家以半身大小叠在一起行动；任一方完成任务时同伴当前任务一并完成。 */
+    public static SREModifier TWIN_CHILDREN = HMLModifiers.registerModifier(new SREModifier(
+            StupidExpress.id("twin_children"),
+            new Color(255, 183, 197).getRGB(),
+            null,
+            null,
+            false,
+            true))
+            // 一次自然分配会由处理器补齐第二名玩家，因此 max=1 表示一对。
+            .setDefaultEnableChance(3000).setDefaultMax(1)
+            .setServerGameTickEvent(TwinChildrenHandler::serverTick)
+            .setClientGameTickEvent(TwinChildrenHandler::clientTick)
+            .setAddedVersion("4.4");
+
+    public static void init() {
+        // 设置双重人格的最大分配数量（从配置读取）
+        SPLIT_PERSONALITY.setDefaultMax(SREConfig.instance().splitPersonalityMax);
+        SPLIT_PERSONALITY.civilianOnly = true;
+        VIGOROUS.civilianOnly = true;
+        // 双生之子：不会出现在杀手阵营身上（杀手与杀手方中立都不分配）。
+        // 一次自然分配会由 TwinChildrenHandler 补齐同阵营的第二名玩家，故这里只需挡住第一名。
+        TWIN_CHILDREN.setCannotAppliedToTeam(RoleTeam.KILLER, RoleTeam.NEUTRAL_KILLER);
+
+        // 体型类修饰符互斥声明（与互斥职业同一套写法：SREModifier#addTwoWayOpposingModifier）。
+        // 生成时由 SREMurderGameMode#canAssignModifierToPlayer 排除，运行时由 ModifierOpposingHelper 兜底移除，
+        // TWIN_CHILDREN 与 DWARF 的互斥分别在 TwinChildrenHandler 的配对逻辑与 TraitorAndModifiers#init 中声明。
+        TINY.addTwoWayOpposingModifier(TALL, TWIN_CHILDREN);
+        TALL.addTwoWayOpposingModifier(TWIN_CHILDREN);
+
+        assignModifierComponents();
+        TwinChildrenHandler.init();
+        pro.fazeclan.river.stupid_express.modifier.magnate.MagnatePassiveIncomeHandler.init();
+        pro.fazeclan.river.stupid_express.modifier.cursed.CursedHandler.init();
+        pro.fazeclan.river.stupid_express.modifier.knight.KnightHandler.init();
+        pro.fazeclan.river.stupid_express.modifier.split_personality.SplitPersonalityHandler.init();
+        // 初始化偏执处理器（播放周围虚假声音）
+        pro.fazeclan.river.stupid_express.modifier.paranoid.ParanoidHandler.init();
+
+        ResetPlayerEvent.EVENT.register(player -> {
+            var splitPersonalityComponent2 = pro.fazeclan.river.stupid_express.modifier.split_personality.cca.SplitPersonalityComponent.KEY
+                    .get(player);
+            splitPersonalityComponent2.init();
+            SkinSplitPersonalityComponent skinSplitPersonalityComponent2 = SkinSplitPersonalityComponent.KEY
+                    .get(player);
+            skinSplitPersonalityComponent2.clear();
+        });
+        CollisionRules.cantCollide.add(p -> {
+            var modifiers = WorldModifierComponent.KEY.get(p.level());
+            if (modifiers.isModifier(p.getUUID(), FEATHER)) {
+                return true;
+            }
+            return false;
+        });
+    }
+
+    public static void assignModifierComponents() {
+        ModifierRemoved.EVENT.register((player, modifier) -> {
+            if (modifier.equals(SPLIT_PERSONALITY)) {
+                var a = SplitPersonalityComponent.KEY.get(player);
+                if (a != null) {
+                    a.init();
+                }
+                var b = SkinSplitPersonalityComponent.KEY.get(player);
+                if (b != null) {
+                    b.clear();
+                }
+            }
+            // 体型缩放回滚：互斥替换（例如 TINY 顶掉 TALL）后不能残留旧的 AttributeModifier
+            if (modifier.equals(TINY)) {
+                player.getAttribute(Attributes.SCALE).removeModifier(TINY_MODIFIER);
+            }
+            if (modifier.equals(TALL)) {
+                player.getAttribute(Attributes.SCALE).removeModifier(TALL_MODIFIER);
+            }
+        });
+        /// LOVERS
+        ModifierAssigned.EVENT.register(((player, modifier) -> {
+            if (!modifier.equals(LOVERS)) {
+                return;
+            }
+            if (!(player instanceof ServerPlayer lover)) {
+                return;
+            }
+
+            var level = lover.serverLevel();
+
+            // choose second lover
+            ServerPlayer loverTwo = null;
+            var arrs = new ArrayList<>(level.players());
+            Collections.shuffle(arrs);
+            WorldModifierComponent modifierCca = WorldModifierComponent.KEY.get(level);
+            var loverComponentOne = LoversComponent.KEY.get(lover);
+            if (!SREConfig.instance().enableNoLimitLoversInLoverMode) {
+                if (loverComponentOne.isLover()) {
+                    // 忽略被绑定的
+                    // 已有恋人~
+                    return;
+                }
+            }
+            for (var can_i_love : arrs) {
+                if (GameUtils.isPlayerAliveAndSurvivalIgnoreShitSplit(can_i_love)) {
+                    var can_i_love_role = RoleUtils.getPlayerRole(can_i_love);
+                    if (can_i_love_role == null || LOVERS.cannotBeAppliedTo.contains(can_i_love_role)) {
+                        continue;
+                    }
+                    if (!SREConfig.instance().enableNoLimitLoversInLoverMode) {
+                        // 检查候选人是否已有恋人，防止重复绑定
+                        var candidateLoverComp = LoversComponent.KEY.get(can_i_love);
+                        if (candidateLoverComp != null && candidateLoverComp.isLover()) {
+                            continue;
+                        }
+                        if (modifierCca.isModifier(can_i_love, SEModifiers.LOVERS)) {
+                            // 忽略被绑定的
+                            continue;
+                        }
+                    }
+                    if (!lover.equals(can_i_love)) {
+                        loverTwo = can_i_love;
+                        break;
+                    }
+                }
+            }
+            if (loverTwo == null) {
+                // 没有就不分配啦！
+                WorldModifierComponent.KEY.get(player.level()).removeModifier(player.getUUID(), modifier);
+                StupidExpress.LOGGER.info("{} couldn't find it's lover, remove it's modifier.",
+                        player.getScoreboardName());
+                return;
+            }
+            // assign both lovers
+
+            loverComponentOne.setLover(loverTwo.getUUID());
+            loverComponentOne.sync();
+
+            var loverComponentTwo = LoversComponent.KEY.get(loverTwo);
+
+            loverComponentTwo.setLover(lover.getUUID());
+            loverComponentTwo.sync();
+
+            var worldModifierComponent = WorldModifierComponent.KEY.get(level);
+            worldModifierComponent.addModifier(loverTwo.getUUID(), LOVERS); // visually show lovers on the other player
+        }));
+        /// SPLIT_PERSONALITY
+        ModifierAssigned.EVENT.register(((player, modifier) -> {
+            if (!modifier.equals(SPLIT_PERSONALITY)) {
+                return;
+            }
+            if (!(player instanceof ServerPlayer person)) {
+                return;
+            }
+
+            var level = person.serverLevel();
+            var gameComponent = SREGameWorldComponent.KEY.get(level);
+
+            // 选择另一个同阵营作为第二人格
+            var fatherRole = gameComponent.getRole(player);
+            /**
+             * 0:平民,
+             * 1:中立
+             * 2:杀手
+             * 3:偏狼中立
+             */
+            int fatherRoleType = 0;
+            if (fatherRole != null) {
+                if (fatherRole.isInnocent()) {
+                    fatherRoleType = 0;
+                } else if (fatherRole.isNeutralForKiller() && fatherRole.isNeutrals()) {
+                    fatherRoleType = 3;
+                } else if (SREGameWorldComponent.isKillerTeamRoleStatic(fatherRole)) {
+                    fatherRoleType = 2;
+                } else {
+                    fatherRoleType = 1;
+                }
+            }
+            ServerPlayer secondPersonality = null;
+            var arrs = new ArrayList<>(level.players());
+            Collections.shuffle(arrs);
+            for (var candidate : arrs) {
+                if (GameUtils.isPlayerAliveAndSurvivalIgnoreShitSplit(candidate)) {
+                    if (!person.equals(candidate)) {
+                        if (gameComponent != null) {
+                            var role = gameComponent.getRole(candidate);
+                            if (role != null) {
+                                if (fatherRoleType == 0) {
+                                    if (role.isInnocent() && !role.isVigilanteTeam()) {
+                                        secondPersonality = candidate;
+                                        break;
+                                    }
+                                } else if (fatherRoleType == 1) {
+                                    if ((!role.isInnocent() && !role.canUseKiller())
+                                            || (role.isNeutrals()) && !role.isNeutralForKiller()) {
+                                        secondPersonality = candidate;
+                                        break;
+                                    }
+                                } else if (fatherRoleType == 3) {
+                                    if ((role.isNeutrals() && role.isNeutralForKiller())) {
+                                        secondPersonality = candidate;
+                                        break;
+                                    }
+                                } else {
+                                    if (!role.isInnocent() && role.canUseKiller() && !role.isNeutrals()) {
+                                        secondPersonality = candidate;
+                                        break;
+                                    }
+                                }
+
+                            }
+                        }
+                    }
+                }
+            }
+            if (secondPersonality == null) {
+                // 没有就不分配啦！
+                WorldModifierComponent.KEY.get(player.level()).removeModifier(player.getUUID(), modifier);
+                StupidExpress.LOGGER.info("{} couldn't find it's split personality, remove it's modifier.",
+                        player.getScoreboardName());
+                return;
+            }
+            // 给第二人格添加修饰符
+            var worldModifierComponent = WorldModifierComponent.KEY.get(level);
+            worldModifierComponent.addModifier(secondPersonality.getUUID(), SPLIT_PERSONALITY);
+
+            // 为两个人格都设置SplitPersonalityComponent
+            var componentOne = SplitPersonalityComponent.KEY.get(person);
+            componentOne.setMainPersonality(person.getUUID());
+            componentOne.setSecondPersonality(secondPersonality.getUUID());
+            componentOne.setCurrentActivePerson(person.getUUID()); // 主人格是第一个被激活的
+            componentOne.setMainPersonalityChoice(SplitPersonalityComponent.ChoiceType.SACRIFICE);
+            componentOne.setSecondPersonalityChoice(SplitPersonalityComponent.ChoiceType.SACRIFICE);
+            componentOne.sync();
+
+            var componentTwo = SplitPersonalityComponent.KEY.get(secondPersonality);
+            componentTwo.setMainPersonality(person.getUUID());
+            componentTwo.setSecondPersonality(secondPersonality.getUUID());
+            componentTwo.setMainPersonalityChoice(SplitPersonalityComponent.ChoiceType.SACRIFICE);
+            componentTwo.setSecondPersonalityChoice(SplitPersonalityComponent.ChoiceType.SACRIFICE);
+            componentTwo.setCurrentActivePerson(person.getUUID()); // 主人格是第一个被激活的
+            componentTwo.sync();
+
+            final var skinSplitPersonalityComponent = SkinSplitPersonalityComponent.KEY.get(secondPersonality);
+            skinSplitPersonalityComponent.setSkinToAppearAs(player.getUUID());
+            skinSplitPersonalityComponent.sync();
+        }));
+
+        /// TINY & TALL & FEATHER & ALLERGIST & CURSED & SECRETIVE & KNIGHT &
+        /// SPLIT_PERSONALITY TINY & FEATHER & ALLERGIST & CURSED & SECRETIVE & KNIGHT &
+        ModifierAssigned.EVENT.register(((player, modifier) -> {
+            // TINY / TALL / DWARF / TWIN_CHILDREN 之间的互斥由 ModifierOpposingHelper 统一处理
+            // （声明见 SEModifiers#init 与 TraitorAndModifiers#init），这里只负责应用自己的缩放
+            if (modifier.equals(TINY)) {
+                player.getAttribute(Attributes.SCALE).removeModifier(TINY_MODIFIER);
+                player.getAttribute(Attributes.SCALE).addPermanentModifier(TINY_MODIFIER);
+            }
+            if (modifier.equals(TALL)) {
+                player.getAttribute(Attributes.SCALE).removeModifier(TALL_MODIFIER);
+                player.getAttribute(Attributes.SCALE).addPermanentModifier(TALL_MODIFIER);
+            }
+
+            if (modifier.equals(VIGOROUS)) {
+                if (player instanceof ServerPlayer sp) {
+                    // 给玩家长期的体力提升/恢复效果（通过已有 ModEffects）
+                    sp.addEffect(new MobEffectInstance(ModEffects.STAMINA_BOOST, 10000000, 0, false, false, false));
+                    sp.addEffect(new MobEffectInstance(ModEffects.STAMINA_RECOVERY, 10000000, 0, false, false, false));
+                }
+            }
+            if (modifier.equals(UNYIELDING)) {
+                // 分配时重置一次性免疫标记（允许新一轮免疫）
+                UNYIELDING_IMMUNITY_USED.remove(player.getUUID());
+                // 如果玩家当前为中立阵营，则给予二级体力提升效果
+                if (player instanceof ServerPlayer sp) {
+                    var gameComponent = SREGameWorldComponent.KEY.get(sp.serverLevel());
+                    if (gameComponent != null) {
+                        var role = gameComponent.getRole(player);
+                        if (role != null && role.isNeutrals()) {
+                            sp.addEffect(
+                                    new MobEffectInstance(ModEffects.STAMINA_BOOST, 10000000, 1, false, false, false));
+                        }
+                    }
+                }
+            }
+
+        }));
+        GameInitializeEvent.EVENT.register((level, gameWorldComponent, readyPlayerList) -> {
+            // Reset refugee component
+            var refugeeC = RefugeeComponent.KEY.get(level);
+            if (refugeeC != null) {
+                refugeeC.reset();
+            }
+            UNYIELDING_IMMUNITY_USED.clear();
+
+        });
+        OnGameEnd.EVENT.register((level, gameWorldComponent) -> {
+
+            // Reset refugee component
+            var refugeeC = RefugeeComponent.KEY.get(level);
+            if (refugeeC != null) {
+                refugeeC.reset();
+            }
+            UNYIELDING_IMMUNITY_USED.clear();
+
+        });
+        ResetPlayerEvent.EVENT.register(player -> {
+
+            // Reset lovers component
+            var component = LoversComponent.KEY.get(player);
+            component.reset();
+            component.sync();
+            // Reset split personality component
+            var splitPersonalityComponent = pro.fazeclan.river.stupid_express.modifier.split_personality.cca.SplitPersonalityComponent.KEY
+                    .get(player);
+            // 清理库存数据
+            splitPersonalityComponent.init();
+            SkinSplitPersonalityComponent skinSplitPersonalityComponent = SkinSplitPersonalityComponent.KEY.get(player);
+            skinSplitPersonalityComponent.clear();
+            splitPersonalityComponent.sync();
+        });
+
+    }
+
+    static {
+        LOVERS.setAddedVersion("2.x");
+        REFUGEE.setAddedVersion("3.1");
+        TINY.setAddedVersion("3.1");
+        TALL.setAddedVersion("3.1");
+        FEATHER.setAddedVersion("3.1");
+        MAGNATE.setAddedVersion("3.1");
+        TASKMASTER.setAddedVersion("3.1");
+        JEB_.setAddedVersion("4.0");
+        DINNERBONE.setAddedVersion("4.4");
+        ALLERGIST.setAddedVersion("3.1");
+        CURSED.setAddedVersion("3.1");
+        SECRETIVE.setAddedVersion("3.1");
+        KNIGHT.setAddedVersion("3.1");
+        SPLIT_PERSONALITY.setAddedVersion("3.1");
+        VIGOROUS.setAddedVersion("4.1");
+        UNYIELDING.setAddedVersion("4.1");
+        BLACK_WHITE.setAddedVersion("4.1");
+        PARANOID.setAddedVersion("4.1");
+    }
+}

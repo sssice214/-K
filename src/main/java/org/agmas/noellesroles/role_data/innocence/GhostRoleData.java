@@ -1,0 +1,386 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.role_data.innocence;
+
+import io.wifi.starrailexpress.api.data.RoleData;
+import io.wifi.starrailexpress.api.data.RoleDataContext;
+import io.wifi.starrailexpress.api.impl.SimpleRoleData;
+import io.wifi.starrailexpress.SRE;
+import io.wifi.starrailexpress.api.replay.GameReplayUtils;
+import io.wifi.starrailexpress.cca.SREGameTimeComponent;
+import io.wifi.starrailexpress.cca.SREGameWorldComponent;
+import io.wifi.starrailexpress.cca.SREPlayerShopComponent;
+import io.wifi.starrailexpress.game.GameUtils;
+import io.wifi.starrailexpress.index.TMMSounds;
+import net.minecraft.ChatFormatting;
+import net.minecraft.core.HolderLookup;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.network.chat.Component;
+import org.agmas.noellesroles.utils.ReplayEventLog;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.item.Items;
+import org.agmas.noellesroles.commands.BroadcastCommand;
+import org.agmas.noellesroles.init.ModEffects;
+import org.agmas.noellesroles.role.ModRoles;
+import org.agmas.noellesroles.role.touhou.THRedHouseRoles;
+import org.agmas.noellesroles.utils.MCItemsUtils;
+import org.agmas.noellesroles.utils.MoneyUtils;
+import org.jetbrains.annotations.NotNull;
+
+public class GhostRoleData extends SimpleRoleData {
+
+    public final boolean isActive = true;
+    public int cooldown = 0;
+    public int invisibilityTicks = 0;
+    public boolean abilityUnlocked = false;
+    public boolean unlockNotified = false;
+    public boolean lastStandNotified = false;
+    /** 解锁所需的游戏剩余时间（3分钟 = 180秒 = 3600 tick） */
+    public static final int UNLOCK_REMAINING_TICKS = 180 * 20;
+    /** 最后的幸存者模式时间（2分钟 = 120秒 = 2400 tick） */
+    public static final int LAST_STAND_TIME = 120 * 20;
+    public static final int FURAN_LAST_STAND_TIME = 120 * 20;
+
+    @Override
+    public void init() {
+    }
+
+    @Override
+    public void clear() {
+    }
+
+    public GhostRoleData(RoleDataContext context) {
+        super(context);
+    }
+
+    public void clientTick() {
+        if (invisibilityTicks > 1) {
+            invisibilityTicks--;
+        }
+        if (cooldown > 1) {
+            cooldown--;
+        }
+    }
+
+    @Override
+    public boolean shouldSyncWith(ServerPlayer player) {
+        return player == this.player;
+    }
+
+    public void serverTick() {
+        SREGameWorldComponent gameWorld = SREGameWorldComponent.KEY.get(player.level());
+
+        if (!gameWorld.isRunning()) {
+            return;
+        }
+        if (!GameUtils.isPlayerAliveAndSurvival(player)) {
+            return;
+        }
+
+        if (gameWorld.isRole(player, ModRoles.GHOST)) {
+
+            // 检查技能解锁（当游戏剩余3分钟时解锁）
+            if (!abilityUnlocked) {
+                // 获取游戏剩余时间
+                SREGameTimeComponent gameTime = SREGameTimeComponent.KEY.get(player.level());
+                if (gameTime != null) {
+                    long remainingTicks = gameTime.getTime();
+                    // 当剩余时间 <= 3分钟时解锁
+                    if (remainingTicks <= UNLOCK_REMAINING_TICKS) {
+                        abilityUnlocked = true;
+                        sync();
+                    }
+                }
+            }
+
+            // 发送解锁提示
+            if (abilityUnlocked && !unlockNotified) {
+                if (player instanceof ServerPlayer serverPlayer) {
+                    serverPlayer.displayClientMessage(
+                            Component.translatable("message.noellesroles.ghost.ability_unlocked")
+                                    .withStyle(ChatFormatting.GREEN, ChatFormatting.BOLD),
+                            true);
+                    unlockNotified = true;
+                }
+            }
+            checkLastStand(gameWorld);
+
+            // 检查最后幸存者状态
+
+            if (cooldown > 0) {
+                cooldown--;
+            }
+            if (invisibilityTicks > 0) {
+                invisibilityTicks--;
+            }
+            if (player.level().getGameTime() % 400 == 0) {
+                sync();
+            }
+        } else if (gameWorld.isRole(player, THRedHouseRoles.FURANDORU)) {
+            checkFuranLastStand(gameWorld);
+        }
+
+    }
+
+    public boolean useAbility() {
+        // 冷却由 RoleSkill 统一管理
+        if (!abilityUnlocked) {
+            player.displayClientMessage(
+                    Component.translatable("message.noellesroles.ghost.not_unlocked")
+                            .withStyle(ChatFormatting.RED),
+                    true);
+            return false;
+        }
+
+        SREPlayerShopComponent shopComponent = SREPlayerShopComponent.KEY.get(player);
+        if (shopComponent.balance < 150) {
+            player.displayClientMessage(Component.translatable("message.noellesroles.insufficient_funds"), true);
+            if (player instanceof ServerPlayer serverPlayer) {
+                serverPlayer.level().playSound(null, serverPlayer.blockPosition(), TMMSounds.UI_SHOP_BUY_FAIL,
+                        SoundSource.PLAYERS, 1.0F, 1.0F);
+            }
+            return false;
+        }
+
+        shopComponent.balance -= 150;
+        shopComponent.sync();
+
+        invisibilityTicks = 160;
+        player.addEffect(new MobEffectInstance(MobEffects.INVISIBILITY, 160, 0, false, false, true));
+
+        if (player instanceof ServerPlayer serverPlayer) {
+            serverPlayer.level().playSound(null, serverPlayer.blockPosition(), TMMSounds.UI_SHOP_BUY,
+                    SoundSource.PLAYERS, 1.0F, 1.0F);
+        }
+
+        sync();
+        return true;
+    }
+
+    public void writeToSyncNbt(@NotNull CompoundTag tag, HolderLookup.Provider registryLookup) {
+        tag.putInt("cooldown", this.cooldown);
+        tag.putInt("invisibilityTicks", this.invisibilityTicks);
+        tag.putBoolean("abilityUnlocked", this.abilityUnlocked);
+        tag.putBoolean("unlockNotified", this.unlockNotified);
+    }
+
+    public void readFromSyncNbt(@NotNull CompoundTag tag, HolderLookup.Provider registryLookup) {
+        this.cooldown = tag.getInt("cooldown");
+        this.invisibilityTicks = tag.getInt("invisibilityTicks");
+        this.abilityUnlocked = tag.getBoolean("abilityUnlocked");
+        this.unlockNotified = tag.getBoolean("unlockNotified");
+    }
+
+    /**
+     * 检查最后幸存者状态
+     * 当场上平民阵营只剩小透明时，将游戏时间设为2分钟（如果当前时间更长）
+     * 并广播提示
+     */
+    public void checkLastStand(SREGameWorldComponent gameWorld) {
+        if (!(player instanceof ServerPlayer serverPlayer)) {
+            return;
+        }
+        if (player.isSpectator())
+            return;
+        if (player.isCreative())
+            return;
+        if (player.hasEffect(ModEffects.SAFE_TIME))
+            return;
+        if (player.hasEffect(ModEffects.SKILL_BANED))
+            return;
+        if (!gameWorld.isSkillAvailable)
+            return;
+        if (lastStandNotified) {
+            return; // 已经通知过了，不再重复
+        }
+
+        // 统计存活的平民阵营玩家
+        int aliveCivilianCount = 0;
+        boolean hasGhost = true;
+
+        for (var p : player.level().players()) {
+            if (!GameUtils.isPlayerAliveAndSurvival(p)) {
+                continue;
+            }
+            var role = gameWorld.getRole(p.getUUID());
+            if (role == null) {
+                continue;
+            }
+            // 检查是否是平民阵营（isInnocent = true 且 canUseKiller = false）
+            if (role.isInnocent() && !role.canUseKiller() && !role.isNeutrals()) {
+                aliveCivilianCount++;
+            }
+        }
+
+        // 如果存活平民阵营只有1人，且是小透明
+        if (aliveCivilianCount == 1 && hasGhost) {
+            // 获取游戏时间
+            SREGameTimeComponent gameTime = SREGameTimeComponent.KEY.get(player.level());
+            if (gameTime != null) {
+                long currentTicks = gameTime.getTime();
+                // 如果当前时间超过2分钟，则设置为2分钟
+                if (currentTicks > LAST_STAND_TIME) {
+                    gameTime.setTime(LAST_STAND_TIME);
+                }
+            }
+
+            // 发送全局广播
+            var broadcastMessage = Component
+                    .translatable("message.noellesroles.ghost.last_stand")
+                    .withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD);
+            serverPlayer.server.getPlayerList().getPlayers().forEach((p) -> {
+                BroadcastCommand.BroadcastMessage(p, broadcastMessage);
+            });
+
+            lastStandNotified = true;
+            sync();
+            // 回放记录：小透明加速时间（若芙兰朵露也加速过，由其分支补一条「共同加速」）
+            recordAccelerateTime(false);
+        }
+    }
+
+    /**
+     * 记录「加速时间」的回放事件：区分小透明、芙兰朵露、以及两者共同加速。
+     * 两人都触发过时，由后触发的一方补一条共同加速事件，不会重复记录两条共同加速。
+     */
+    private void recordAccelerateTime(boolean furanBranch) {
+        SREGameWorldComponent game = SREGameWorldComponent.KEY.get(player.level());
+        Player ghostPlayer = null;
+        Player furanPlayer = null;
+        for (var p : player.level().players()) {
+            if (!GameUtils.isPlayerAliveAndSurvival(p))
+                continue;
+            GhostRoleData data = RoleData.getNullable(GhostRoleData.class, p);
+            if (data == null || !data.lastStandNotified)
+                continue;
+            if (game.isRole(p, ModRoles.GHOST))
+                ghostPlayer = p;
+            if (game.isRole(p, THRedHouseRoles.FURANDORU))
+                furanPlayer = p;
+        }
+        if (furanBranch && ghostPlayer != null && furanPlayer != null) {
+            ReplayEventLog.record("replay.event.ghost.accelerate_time.both",
+                    ReplayEventLog.name(ghostPlayer), ReplayEventLog.name(furanPlayer));
+        } else if (furanBranch) {
+            ReplayEventLog.record("replay.event.ghost.accelerate_time.furandoru",
+                    ReplayEventLog.name(player));
+        } else {
+            ReplayEventLog.record("replay.event.ghost.accelerate_time.ghost",
+                    ReplayEventLog.name(player));
+        }
+    }
+
+    /**
+     * 检查最后幸存者状态
+     * 当场上只剩furan+单阵营时，将游戏时间设为1分钟（如果当前时间更长）
+     * 并广播提示
+     */
+    public void checkFuranLastStand(SREGameWorldComponent gameWorld) {
+        if (!(player instanceof ServerPlayer serverPlayer)) {
+            return;
+        }
+        if (!gameWorld.isSkillAvailable)
+            return;
+        if (player.isSpectator())
+            return;
+        if (player.isCreative())
+            return;
+        if (player.hasEffect(ModEffects.SAFE_TIME))
+            return;
+        if (player.hasEffect(ModEffects.SKILL_BANED))
+            return;
+
+        SREGameTimeComponent gameTime = SREGameTimeComponent.KEY.get(player.level());
+        if (gameTime == null) {
+            return;
+        }
+
+        // 统计存活的双方阵营玩家
+        int aliveCivilianCount = 0;
+        int aliveKillerCount = 0;
+        for (var p : player.level().players()) {
+            if (!GameUtils.isPlayerAliveAndSurvival(p)) {
+                continue;
+            }
+            var role = gameWorld.getRole(p.getUUID());
+            if (role == null) {
+                continue;
+            }
+            // 检查是否是平民阵营（isInnocent = true 且 canUseKiller = false）
+            if (role.isInnocent() && !role.canUseKiller() && !role.isNeutrals()) {
+                aliveCivilianCount++;
+            }
+            if (role.canUseKiller()) {
+                aliveKillerCount++;
+            }
+        }
+
+        // 芙兰朵露时刻激活条件：时间已快进到阈值内，或场上只剩单一阵营+芙兰朵露
+        boolean momentActive = gameTime.getTime() <= FURAN_LAST_STAND_TIME
+                || (aliveCivilianCount <= 0 || aliveKillerCount <= 0) && aliveCivilianCount + aliveKillerCount > 0;
+        if (!momentActive) {
+            return;
+        }
+
+        if (!lastStandNotified) {
+            // 一次性结算：快进时间 + 全局广播 + 发放风弹 + 回放记录
+            if (gameTime.getTime() > FURAN_LAST_STAND_TIME) {
+                gameTime.setTime(FURAN_LAST_STAND_TIME);
+            }
+
+            // 发送全局广播
+            var broadcastMessage = Component
+                    .translatable("message.noellesroles.furandoru.last_stand")
+                    .withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD);
+            serverPlayer.server.getPlayerList().getPlayers().forEach((p) -> {
+                BroadcastCommand.BroadcastMessage(p, broadcastMessage);
+                int count = MoneyUtils.getBalance(p);
+                var stack = Items.WIND_CHARGE.getDefaultInstance();
+                stack.setCount(Math.max(1, Math.min(16, count / 75)));
+                MCItemsUtils.insertStackInFreeSlot(p, stack);
+            });
+
+            lastStandNotified = true;
+            sync();
+            // 回放记录：芙兰朵露加速时间（若小透明也已加速，则记为「共同加速」）
+            recordAccelerateTime(true);
+            // 回放记录：芙兰朵露时刻触发
+            ReplayEventLog.record("replay.event.moment.furandoru", ReplayEventLog.player(player));
+        }
+
+        // 芙兰朵露时刻激活期间持续保证发光：
+        // 难民/亡命徒期间时刻可能提前触发过一次（一次性发光 121 秒，随后自然过期，
+        // 或被亡命徒的时间回溯快照恢复覆盖），而 lastStandNotified 已置位导致发光不再补发，
+        // 再次正式进入时刻时 BGM 照响但发光丢失。这里在时刻激活的每 tick 检查，
+        // 发光缺失或即将过期（<3 秒）时重新施加。
+        MobEffectInstance glowing = player.getEffect(MobEffects.GLOWING);
+        if (glowing == null || glowing.getDuration() < 60) {
+            player.addEffect(new MobEffectInstance(
+                    MobEffects.GLOWING,
+                    (int) FURAN_LAST_STAND_TIME + 20, // 持续时间覆盖整个时刻（tick）
+                    0, // 等级
+                    true, // ambient（环境效果，如信标）
+                    true, // showParticles（显示粒子）
+                    false // showIcon（显示图标）
+            ));
+        }
+    }
+
+}

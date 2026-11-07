@@ -1,0 +1,40 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.content.effects;
+
+import net.minecraft.core.particles.ParticleOptions;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.effect.MobEffect;
+import net.minecraft.world.effect.MobEffectCategory;
+
+public class SimpleMobEffect extends MobEffect {
+
+    public SimpleMobEffect(MobEffectCategory mobEffectCategory, int i) {
+        super(mobEffectCategory, i);
+    }
+
+    public SimpleMobEffect(MobEffectCategory mobEffectCategory, int i, ParticleOptions particleOptions) {
+        super(mobEffectCategory, i, particleOptions);
+    }
+
+    /**
+     * 当药水效果结束时
+     * 
+     * @param livingEntity
+     */
+    public void onEffectEnded(ServerPlayer livingEntity) {
+    }
+}

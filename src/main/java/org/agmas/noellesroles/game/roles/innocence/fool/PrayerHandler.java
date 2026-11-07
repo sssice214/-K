@@ -1,0 +1,196 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.game.roles.innocence.fool;
+
+import io.wifi.starrailexpress.api.data.RoleData;
+import io.wifi.starrailexpress.cca.SREGameWorldComponent;
+import io.wifi.starrailexpress.content.entity.NoteEntity;
+import io.wifi.starrailexpress.game.GameUtils;
+import net.minecraft.ChatFormatting;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
+import org.agmas.noellesroles.init.ModEffects;
+import org.agmas.noellesroles.role.ModRoles;
+import org.agmas.noellesroles.role_data.innocence.FoolRoleData;
+
+import java.util.List;
+
+/**
+ * 祷告管理器 - 处理玩家对尊名纸条的祷告（按V键）
+ */
+public class PrayerHandler {
+
+    /** 祷告读条时间（tick） */
+    public static final int PRAYER_DURATION_TICKS = 3 * 20; // 3秒
+
+    /** 纸条检测距离 */
+    public static final double NOTE_DETECTION_RANGE = 5.0;
+
+    /**
+     * 玩家按V键开始祷告
+     */
+    public static void startPrayer(ServerPlayer player) {
+        // 井盖传送：若玩家右键过井盖并处于待传送状态，则按下“祷告/加入塔罗会”键后执行传送
+        net.minecraft.core.BlockPos pendingManhole = org.agmas.noellesroles.content.block.scene.ManholeBlock
+                .consumePendingTarget(player);
+        if (pendingManhole != null) {
+            org.agmas.noellesroles.content.block.scene.ManholeBlock.doTeleport(player, pendingManhole,
+                    (ServerLevel) player.level());
+            return;
+        }
+
+        SREGameWorldComponent gameComponent = SREGameWorldComponent.KEY.get(player.level());
+        ServerLevel serverLevel = (ServerLevel) player.level();
+        ServerPlayer fool = TarotAssemblyManager.findFoolPlayer(serverLevel, gameComponent);
+        FoolRoleData foolComp = fool != null ? RoleData.getNullable(FoolRoleData.class, fool) : null;
+
+        // 鹈鹕无法通过尊名纸条加入塔罗会
+        if (gameComponent.isRole(player, ModRoles.PELICAN)) {
+            player.displayClientMessage(
+                    Component.translatable("message.noellesroles.fool.pelican_cannot_join")
+                            .withStyle(ChatFormatting.RED),
+                    true);
+            return;
+        }
+
+        // 愚者自己不需要祷告
+        if (gameComponent.isRole(player, ModRoles.THE_FOOL)) {
+            FoolRoleData selfFoolComp = RoleData.getNullable(FoolRoleData.class, player);
+            if (selfFoolComp != null && selfFoolComp.inMeeting) {
+                TarotAssemblyManager.requestVoteScreen(player);
+            }
+            return;
+        }
+        if (!GameUtils.isPlayerAliveAndSurvival(player))
+            return;
+
+        // 已经是成员时，会议中的 J 优先用于入会/打开投票页，不再要求附近必须有尊名纸条
+        if (foolComp != null && foolComp.isTarotMember(player.getUUID())) {
+            if (foolComp.inMeeting) {
+                if (player.hasEffect(ModEffects.TAROT_ASSEMBLY)) {
+                    TarotAssemblyManager.requestVoteScreen(player);
+                } else {
+                    TarotAssemblyManager.memberJoinMeeting(player);
+                }
+            } else {
+                player.displayClientMessage(
+                        Component.translatable("message.noellesroles.fool.already_member")
+                                .withStyle(ChatFormatting.YELLOW),
+                        true);
+            }
+            return;
+        }
+
+        // 检查玩家附近是否有尊名纸条
+        if (!isNearHonoredNote(player)) {
+            player.displayClientMessage(
+                    Component.translatable("message.noellesroles.fool.no_note_nearby")
+                            .withStyle(ChatFormatting.GRAY),
+                    true);
+            return;
+        }
+
+        // 检查是否已经是塔罗会成员
+        // 开始祷告读条（使用服务端tick计数）
+        // 注意：在简化实现中，我们直接完成祷告而不实现3秒读条
+        // 完整实现中应使用组件的isPraying状态 + serverTick检查
+        completePrayer(player);
+    }
+
+    /**
+     * 完成祷告
+     */
+    public static void completePrayer(ServerPlayer player) {
+        SREGameWorldComponent gameComponent = SREGameWorldComponent.KEY.get(player.level());
+        ServerLevel serverLevel = (ServerLevel) player.level();
+
+        ServerPlayer fool = TarotAssemblyManager.findFoolPlayer(serverLevel, gameComponent);
+        if (fool == null)
+            return;
+
+        FoolRoleData foolComp = RoleData.getNullable(FoolRoleData.class, fool);
+        if (foolComp == null)
+            return;
+
+        // 检查是否已达到最大成员数
+        if (!foolComp.addTarotMember(player.getUUID())) {
+            player.displayClientMessage(
+                    Component.translatable("message.noellesroles.fool.tarot_members_full",
+                            FoolRoleData.MAX_TAROT_MEMBERS)
+                            .withStyle(ChatFormatting.RED),
+                    true);
+            return;
+        }
+
+        // 通知玩家
+        player.displayClientMessage(
+                Component.translatable("message.noellesroles.fool.prayer_complete")
+                        .withStyle(ChatFormatting.GOLD),
+                true);
+
+        // 通知愚者
+        fool.displayClientMessage(
+                Component.translatable("message.noellesroles.fool.player_prayed", player.getName().getString())
+                        .withStyle(ChatFormatting.GOLD),
+                true);
+    }
+
+    /**
+     * 检查玩家附近是否有尊名纸条实体
+     */
+    public static boolean isNearHonoredNote(ServerPlayer player) {
+        Vec3 playerPos = player.position();
+        AABB searchBox = new AABB(
+                playerPos.x - NOTE_DETECTION_RANGE, playerPos.y - NOTE_DETECTION_RANGE,
+                playerPos.z - NOTE_DETECTION_RANGE,
+                playerPos.x + NOTE_DETECTION_RANGE, playerPos.y + NOTE_DETECTION_RANGE,
+                playerPos.z + NOTE_DETECTION_RANGE);
+
+        List<HonoredNoteItem.HonoredNoteEntity> entities = player.level().getEntitiesOfClass(
+                HonoredNoteItem.HonoredNoteEntity.class, searchBox,
+                entity -> true);
+
+        for (NoteEntity noteEntity : entities) {
+            double distance = player.distanceTo(noteEntity);
+            if (distance <= NOTE_DETECTION_RANGE) {
+                // 检查视线无障碍
+                if (hasLineOfSight(player, noteEntity)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 检查视线是否无障碍
+     */
+    private static boolean hasLineOfSight(ServerPlayer player, Entity target) {
+        Vec3 playerEye = player.getEyePosition();
+        Vec3 targetPos = target.position().add(0, target.getBbHeight() / 2.0, 0);
+
+        // 使用简单的射线检测
+        return player.level().clip(new net.minecraft.world.level.ClipContext(
+                playerEye, targetPos,
+                net.minecraft.world.level.ClipContext.Block.COLLIDER,
+                net.minecraft.world.level.ClipContext.Fluid.NONE,
+                player)).getType() == net.minecraft.world.phys.HitResult.Type.MISS;
+    }
+}

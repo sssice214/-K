@@ -1,0 +1,90 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.client.widget;
+
+import io.wifi.starrailexpress.api.data.RoleData;
+import io.wifi.starrailexpress.util.ShopEntry;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.PlayerFaceRenderer;
+import net.minecraft.client.player.AbstractClientPlayer;
+import net.minecraft.client.renderer.RenderType;
+import org.agmas.noellesroles.config.NoellesRolesConfig;
+import org.agmas.noellesroles.packet.ExecutionerSelectTargetC2SPacket;
+import org.agmas.noellesroles.role_data.killer.ExecutionerRoleData;
+import org.jetbrains.annotations.NotNull;
+
+/**
+ * Executioner选择目标的UI Widget
+ * 显示可选择的平民玩家，点击后发送选择请求
+ */
+public class ExecutionerPlayerWidget extends Button {
+    public final AbstractClientPlayer targetCandidate;
+
+    public ExecutionerPlayerWidget(int x, int y, @NotNull AbstractClientPlayer targetCandidate, int index) {
+        super(x, y, 16, 16, targetCandidate.getName(), (a) -> {
+            // 检查是否启用了手动选择目标功能
+            if (!NoellesRolesConfig.HANDLER.instance().executionerCanSelectTarget) {
+                return; // 如果未启用，则忽略点击事件
+            }
+            
+            ExecutionerRoleData component = RoleData.getNullable(ExecutionerRoleData.class, Minecraft.getInstance().player);
+            if (component != null && !component.targetSelected) {
+                ClientPlayNetworking.send(new ExecutionerSelectTargetC2SPacket(targetCandidate.getUUID()));
+            }
+        }, DEFAULT_NARRATION);
+        this.targetCandidate = targetCandidate;
+    }
+
+    protected void renderWidget(GuiGraphics context, int mouseX, int mouseY, float delta) {
+        ExecutionerRoleData component = RoleData.getNullable(ExecutionerRoleData.class, Minecraft.getInstance().player);
+        
+        // 如果还没有选择目标，显示可选择的玩家
+        if (component != null && !component.targetSelected) {
+            super.renderWidget(context, mouseX, mouseY, delta);
+            context.blitSprite(ShopEntry.Type.POISON.getTexture(), this.getX() - 7, this.getY() - 7, 30, 30);
+            PlayerFaceRenderer.draw(context, targetCandidate.getSkin().texture(), this.getX(), this.getY(), 16);
+            
+            if (this.isHovered()) {
+                this.drawShopSlotHighlight(context, this.getX(), this.getY(), 0);
+                context.renderTooltip(Minecraft.getInstance().font, targetCandidate.getName(), 
+                    this.getX() - 4 - Minecraft.getInstance().font.width(targetCandidate.getName()) / 2, 
+                    this.getY() - 9);
+            }
+        }
+        // 如果已经选择了目标，显示灰色
+        else {
+            super.renderWidget(context, mouseX, mouseY, delta);
+            context.setColor(0.25f, 0.25f, 0.25f, 0.5f);
+            context.blitSprite(ShopEntry.Type.POISON.getTexture(), this.getX() - 7, this.getY() - 7, 30, 30);
+            PlayerFaceRenderer.draw(context, targetCandidate.getSkin().texture(), this.getX(), this.getY(), 16);
+            context.setColor(1f, 1f, 1f, 1f);
+        }
+    }
+
+    private void drawShopSlotHighlight(GuiGraphics context, int x, int y, int z) {
+        int color = -1862287543;
+        context.fillGradient(RenderType.guiOverlay(), x, y, x + 16, y + 14, color, color, z);
+        context.fillGradient(RenderType.guiOverlay(), x, y + 14, x + 15, y + 15, color, color, z);
+        context.fillGradient(RenderType.guiOverlay(), x, y + 15, x + 14, y + 16, color, color, z);
+    }
+
+    public void renderString(GuiGraphics context, Font textRenderer, int color) {
+    }
+}

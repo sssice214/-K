@@ -1,0 +1,148 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.client;
+
+import com.mojang.blaze3d.pipeline.RenderTarget;
+import com.mojang.blaze3d.pipeline.TextureTarget;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.PostPass;
+import org.joml.Matrix4f;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.Function;
+
+public class PostProcessor {
+    private float m_time;
+    private final RenderTarget m_swapBuffer;
+    private final Matrix4f m_orthoMat = new Matrix4f();
+    public final List<PostPassEntry> passEntries = new ArrayList<>();
+
+    public PostProcessor() {
+        Minecraft mc = Minecraft.getInstance();
+        m_swapBuffer = new TextureTarget(mc.getMainRenderTarget().width, mc.getMainRenderTarget().height, false,
+                Minecraft.ON_OSX);
+        m_swapBuffer.setClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        updateOrthoMatrix();
+    }
+
+    public float getTime() {
+        return m_time;
+    }
+
+    public PostPassEntry addPassEntry(String in, String out, Function<PostPass, Boolean> inProcessor,
+            Function<PostPass, Boolean> outProcessor) {
+        Minecraft mc = Minecraft.getInstance();
+        PostPass inPass;
+        PostPass outPass;
+        try {
+            inPass = new PostPass(mc.getResourceManager(), in, mc.getMainRenderTarget(), m_swapBuffer, true);
+            inPass.setOrthoMatrix(m_orthoMat);
+        } catch (IOException e) {
+            e.printStackTrace();
+            return null;
+        }
+        try {
+            outPass = new PostPass(mc.getResourceManager(), out, m_swapBuffer, mc.getMainRenderTarget(), true);
+            outPass.setOrthoMatrix(m_orthoMat);
+        } catch (IOException e) {
+            e.printStackTrace();
+            return null;
+        }
+        PostPassEntry entry = new PostPassEntry(inPass, outPass, inProcessor, outProcessor);
+        passEntries.add(entry);
+        return entry;
+    }
+
+    public PostPassEntry addSinglePassEntry(String in, Function<PostPass, Boolean> inProcessor) {
+        return addPassEntry(in, "blit", inProcessor, null);
+    }
+
+    public void render(float partialTicks) {
+        render(partialTicks, false);
+    }
+
+    public void renderAllowCreative(float partialTicks) {
+        render(partialTicks, true);
+    }
+
+    private void render(float partialTicks, boolean allowCreative) {
+        m_time += partialTicks;
+
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null || mc.player.isSpectator() || (!allowCreative && mc.player.isCreative()))
+            return;
+
+        for (PostPassEntry entry : passEntries) {
+            if (entry.getInPass() == null || entry.getOutPass() == null ||
+                    entry.getInProcessor() != null && !entry.getInProcessor().apply(entry.getInPass()) ||
+                    entry.getOutProcessor() != null && !entry.getOutProcessor().apply(entry.getOutPass()))
+                continue;
+
+            entry.getInPass().process(partialTicks);
+            entry.getOutPass().process(partialTicks);
+        }
+    }
+
+    public void updateOrthoMatrix() {
+        Minecraft mc = Minecraft.getInstance();
+        m_orthoMat.setOrtho(0.0f, (float) mc.getMainRenderTarget().width, 0.0f, (float) mc.getMainRenderTarget().height,
+                .1f, 1000.0f);
+        for (PostPassEntry entry : passEntries) {
+            entry.getInPass().setOrthoMatrix(m_orthoMat);
+            entry.getOutPass().setOrthoMatrix(m_orthoMat);
+        }
+    }
+
+    public void resize(int w, int h) {
+        if (m_swapBuffer != null) {
+            m_swapBuffer.resize(w, h, false);
+        }
+        updateOrthoMatrix();
+    }
+
+    public class PostPassEntry {
+        private PostPass m_in;
+        private PostPass m_out;
+        private Function<PostPass, Boolean> m_inProcessor;
+        private Function<PostPass, Boolean> m_outProcessor;
+
+        public PostPassEntry(PostPass in, PostPass out, Function<PostPass, Boolean> inProcessor,
+                Function<PostPass, Boolean> outProcessor) {
+            m_in = in;
+            m_out = out;
+            m_inProcessor = inProcessor;
+            m_outProcessor = outProcessor;
+        }
+
+        public PostPass getInPass() {
+            return m_in;
+        }
+
+        public PostPass getOutPass() {
+            return m_out;
+        }
+
+        public Function<PostPass, Boolean> getInProcessor() {
+            return m_inProcessor;
+        }
+
+        public Function<PostPass, Boolean> getOutProcessor() {
+            return m_outProcessor;
+        }
+    }
+}

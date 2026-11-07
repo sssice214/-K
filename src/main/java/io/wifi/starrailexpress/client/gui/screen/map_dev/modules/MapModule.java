@@ -1,0 +1,124 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.client.gui.screen.map_dev.modules;
+
+import io.wifi.starrailexpress.cca.AreasWorldComponent;
+import io.wifi.starrailexpress.client.gui.widget.SreButton;
+import io.wifi.starrailexpress.client.SREClient;
+import io.wifi.starrailexpress.client.gui.screen.map_dev.*;
+import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.network.chat.Component;
+import java.util.List;
+
+public class MapModule implements TabModule {
+    private EditBox mapNameBox, mapImportBox;
+    /** 内容总高（按本次实际排到哪一行算，供滚动条用）。 */
+    private int contentHeight = 0;
+
+    @Override
+    public Component getTabTitle() {
+        return Component.translatable("sre.map_helper.tab.map");
+    }
+
+    @Override
+    public void init(LayoutContext layout, ModuleContext ctx, List<WidgetPlacement> placements) {
+        int y = 0, gap = 10, bh = 22;
+        int leftX = layout.leftColumnX(), rightX = layout.rightColumnX(2, gap);
+        int fullWidth = layout.contentWidth();
+        AreasWorldComponent areas = SREClient.areaComponent;
+        String currentName = areas == null || areas.mapName == null ? "" : areas.mapName;
+
+        mapNameBox = new EditBox(layout.font, leftX, y, fullWidth, bh,
+                Component.translatable("sre.map_helper.map_name"));
+        mapNameBox.setMaxLength(128);
+        mapNameBox.setValue(currentName);
+        placements.add(new WidgetPlacement(mapNameBox, y));
+
+        int row1 = y + bh + gap;
+        placements.add(
+                new WidgetPlacement(SreButton.create(Component.translatable("sre.map_helper.save_as_new"), b -> {
+                    String name = mapNameBox.getValue().trim();
+                    if (!name.isEmpty())
+                        ctx.sendOnly("sre:area_manager map save " + ctx.quoteCommandArgument(name));
+                }).bounds(leftX, row1, layout.columnWidth(2, gap), bh).build(), row1));
+        placements.add(
+                new WidgetPlacement(SreButton.create(Component.translatable("sre.map_helper.save_overwrite"), b -> {
+                    String name = mapNameBox.getValue().trim();
+                    if (!name.isEmpty())
+                        ctx.sendOnly("sre:area_manager map save " + ctx.quoteCommandArgument(name) + " force");
+                }).bounds(rightX, row1, layout.columnWidth(2, gap), bh).build(), row1));
+
+        int row2 = row1 + bh + gap;
+        placements.add(new WidgetPlacement(
+                SreButton.create(Component.translatable("sre.map_helper.load_map_config"), b -> {
+                    String name = mapNameBox.getValue().trim();
+                    if (!name.isEmpty())
+                        ctx.sendOnly("sre:area_manager map load " + ctx.quoteCommandArgument(name));
+                }).bounds(leftX, row2, layout.columnWidth(2, gap), bh).build(), row2));
+        placements.add(new WidgetPlacement(
+                SreButton
+                        .builder(Component.translatable("sre.map_helper.list_maps"),
+                                b -> ctx.sendOnly("sre:area_manager map list"))
+                        .bounds(rightX, row2, layout.columnWidth(2, gap), bh).build(),
+                row2));
+
+        int row3 = row2 + bh + gap;
+        mapImportBox = new EditBox(layout.font, leftX, row3, fullWidth, bh,
+                Component.translatable("sre.map_helper.import_filename_hint"));
+        mapImportBox.setMaxLength(128);
+        placements.add(new WidgetPlacement(mapImportBox, row3));
+
+        int row4 = row3 + bh + gap;
+        placements
+                .add(new WidgetPlacement(
+                        SreButton
+                                .builder(Component.translatable("sre.map_helper.import_as_map"),
+                                        b -> importMap(ctx, false))
+                                .bounds(leftX, row4, layout.columnWidth(2, gap), bh).build(),
+                        row4));
+        placements.add(new WidgetPlacement(
+                SreButton
+                        .builder(Component.translatable("sre.map_helper.import_overwrite"), b -> importMap(ctx, true))
+                        .bounds(rightX, row4, layout.columnWidth(2, gap), bh).build(),
+                row4));
+
+        int row5 = row4 + bh + gap;
+        placements.add(new WidgetPlacement(
+                SreButton.create(Component.translatable("sre.map_helper.create_blank_map"), b -> {
+                    ctx.sendOnly("sre:area_manager create_new");
+                    String name = mapNameBox.getValue().trim();
+                    if (!name.isEmpty())
+                        ctx.sendOnly("sre:area_manager map name " + ctx.quoteCommandArgument(name));
+                }).bounds(leftX, row5, fullWidth, bh).build(), row5));
+
+        // 初始物品等条目请到「全部设置」页里改（那边的字段是反射出来的，这里不再重复放一个点了就崩的按钮）
+        contentHeight = row5 + bh + 8;
+    }
+
+    private void importMap(ModuleContext ctx, boolean force) {
+        String filename = mapImportBox.getValue().trim();
+        String mapName = mapNameBox.getValue().trim();
+        if (filename.isEmpty() || mapName.isEmpty())
+            return;
+        ctx.sendOnly("sre:area_manager map import " + ctx.quoteCommandArgument(filename) + " as "
+                + ctx.quoteCommandArgument(mapName) + (force ? " force" : ""));
+    }
+
+    @Override
+    public int getContentHeight() {
+        return contentHeight;
+    }
+}

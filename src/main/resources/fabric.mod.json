@@ -1,0 +1,160 @@
+{
+  "schemaVersion": 1,
+  "id": "starrailexpress",
+  "version": "${version}",
+  "name": "StarRailExpress",
+  "description": "",
+  "authors": [
+    "Catmoon Train Team"
+  ],
+  "contact": {},
+  "license": "GPL-3.0-only",
+  "icon": "assets/starrailexpress/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "mixinsquared": [
+      "io.wifi.WatheMixinBlocker",
+      "io.wifi.SodiumExtraLightOptionMixinBlocker"
+    ],
+    "preLaunch": [
+      "io.wifi.WatheBlocker"
+    ],
+    "fabric-datagen": [
+      "org.agmas.noellesroles.client.NoellesrolesDataGenerator",
+      "io.wifi.starrailexpress.datagen.TMMDatagen"
+    ],
+    "client": [
+      "org.agmas.noellesroles.client.NoellesrolesClient",
+      "io.wifi.starrailexpress.client.SREClient"
+    ],
+    "main": [
+      "org.agmas.noellesroles.Noellesroles",
+      "io.wifi.starrailexpress.SRE"
+    ],
+    "cardinal-components": [
+      "org.agmas.noellesroles.component.ModComponents",
+      "org.agmas.noellesroles.cca.NRComponents",
+      "pro.fazeclan.river.stupid_express.constants.SEComponents",
+      "org.agmas.harpymodloader.component.HarpyModLoaderComponents",
+      "io.wifi.starrailexpress.cca.SREComponents"
+    ],
+    "voicechat": [
+      "org.agmas.noellesroles.voice.NoellesrolesVoiceChatPlugin",
+      "org.agmas.noellesroles.voice.HeliumBuzzVoicechatPlugin",
+      "org.agmas.noellesroles.voice.VoiceEffectsOpenALPlugin",
+      "org.agmas.noellesroles.voice.BeepRobotVoicechatPlugin",
+      "org.agmas.noellesroles.voice.VoiceExtraEffectsPlugin",
+      "pro.fazeclan.river.stupid_express.StupidExpressVoiceChatPlugin",
+      "io.wifi.starrailexpress.compat.TrainVoicePlugin"
+    ],
+    "modmenu": [
+      "io.wifi.ConfigCompact.modmenu.StarRailConfigEntry"
+    ],
+		"dynamiclights": [
+			"org.agmas.noellesroles.client.DynamiclightsEntry"
+		]
+  },
+  "accessWidener": "StarRailExpress.accesswidener",
+  "custom": {
+    "cardinal-components": [
+      "noellesroles:defibrillator",
+      "noellesroles:volume",
+      "noellesroles:ability",
+      "noellesroles:config",
+      "noellesroles:in_control",
+      "noellesroles:puppeteer",
+      "noellesroles:death_penalty",
+      "noellesroles:expedition",
+      "noellesroles:temporary_effect",
+      "noellesroles:ghost_state",
+      "noellesroles:helium_buzz",
+      "noellesroles:food_drink",
+      "noellesroles:infected",
+      "noellesroles:c4_back",
+      "noellesroles:dream_health",
+      "noellesroles:virtual_shield",
+      "starrailexpress:minigame_task",
+      "stupid_express:custom_winner",
+      "stupid_express:lovers",
+      "stupid_express:necromancer",
+      "stupid_express:refugee",
+      "stupid_express:skin_split_personality",
+      "stupid_express:split_personality",
+      "harpymodloader:modifier",
+      "starrailexpress:role_data",
+      "starrailexpress:train",
+      "starrailexpress:extra_slots",
+      "starrailexpress:clue",
+      "starrailexpress:game",
+      "starrailexpress:roles",
+      "starrailexpress:custom_roles",
+      "starrailexpress:custom_role_team",
+      "starrailexpress:areas",
+      "starrailexpress:monitor",
+      "starrailexpress:body_entity",
+      "starrailexpress:mood",
+      "starrailexpress:task",
+      "starrailexpress:murder_time_events",
+      "starrailexpress:shop",
+      "starrailexpress:network_stats",
+      "starrailexpress:dynamic_shop",
+      "starrailexpress:poison",
+      "starrailexpress:psycho",
+      "starrailexpress:blackout",
+      "starrailexpress:afk",
+      "starrailexpress:player_skins",
+      "starrailexpress:round_end",
+      "starrailexpress:note",
+      "starrailexpress:time",
+      "starrailexpress:autostart",
+      "starrailexpress:participation",
+      "starrailexpress:map_voting",
+      "starrailexpress:nametag_inventory",
+      "starrailexpress:player_progression",
+      "starrailexpress:ability",
+      "starrailexpress:armor",
+      "starrailexpress:weak_armor",
+      "starrailexpress:player_nunchuck",
+      "starrailexpress:mailbox",
+      "starrailexpress:player_damage_tracker",
+      "starrailexpress:custom_item_hit_marker"
+    ],
+    "loom:injected_interfaces": {
+      "net/minecraft/class_5483/class_5496": [
+        "io/wifi/starrailexpress/util/BlockSettingsAdditions"
+      ]
+    }
+  },
+  "mixins": [
+    "noellesroles.mixins.json",
+    "stupid_express.mixins.json",
+    "harpymodloader.mixins.json",
+    "starrailexpress.mixins.json",
+    "starrailexpress_exmo.mixins.json",
+    "wathe_blocker.mixins.json",
+    "sre_language.mixins.json"
+  ],
+  "depends": {
+    "minecraft": "1.21.1",
+    "wathe": "*",
+    "cloth-config": "*",
+    "modmenu": "*",
+    "voicechat": "*",
+    "architectury": "*",
+    "exposure": "*",
+    "sre_resource": "*"
+  },
+  "recommends": {
+    "exposure_polaroid": "*",
+    "sodium": ">=0.8.2",
+    "sodium-extra": "*"
+  },
+  "conflicts": {
+    "customskinloader": "*"
+  },
+  "breaks": {
+    "sodiumoptionsapi": "*",
+    "sodiumextras": "*",
+    "sodium": "<0.8.2"
+  }
+}

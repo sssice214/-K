@@ -1,0 +1,243 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.init.events;
+
+import io.wifi.starrailexpress.api.data.RoleData;
+import io.wifi.starrailexpress.cca.SREGameWorldComponent;
+import io.wifi.starrailexpress.cca.SREPlayerPsychoComponent;
+import io.wifi.starrailexpress.client.SREClient;
+import io.wifi.starrailexpress.event.OnPlayerDeath;
+import io.wifi.starrailexpress.rules.*;
+import io.wifi.starrailexpress.util.SREItemUtils;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.Item;
+import org.agmas.harpymodloader.component.WorldModifierComponent;
+import org.agmas.noellesroles.content.entity.PuppeteerBodyEntity;
+import org.agmas.noellesroles.content.entity.SREMinecart;
+import org.agmas.noellesroles.content.entity.WheelchairEntity;
+import org.agmas.noellesroles.game.modes.ChairWheelRaceGame;
+import org.agmas.noellesroles.game.command_block.DreadlordRole;
+import org.agmas.noellesroles.role_data.innocence.SaltedFishRoleData;
+import org.agmas.noellesroles.role_data.killer.DreadlordRoleData;
+import org.agmas.noellesroles.role_data.killer.InsaneKillerRoleData;
+import org.agmas.noellesroles.utils.RoleUtils;
+import org.agmas.noellesroles.init.ModEffects;
+import org.agmas.noellesroles.init.ModItems;
+import org.agmas.noellesroles.role.ModRoles;
+import pro.fazeclan.river.stupid_express.constants.SEModifiers;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * 规则谓词注册（ChatHudRules, CollisionRules, DropRules, RoleVisibilityRules 等）
+ */
+public class NRRulePredicateEvents {
+
+    public static List<Item> canThrowItems = new ArrayList<>();
+    public static final int TRACK_DISTANCE = 8;
+
+    public static void register() {
+        registerOnPlayerDeath();
+        registerChatHudRules();
+        registerRoleVisibilityRules();
+        registerCollisionRules();
+        registerDropRules();
+        populateCanThrowItems();
+    }
+
+    // --- OnPlayerDeath ---
+
+    private static void registerOnPlayerDeath() {
+        OnPlayerDeath.EVENT.register((victim, deathReason) -> {
+            SREItemUtils.clearItem(victim, ModItems.BOMB);
+            var gameWorldComponent = SREGameWorldComponent.KEY.get(victim.level());
+            if (victim.getVehicle() instanceof WheelchairEntity we) {
+                if (gameWorldComponent.isRole(victim, ModRoles.OLDMAN)) {
+                    we.discard();
+                }
+                victim.stopRiding();
+            }
+        });
+    }
+
+    // --- ChatHudRules ---
+
+    private static void registerChatHudRules() {
+        ChatHudRules.canUseChatHud.add((role -> role.getIdentifier()
+                .equals(ModRoles.INSANE_KILLER_ID)));
+        ChatHudRules.canUseChatHudPlayer.add(player -> {
+            return SREClient.gameComponent != null && SREClient.gameComponent.isRunning()
+                    && SREClient.gameComponent.getGameMode() instanceof ChairWheelRaceGame;
+        });
+    }
+
+    // --- RoleVisibilityRules ---
+
+    private static void registerRoleVisibilityRules() {
+        RoleVisibilityRules.canUseOtherPerson.add((role -> role.getIdentifier()
+                .equals(io.wifi.starrailexpress.api.TMMRoles.DISCOVERY_CIVILIAN.getIdentifier())));
+        RoleVisibilityRules.canUseOtherPerson.add((role -> role.getIdentifier()
+                .equals(ModRoles.INSANE_KILLER_ID)));
+        RoleVisibilityRules.canUseOtherPerson.add((role -> role.getIdentifier()
+                .equals(ModRoles.MONOKUMA_ID)));
+        RoleVisibilityRules.canUseOtherPerson.add((role -> role.getIdentifier()
+                .equals(ModRoles.MANIPULATOR_ID)));
+        RoleVisibilityRules.canUseOtherPerson.add((role -> role.getIdentifier()
+                .equals(ModRoles.PHANTOM_SPIRIT_ID)));
+        RoleVisibilityRules.canUseOtherPersonPlayer.add(NRRulePredicateEvents::dreadlordPsychoCamera);
+    }
+
+    /** 恐惧魔王只在狂暴中可以切人称，平时仍锁第一人称。 */
+    private static boolean dreadlordPsychoCamera(Player player) {
+        if (!DreadlordRole.isDreadlord(player)) {
+            return false;
+        }
+        if (SREPlayerPsychoComponent.KEY.get(player).getPsychoTicks() > 0) {
+            return true;
+        }
+        DreadlordRoleData data = DreadlordRole.dataOf(player);
+        return data != null && data.isKilling();
+    }
+
+    // --- CollisionRules ---
+
+    private static void registerCollisionRules() {
+        // 精神病杀手活跃时不可碰撞
+        CollisionRules.cantCollide.add(a -> {
+            final var gameWorldComponent = SREGameWorldComponent.KEY.get(a.level());
+            if (gameWorldComponent.isRole(a, ModRoles.INSANE_KILLER)) {
+                InsaneKillerRoleData insaneData = RoleData.getNullable(InsaneKillerRoleData.class, a);
+                if (insaneData != null && insaneData.isActive) {
+                    return true;
+                }
+            }
+            if (gameWorldComponent.isRole(a, ModRoles.SALTED_FISH)) {
+                SaltedFishRoleData saltedFishData = RoleData.getNullable(SaltedFishRoleData.class, a);
+                if (saltedFishData != null && saltedFishData.isActive()) {
+                    return true;
+                }
+            }
+            return false;
+        });
+
+        //
+
+        CollisionRules.cantPushableBy.add(a -> {
+            if (!(a instanceof Player p))
+                return false;
+            return RoleUtils.isPlayerTheModifier(p, SEModifiers.TWIN_CHILDREN);
+        });
+        CollisionRules.cantCollide.add(a -> {
+            return RoleUtils.isPlayerTheModifier(a, SEModifiers.TWIN_CHILDREN);
+        });
+
+        // 隐身/安全时间/无碰撞效果
+        CollisionRules.cantCollide.add(a -> {
+            return a.hasEffect(MobEffects.INVISIBILITY) || a.hasEffect(ModEffects.SAFE_TIME)
+                    || a.hasEffect(ModEffects.NO_COLLIDE);
+        });
+
+        // 傀儡身体不可被推动
+        CollisionRules.cantPushableBy.add(entity -> entity instanceof PuppeteerBodyEntity);
+        CollisionRules.cantPushableBy.add(entity -> entity instanceof SREMinecart);
+        // 多种条件不可被推动
+        CollisionRules.cantPushableBy.add(entity -> {
+            if (entity instanceof Player player) {
+                if (player.isInvisible() || player.hasEffect(MobEffects.INVISIBILITY)
+                        || player.hasEffect(ModEffects.SAFE_TIME)
+                        || player.hasEffect(ModEffects.NO_COLLIDE)) {
+                    return true;
+                }
+                var modifiers = WorldModifierComponent.KEY.get(player.level());
+                if (modifiers.isModifier(player.getUUID(), SEModifiers.FEATHER)) {
+                    return true;
+                }
+                var gameComp = SREGameWorldComponent.KEY.get(player.level());
+                if (gameComp != null) {
+                    if (gameComp.isRole(player, ModRoles.NOSTALGIST)) {
+                        return true;
+                    }
+                    if (gameComp.isRole(player, ModRoles.SALTED_FISH)) {
+                        SaltedFishRoleData saltedFishData = RoleData.getNullable(SaltedFishRoleData.class, player);
+                        if (saltedFishData != null && saltedFishData.isActive()) {
+                            return true;
+                        }
+
+                    }
+                    if (gameComp.isRole(player, ModRoles.INSANE_KILLER)) {
+                        InsaneKillerRoleData insaneKiller = RoleData.getNullable(InsaneKillerRoleData.class, player);
+                        if (insaneKiller != null && insaneKiller.isActive) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        });
+
+        // 傀儡身体不可被推动
+        CollisionRules.cantPushableBy
+                .add(entity -> (entity instanceof io.wifi.starrailexpress.content.entity.NoteEntity));
+    }
+
+    // --- DropRules ---
+
+    private static void registerDropRules() {
+        DropRules.canDropItem.addAll(List.of(
+                "noellesroles:small_dried_fish",
+                "exposure:stacked_photographs",
+                "exposure:album",
+                "exposure:photograph",
+                "noellesroles:cooked_haiman",
+                "noellesroles:mint_candies",
+                "noellesroles:alchemist_buff_potion",
+                "noellesroles:stalker_knife",
+                "noellesroles:yinyang_sword",
+                "noellesroles:stalker_knife_offhand",
+                "noellesroles:pill",
+                "noellesroles:recovery_pill",
+                "noellesroles:pocket_watch",
+                "noellesroles:throwing_knife",
+                "supplementaries:key",
+                "minecraft:emerald",
+                "minecraft:glass_bottle",
+                "noellesroles:shisiye",
+                "noellesroles:signed_paper",
+                "noellesroles:mercenary_contract",
+                "noellesroles:diving_helmet",
+                "noellesroles:night_vision_glasses",
+                "noellesroles:life_and_death_shape",
+                "noellesroles:noell_paperclip",
+                "noellesroles:jetpack",
+                "minecraft:clock",
+                "minecraft:lantern",
+                "noellesroles:passbook",
+                "noellesroles:tomato",
+                "minecraft:written_book"));
+    }
+
+    private static void populateCanThrowItems() {
+        BuiltInRegistries.ITEM.entrySet().stream()
+                .filter(entry -> DropRules.canDropItem.contains(entry.getKey().toString()))
+                .map(entry -> entry.getValue().getDefaultInstance().getItem())
+                .forEach(item -> {
+                    canThrowItems.add(item);
+                });
+    }
+}

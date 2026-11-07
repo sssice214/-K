@@ -1,0 +1,174 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.client.hud.roles;
+
+import java.util.UUID;
+
+import org.agmas.noellesroles.client.event.RoleHudRenderCallback;
+import org.agmas.noellesroles.handler.utils.BeeFamilyManager;
+import org.agmas.noellesroles.role.bouns.BounsRoles;
+import org.agmas.noellesroles.role_data.neutral.BeeFamilyRoleData;
+import org.agmas.noellesroles.utils.RoleUtils;
+
+import io.wifi.starrailexpress.api.SRERole;
+import io.wifi.starrailexpress.api.data.RoleData;
+import io.wifi.starrailexpress.cca.SREAbilityPlayerComponent;
+import io.wifi.starrailexpress.cca.SREPlayerShopComponent;
+import io.wifi.starrailexpress.client.util.SREClientUtils;
+import net.minecraft.ChatFormatting;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
+import net.minecraft.network.chat.Component;
+
+public class BeeFamilyHud {
+    public static void register() {
+
+        RoleHudRenderCallback.EVENT.register(BounsRoles.BEE_WASP.identifier(), (context, deltaTracker) -> {
+            Minecraft client = Minecraft.getInstance();
+            if (client.player.isSpectator())
+                return;
+            int screenHeight = client.getWindow().getGuiScaledHeight();
+            int x = 10; // 距离左边缘
+            int y = screenHeight - 20; // 距离底部
+
+            Font font = client.font;
+            {
+                BeeFamilyRoleData roleData = RoleData.getNullable(BeeFamilyRoleData.class, client.player);
+                if (roleData == null) {
+                    return;
+                }
+
+                Component cdText = Component
+                        .translatable("hud.noellesroles.bee_family.channel",
+                                roleData.beeChannel
+                                        ? Component.translatable("hud.noellesroles.bee_family.channel.bee")
+                                                .withStyle(ChatFormatting.YELLOW)
+                                        : Component.translatable("hud.noellesroles.bee_family.channel.normal")
+                                                .withStyle(ChatFormatting.AQUA))
+                        .withStyle(ChatFormatting.GOLD);
+                context.drawString(font, cdText, x, y - 10, 0xffffffff);
+            }
+        });
+        RoleHudRenderCallback.EVENT.register(BounsRoles.BEE_WORKER.identifier(), (context, deltaTracker) -> {
+            Minecraft client = Minecraft.getInstance();
+            if (client.player.isSpectator())
+                return;
+            var cca = SREAbilityPlayerComponent.KEY.get(client.player);
+
+            // 渲染位置 - 右下角
+            int screenHeight = client.getWindow().getGuiScaledHeight();
+            int x = 10; // 距离左边缘
+            int y = screenHeight - 20; // 距离底部
+
+            Font textRenderer = client.font;
+
+            if (cca.duration > 0) {
+                String cdSeconds = String.format("%.1fs", cca.duration / 20f);
+                Component cdText = Component
+                        .translatable("hud.noellesroles.bee_worker.tip",
+                                Component.literal(cdSeconds).withStyle(ChatFormatting.RED))
+                        .withStyle(ChatFormatting.YELLOW);
+                context.drawString(textRenderer, cdText, x, y, 0xffffffff);
+            }
+            {
+                BeeFamilyRoleData roleData = RoleData.getNullable(BeeFamilyRoleData.class, client.player);
+                if (roleData == null) {
+                    return;
+                }
+
+                Component cdText = Component
+                        .translatable("hud.noellesroles.bee_family.channel",
+                                roleData.beeChannel
+                                        ? Component.translatable("hud.noellesroles.bee_family.channel.bee")
+                                                .withStyle(ChatFormatting.YELLOW)
+                                        : Component.translatable("hud.noellesroles.bee_family.channel.normal")
+                                                .withStyle(ChatFormatting.AQUA))
+                        .withStyle(ChatFormatting.GOLD);
+                context.drawString(textRenderer, cdText, x, y - 10, 0xffffffff);
+            }
+        });
+
+        RoleHudRenderCallback.EVENT.register(BounsRoles.BEE_QUEEN.identifier(), (context, deltaTracker) -> {
+            Minecraft client = Minecraft.getInstance();
+
+            var cca = SREAbilityPlayerComponent.KEY.get(client.player);
+            var shopcca = SREPlayerShopComponent.KEY.get(client.player);
+
+            // 渲染位置 - 右下角
+            int screenHeight = client.getWindow().getGuiScaledHeight();
+            int x = 10; // 距离左边缘
+            int y = screenHeight - 20; // 距离底部
+
+            Font textRenderer = client.font;
+
+            if (cca.hasCooldown()) {
+                String cdSeconds = cca.getCooldownStr();
+                Component cdText = Component.translatable("hud.noellesroles.bee_queen.spawn.cooldown", cdSeconds)
+                        .withStyle(ChatFormatting.RED);
+                context.drawString(textRenderer, cdText, x, y, 0xffffffff);
+
+            } else if (shopcca.balance < BeeFamilyManager.REVIVE_COST_MONEY) {
+                Component cdText = Component
+                        .translatable("hud.noellesroles.bee_queen.spawn.cost", BeeFamilyManager.REVIVE_COST_MONEY)
+                        .withStyle(ChatFormatting.RED);
+                context.drawString(textRenderer, cdText, x, y, 0xffffffff);
+            } else {
+                Component cdText = Component.translatable("hud.noellesroles.bee_queen.spawn.ready")
+                        .withStyle(ChatFormatting.GREEN);
+                context.drawString(textRenderer, cdText, x, y, 0xffffffff);
+            }
+            {
+                SRERole reviveRole = BounsRoles.BEE_WORKER;
+                if (cca.status > 0) {
+                    reviveRole = BounsRoles.BEE_WASP;
+                }
+                Component cdText = Component
+                        .translatable("hud.noellesroles.bee_queen.tip", RoleUtils.getRoleNameWithColor(reviveRole))
+                        .withStyle(ChatFormatting.GOLD);
+                context.drawString(textRenderer, cdText, x, y - 10, 0xffffffff);
+            }
+
+            {
+                BeeFamilyRoleData roleData = RoleData.getNullable(BeeFamilyRoleData.class, client.player);
+                if (roleData == null) {
+                    return;
+                }
+                {
+                    UUID target = roleData.markTarget;
+                    var info = SREClientUtils.getPlayerInfoByUid(target);
+                    if (info != null) {
+                        Component cdText = Component
+                                .translatable("hud.noellesroles.bee_family.successor",
+                                        Component.literal(info.getProfile().getName()).withStyle(ChatFormatting.AQUA))
+                                .withStyle(ChatFormatting.GOLD);
+                        context.drawString(textRenderer, cdText, x, y - 30, 0xffffffff);
+                    }
+                }
+                {
+                    Component cdText = Component
+                            .translatable("hud.noellesroles.bee_family.channel",
+                                    roleData.beeChannel
+                                            ? Component.translatable("hud.noellesroles.bee_family.channel.bee")
+                                                    .withStyle(ChatFormatting.YELLOW)
+                                            : Component.translatable("hud.noellesroles.bee_family.channel.normal")
+                                                    .withStyle(ChatFormatting.AQUA))
+                            .withStyle(ChatFormatting.GOLD);
+                    context.drawString(textRenderer, cdText, x, y - 20, 0xffffffff);
+                }
+            }
+        });
+    }
+}

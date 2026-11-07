@@ -1,0 +1,304 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.register;
+
+import io.wifi.starrailexpress.SRE;
+import io.wifi.starrailexpress.api.replay.ReplayPayload;
+import io.wifi.starrailexpress.content.vote.network.VoteCastC2SPacket;
+import io.wifi.starrailexpress.content.vote.network.VoteSyncS2CPacket;
+import io.wifi.starrailexpress.network.*;
+import io.wifi.starrailexpress.network.original.*;
+import io.wifi.starrailexpress.network.packet.CustomNarratorPacket;
+import io.wifi.starrailexpress.network.packet.CustomParticleS2CPayload;
+import io.wifi.starrailexpress.network.packet.ModVersionPacket;
+import io.wifi.starrailexpress.network.packet.RoleRotationConfirmC2SPacket;
+import io.wifi.starrailexpress.network.packet.RoleRotationSelectC2SPacket;
+import io.wifi.starrailexpress.network.packet.RoleRotationSyncS2CPacket;
+import io.wifi.starrailexpress.network.packet.StaminaS2CPacket;
+import io.wifi.starrailexpress.network.packet.SyncRoomToPlayerPayload;
+import io.wifi.starrailexpress.network.packet.VolunteerCommitC2SPacket;
+import io.wifi.starrailexpress.network.packet.VolunteerDraftSyncS2CPacket;
+import io.wifi.starrailexpress.scenery.network.SceneAssetNetwork;
+import io.wifi.starrailexpress.util.PoisonComponentUtils;
+import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
+import org.agmas.noellesroles.game.modes.fourthroom.network.*;
+
+/**
+ * 网络数据包类型注册，从 {@link SRE#onInitialize()} 中按类别剥离归一化而来。
+ */
+public class SREPayloadRegister {
+
+    public static void registerPayloadTypes() {
+        SceneAssetNetwork.registerPayloadTypes();
+        // 自定义列车物品·投掷物的区域粒子（服务端发一次，客户端自己渲染）
+        PayloadTypeRegistry.playS2C().register(
+                io.wifi.starrailexpress.network.CustomAreaParticlePayload.ID,
+                io.wifi.starrailexpress.network.CustomAreaParticlePayload.CODEC);
+        // 自定义修饰符「死亡后倒计时」状态（只发给当事人，客户端画倒计时 HUD）
+        PayloadTypeRegistry.playS2C().register(
+                io.wifi.starrailexpress.network.packet.CustomModifierCountdownPacket.ID,
+                io.wifi.starrailexpress.network.packet.CustomModifierCountdownPacket.CODEC);
+        // 商店价格同步 / Shop price sync
+        PayloadTypeRegistry.playS2C().register(
+                io.wifi.starrailexpress.shop.network.ShopPriceHandshakeS2CPayload.TYPE,
+                io.wifi.starrailexpress.shop.network.ShopPriceHandshakeS2CPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(
+                io.wifi.starrailexpress.shop.network.ShopPriceDataS2CPayload.TYPE,
+                io.wifi.starrailexpress.shop.network.ShopPriceDataS2CPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(
+                io.wifi.starrailexpress.shop.network.ShopPriceRequestC2SPayload.TYPE,
+                io.wifi.starrailexpress.shop.network.ShopPriceRequestC2SPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(VoteSyncS2CPacket.TYPE, VoteSyncS2CPacket.CODEC);
+        PayloadTypeRegistry.playC2S().register(VoteCastC2SPacket.TYPE, VoteCastC2SPacket.CODEC);
+        PayloadTypeRegistry.playS2C().register(ModVersionPacket.ID, ModVersionPacket.CODEC);
+        PayloadTypeRegistry.playC2S().register(ModVersionPacket.ID, ModVersionPacket.CODEC);
+        PayloadTypeRegistry.playS2C().register(CustomNarratorPacket.ID, CustomNarratorPacket.CODEC);
+
+        PayloadTypeRegistry.playS2C().register(StaminaS2CPacket.ID, StaminaS2CPacket.CODEC);
+        PayloadTypeRegistry.playS2C().register(
+                io.wifi.starrailexpress.network.packet.MobRiotStateS2CPacket.ID,
+                io.wifi.starrailexpress.network.packet.MobRiotStateS2CPacket.CODEC);
+
+        PayloadTypeRegistry.playS2C().register(SyncRoomToPlayerPayload.ID, SyncRoomToPlayerPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(SyncRoomToPlayerPayload.ID, SyncRoomToPlayerPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(StreamingSpectatorPayload.ID, StreamingSpectatorPayload.CODEC);
+
+        PayloadTypeRegistry.playS2C().register(IsLobbyConfigPayload.ID, IsLobbyConfigPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(IsLobbyConfigPayload.ID, IsLobbyConfigPayload.CODEC);
+
+        PayloadTypeRegistry.playS2C().register(JoinSpecGroupPayload.ID, JoinSpecGroupPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(JoinSpecGroupPayload.ID, JoinSpecGroupPayload.CODEC);
+
+        PayloadTypeRegistry.playS2C().register(OnGameStartedPayload.TYPE, OnGameStartedPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(OnGameFinishedPayload.TYPE, OnGameFinishedPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(ClickLockoutPayload.TYPE, ClickLockoutPayload.CODEC);
+
+        // 高级相机轨道
+        PayloadTypeRegistry.playS2C().register(net.exmo.sre.camera.AdvancedCameraPayload.ID,
+                net.exmo.sre.camera.AdvancedCameraPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(net.exmo.sre.planecrash.PlaneCrashIntroPayload.ID,
+                net.exmo.sre.planecrash.PlaneCrashIntroPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(net.exmo.sre.planecrash.PlaneCrashTremorPayload.ID,
+                net.exmo.sre.planecrash.PlaneCrashTremorPayload.CODEC);
+
+        PayloadTypeRegistry.playS2C().register(SyncMapConfigPayload.ID, SyncMapConfigPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(TriggerScreenEdgeEffectPayload.ID,
+                TriggerScreenEdgeEffectPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(UpdateSkinSelectedPayload.ID, UpdateSkinSelectedPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(UpdateNameTagSelectedPayload.ID,
+                UpdateNameTagSelectedPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(RemoveStatusBarPayload.ID, RemoveStatusBarPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(TriggerStatusBarPayload.ID, TriggerStatusBarPayload.CODEC);
+        // 自定义列车物品的冷却同步（冷却键是未注册物品，发不了原版 ClientboundCooldownPacket）
+        PayloadTypeRegistry.playS2C().register(CustomItemCooldownS2CPayload.ID, CustomItemCooldownS2CPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(BreakArmorPayload.ID, BreakArmorPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(ShootMuzzleS2CPayload.ID, ShootMuzzleS2CPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(SniperScopeStateS2CPayload.TYPE,
+                SniperScopeStateS2CPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(PoisonComponentUtils.PoisonOverlayPayload.ID,
+                PoisonComponentUtils.PoisonOverlayPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(GunDropPayload.ID, GunDropPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(TaskCompletePayload.ID, TaskCompletePayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(AnnounceWelcomePayload.ID, AnnounceWelcomePayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(AnnounceEndingPayload.ID, AnnounceEndingPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(ReplayPayload.ID, ReplayPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(SecurityCameraModePayload.ID, SecurityCameraModePayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(ShowStatsPayload.ID, ShowStatsPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(PlayerStatsSyncPayload.ID, PlayerStatsSyncPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(PlayerDataPartSyncPayload.ID, PlayerDataPartSyncPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(ProgressionQuestToastPayload.ID, ProgressionQuestToastPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(SkillCastAnnouncePayload.ID, SkillCastAnnouncePayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(io.wifi.starrailexpress.network.HatEquipmentSyncPayload.ID,
+                io.wifi.starrailexpress.network.HatEquipmentSyncPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(io.wifi.starrailexpress.network.MorphSyncPayload.ID,
+                io.wifi.starrailexpress.network.MorphSyncPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(io.wifi.starrailexpress.network.PlushEquipmentSyncPayload.ID,
+                io.wifi.starrailexpress.network.PlushEquipmentSyncPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(io.wifi.starrailexpress.network.PetSyncPayload.ID,
+                io.wifi.starrailexpress.network.PetSyncPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(io.wifi.starrailexpress.network.UpdatePetPublicPayload.ID,
+                io.wifi.starrailexpress.network.UpdatePetPublicPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(io.wifi.starrailexpress.network.RoleRosterSyncPayload.ID,
+                io.wifi.starrailexpress.network.RoleRosterSyncPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(io.wifi.starrailexpress.sponsor.SponsorListPayload.ID,
+                io.wifi.starrailexpress.sponsor.SponsorListPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(io.wifi.starrailexpress.network.OpenRoleRosterScreenPayload.ID,
+                io.wifi.starrailexpress.network.OpenRoleRosterScreenPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(io.wifi.starrailexpress.network.MapIntroRequestPayload.ID,
+                io.wifi.starrailexpress.network.MapIntroRequestPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(io.wifi.starrailexpress.network.MapIntroSyncPayload.ID,
+                io.wifi.starrailexpress.network.MapIntroSyncPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(io.wifi.starrailexpress.network.MapRotationTogglePayload.ID,
+                io.wifi.starrailexpress.network.MapRotationTogglePayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(io.wifi.starrailexpress.network.MapRotationSyncPayload.ID,
+                io.wifi.starrailexpress.network.MapRotationSyncPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(io.wifi.starrailexpress.network.RoleRosterUpdatePayload.ID,
+                io.wifi.starrailexpress.network.RoleRosterUpdatePayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(ShowSelectedMapUIPayload.ID, ShowSelectedMapUIPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(MapVotingResultsPayload.TYPE, MapVotingResultsPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(io.wifi.starrailexpress.network.MapDepartCancelPayload.TYPE,
+                io.wifi.starrailexpress.network.MapDepartCancelPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(CloseUiPayload.ID, CloseUiPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(PlayerDeathPayload.ID, PlayerDeathPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(FourthRoomStatePayload.ID, FourthRoomStatePayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(FourthRoomTableEffectsPayload.ID,
+                FourthRoomTableEffectsPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(OpenFourthRoomPeekDeckPayload.ID,
+                OpenFourthRoomPeekDeckPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(OpenSkinScreenPaylod.ID, OpenSkinScreenPaylod.CODEC);
+        PayloadTypeRegistry.playS2C().register(OpenProgressionScreenPayload.ID,
+                OpenProgressionScreenPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(io.wifi.starrailexpress.network.OpenBackpackScreenPayload.ID,
+                io.wifi.starrailexpress.network.OpenBackpackScreenPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(OpenClueArchivePayload.ID, OpenClueArchivePayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(io.wifi.starrailexpress.network.OpenRoleUnlockScreenPayload.ID,
+                io.wifi.starrailexpress.network.OpenRoleUnlockScreenPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(io.wifi.starrailexpress.network.RoleUnlockedHudPayload.ID,
+                io.wifi.starrailexpress.network.RoleUnlockedHudPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(io.wifi.starrailexpress.network.packet.SyncWaypointsPacket.ID,
+                io.wifi.starrailexpress.network.packet.SyncWaypointsPacket.CODEC);
+        PayloadTypeRegistry.playS2C().register(
+                io.wifi.starrailexpress.network.packet.SyncWaypointVisibilityPacket.ID,
+                io.wifi.starrailexpress.network.packet.SyncWaypointVisibilityPacket.CODEC);
+        PayloadTypeRegistry.playS2C().register(
+                io.wifi.starrailexpress.network.packet.SyncSpecificWaypointVisibilityPacket.ID,
+                io.wifi.starrailexpress.network.packet.SyncSpecificWaypointVisibilityPacket.CODEC);
+        PayloadTypeRegistry.playC2S().register(
+                io.wifi.starrailexpress.network.packet.WaypointDeleteC2SPayload.ID,
+                io.wifi.starrailexpress.network.packet.WaypointDeleteC2SPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(KnifeStabPayload.ID, KnifeStabPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(GunShootPayload.ID, GunShootPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(SniperShootPayload.TYPE, SniperShootPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(TrainDummySpawnC2SPayload.ID, TrainDummySpawnC2SPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(
+                io.wifi.starrailexpress.network.original.CustomItemFirePayload.TYPE,
+                io.wifi.starrailexpress.network.original.CustomItemFirePayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(StoreBuyPayload.ID, StoreBuyPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(NoteEditPayload.ID, NoteEditPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(RequestOpenClueArchivePayload.ID,
+                RequestOpenClueArchivePayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(io.wifi.starrailexpress.network.VoteForMapPayload.ID,
+                io.wifi.starrailexpress.network.VoteForMapPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(SecurityCameraExitRequestPayload.ID,
+                SecurityCameraExitRequestPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(NunchuckHitPayload.ID, NunchuckHitPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(CardPlayPayload.ID, CardPlayPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(BuyFourthRoomItemPayload.ID, BuyFourthRoomItemPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(RevealIdentityPayload.ID, RevealIdentityPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(CompleteFourthRoomTaskPayload.ID,
+                CompleteFourthRoomTaskPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(EndTurnPayload.ID, EndTurnPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(UseAssassinationItemPayload.ID,
+                UseAssassinationItemPayload.CODEC);
+
+        // Chat Dialogue
+        PayloadTypeRegistry.playS2C().register(net.exmo.sre.client.chat.OpenChatDialoguePayload.ID,
+                net.exmo.sre.client.chat.OpenChatDialoguePayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(net.exmo.sre.client.chat.ChatDialogueAdvancePayload.ID,
+                net.exmo.sre.client.chat.ChatDialogueAdvancePayload.CODEC);
+
+        // Subtitle 字幕报幕
+        PayloadTypeRegistry.playS2C().register(net.exmo.sre.subtitle.SubtitleS2CPayload.ID,
+                net.exmo.sre.subtitle.SubtitleS2CPayload.CODEC);
+
+        // 紧急会议系统
+        PayloadTypeRegistry.playS2C().register(net.exmo.sre.meeting.network.MeetingStateS2CPayload.ID,
+                net.exmo.sre.meeting.network.MeetingStateS2CPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(net.exmo.sre.meeting.network.MeetingSpeakC2SPayload.ID,
+                net.exmo.sre.meeting.network.MeetingSpeakC2SPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(net.exmo.sre.meeting.network.MeetingVoteResultS2CPayload.ID,
+                net.exmo.sre.meeting.network.MeetingVoteResultS2CPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(net.exmo.sre.meeting.network.MeetingReportC2SPayload.ID,
+                net.exmo.sre.meeting.network.MeetingReportC2SPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(net.exmo.sre.meeting.network.MeetingCooldownS2CPayload.ID,
+                net.exmo.sre.meeting.network.MeetingCooldownS2CPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(net.exmo.sre.meeting.network.MeetingSkipC2SPayload.ID,
+                net.exmo.sre.meeting.network.MeetingSkipC2SPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(net.exmo.sre.meeting.network.MeetingSkipStateS2CPayload.ID,
+                net.exmo.sre.meeting.network.MeetingSkipStateS2CPayload.CODEC);
+
+        // Mailbox 已移除：邮箱系统迁移至网站端（新数据库表），游戏内邮箱方块与逻辑已删除。
+
+        // 实体交互方块数据包
+        PayloadTypeRegistry.playS2C().register(EntityInteractionBlockPayload.OpenUI.TYPE,
+                EntityInteractionBlockPayload.OpenUI.CODEC);
+        PayloadTypeRegistry.playS2C().register(EntityInteractionBlockPayload.SyncBlockEntity.TYPE,
+                EntityInteractionBlockPayload.SyncBlockEntity.CODEC);
+        PayloadTypeRegistry.playC2S().register(EntityInteractionBlockPayload.SaveConfig.TYPE,
+                EntityInteractionBlockPayload.SaveConfig.CODEC);
+
+        // 展示方块（文本展示 / 方块展示）数据包：保存后的同步复用原版方块实体更新包，不需要额外类型
+        PayloadTypeRegistry.playS2C().register(DisplayBlockPayload.OpenUI.TYPE, DisplayBlockPayload.OpenUI.CODEC);
+        PayloadTypeRegistry.playC2S().register(DisplayBlockPayload.Save.TYPE, DisplayBlockPayload.Save.CODEC);
+
+        // 小游戏任务点数据包
+        PayloadTypeRegistry.playS2C().register(MinigameQuestPayload.OpenConfig.TYPE,
+                MinigameQuestPayload.OpenConfig.CODEC);
+        PayloadTypeRegistry.playS2C().register(MinigameQuestPayload.OpenGame.TYPE,
+                MinigameQuestPayload.OpenGame.CODEC);
+        PayloadTypeRegistry.playC2S().register(MinigameQuestPayload.SaveConfig.TYPE,
+                MinigameQuestPayload.SaveConfig.CODEC);
+        PayloadTypeRegistry.playC2S().register(MinigameQuestPayload.CompleteGame.TYPE,
+                MinigameQuestPayload.CompleteGame.CODEC);
+        PayloadTypeRegistry.playS2C().register(TicketPayload.OpenOfficeConfig.TYPE,
+                TicketPayload.OpenOfficeConfig.CODEC);
+        PayloadTypeRegistry.playS2C().register(TicketPayload.OpenOfficeShop.TYPE,
+                TicketPayload.OpenOfficeShop.CODEC);
+        PayloadTypeRegistry.playC2S().register(TicketPayload.SaveOfficeConfig.TYPE,
+                TicketPayload.SaveOfficeConfig.CODEC);
+        PayloadTypeRegistry.playC2S().register(TicketPayload.BuyTicket.TYPE, TicketPayload.BuyTicket.CODEC);
+        PayloadTypeRegistry.playS2C().register(EffectGeneratorPayload.OpenConfig.TYPE,
+                EffectGeneratorPayload.OpenConfig.CODEC);
+        PayloadTypeRegistry.playC2S().register(EffectGeneratorPayload.SaveConfig.TYPE,
+                EffectGeneratorPayload.SaveConfig.CODEC);
+
+        // VOLUNTEER轮选数据包
+        PayloadTypeRegistry.playC2S().register(VolunteerCommitC2SPacket.TYPE, VolunteerCommitC2SPacket.CODEC);
+        PayloadTypeRegistry.playS2C().register(VolunteerDraftSyncS2CPacket.TYPE,
+                VolunteerDraftSyncS2CPacket.CODEC);
+
+        // 职业轮选数据包
+        PayloadTypeRegistry.playC2S().register(RoleRotationSelectC2SPacket.TYPE,
+                RoleRotationSelectC2SPacket.CODEC);
+        PayloadTypeRegistry.playC2S().register(RoleRotationConfirmC2SPacket.TYPE,
+                RoleRotationConfirmC2SPacket.CODEC);
+        PayloadTypeRegistry.playS2C().register(RoleRotationSyncS2CPacket.TYPE, RoleRotationSyncS2CPacket.CODEC);
+
+        // 志愿海选模式数据包
+        PayloadTypeRegistry.playC2S().register(
+                io.wifi.starrailexpress.network.packet.VolunteerOpenSelectC2SPacket.TYPE,
+                io.wifi.starrailexpress.network.packet.VolunteerOpenSelectC2SPacket.CODEC);
+        PayloadTypeRegistry.playC2S().register(
+                io.wifi.starrailexpress.network.packet.VolunteerOpenReadyC2SPacket.TYPE,
+                io.wifi.starrailexpress.network.packet.VolunteerOpenReadyC2SPacket.CODEC);
+        PayloadTypeRegistry.playS2C().register(
+                io.wifi.starrailexpress.network.packet.VolunteerOpenSyncS2CPacket.TYPE,
+                io.wifi.starrailexpress.network.packet.VolunteerOpenSyncS2CPacket.CODEC);
+
+        // 全局战绩 / 回放查询数据包
+        PayloadTypeRegistry.playC2S().register(net.exmo.sre.record.network.RecordListRequestC2SPayload.ID,
+                net.exmo.sre.record.network.RecordListRequestC2SPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(net.exmo.sre.record.network.RecordListS2CPayload.ID,
+                net.exmo.sre.record.network.RecordListS2CPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(net.exmo.sre.record.network.RecordReplayRequestC2SPayload.ID,
+                net.exmo.sre.record.network.RecordReplayRequestC2SPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(net.exmo.sre.record.network.RecordReplayS2CPayload.ID,
+                net.exmo.sre.record.network.RecordReplayS2CPayload.CODEC);
+
+        // 通用"自定义形状粒子"包：服务端发 id + 原点 + 参数，客户端按 id 生成形状
+        PayloadTypeRegistry.playS2C().register(CustomParticleS2CPayload.ID, CustomParticleS2CPayload.CODEC);
+    }
+}

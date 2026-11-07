@@ -1,0 +1,203 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.game;
+
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import io.wifi.starrailexpress.SRE;
+import io.wifi.starrailexpress.cca.AreasWorldComponent;
+import io.wifi.starrailexpress.content.block.*;
+import io.wifi.starrailexpress.content.block.api.AutoResetBlockInterface;
+import io.wifi.starrailexpress.content.block.api.LightBlockInterface;
+import io.wifi.starrailexpress.customblock.CustomBlock;
+import io.wifi.starrailexpress.customblock.CustomBlockLoader;
+import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.block.LecternBlock;
+import net.minecraft.world.level.block.entity.LecternBlockEntity;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.BedPart;
+import net.minecraft.world.level.levelgen.structure.BoundingBox;
+import net.minecraft.world.level.storage.LevelResource;
+
+import java.io.File;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+
+public class MapResetManager {
+    public static class CachedBlockPos {
+        int x, y, z;
+
+        public CachedBlockPos(int x, int y, int z) {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+        }
+
+        public CachedBlockPos(BlockPos blockPos) {
+            this.x = blockPos.getX();
+            this.y = blockPos.getY();
+            this.z = blockPos.getZ();
+        }
+
+        public BlockPos getBlockPos() {
+            return new BlockPos(this.x, this.y, this.z);
+        }
+    }
+
+    public static class MapResetInfos {
+        public ArrayList<CachedBlockPos> blocks;
+
+        public ArrayList<BlockPos> getAllBlockPos() {
+            if (this.blocks == null)
+                return new ArrayList<>();
+            ArrayList<BlockPos> arr = new ArrayList<>();
+            for (CachedBlockPos block : this.blocks) {
+                arr.add(block.getBlockPos());
+            }
+            return arr;
+        }
+
+        public MapResetInfos(ArrayList<BlockPos> inputBlocks) {
+            blocks = new ArrayList<>();
+            for (BlockPos block : inputBlocks) {
+                blocks.add(new CachedBlockPos(block));
+            }
+        }
+    }
+
+    public static Gson gson = new Gson();
+
+    public static void scanArea(ServerLevel serverWorld, AreasWorldComponent areas) {
+        GameUtils.resetPoints.clear();
+
+        if (areas.areasSettings.noReset) {
+            SRE.LOGGER.info("No nedd to scan: no reset flag found. " + areas.toString());
+            return;
+        }
+        SRE.LOGGER.info("Scanning train " + areas.mapName);
+
+        BlockPos backupMinPos = BlockPos.containing(areas.getResetTemplateArea().getMinPosition());
+        BlockPos backupMaxPos = BlockPos.containing(areas.getResetTemplateArea().getMaxPosition());
+        BoundingBox backupTrainBox = BoundingBox.fromCorners(backupMinPos, backupMaxPos);
+        BlockPos trainMinPos = BlockPos.containing(areas.getResetPasteArea().getMinPosition());
+        BlockPos trainMaxPos = trainMinPos.offset(backupTrainBox.getLength());
+        BoundingBox trainBox = BoundingBox.fromCorners(trainMinPos, trainMaxPos);
+        for (int k = trainBox.minZ(); k <= trainBox.maxZ(); k++) {
+            for (int l = trainBox.minY(); l <= trainBox.maxY(); l++) {
+                for (int m = trainBox.minX(); m <= trainBox.maxX(); m++) {
+                    BlockPos blockPos6 = new BlockPos(m, l, k);
+                    BlockState blockState = serverWorld.getBlockState(blockPos6);
+                    if (blockState.getBlock() instanceof ToiletBlock) {
+                        GameUtils.resetPoints.add(blockPos6);
+                    } else if (blockState.getBlock() instanceof SmallDoorBlock) {
+                        GameUtils.resetPoints.add(blockPos6);
+                    } else if (blockState.getBlock() instanceof TrimmedBedBlock) {
+                        if (blockState.getValue(TrimmedBedBlock.PART).equals(BedPart.HEAD)) {
+                            GameUtils.resetPoints.add(blockPos6);
+                        }
+                    } else if (blockState.getBlock() instanceof FoodPlatterBlock) {
+                        GameUtils.resetPoints.add(blockPos6);
+
+                    } else if (blockState.getBlock() instanceof LecternBlock) {
+                        if (serverWorld.getBlockEntity(blockPos6) instanceof LecternBlockEntity) {
+                            GameUtils.resetPoints.add(blockPos6);
+                        }
+                    } else if (blockState.getBlock() instanceof SprinklerBlock) {
+                        GameUtils.resetPoints.add(blockPos6);
+                    } else if (blockState.getBlock() instanceof NeonPillarBlock) {
+                        GameUtils.resetPoints.add(blockPos6);
+                    } else if (blockState.getBlock() instanceof NeonTubeBlock) {
+                        GameUtils.resetPoints.add(blockPos6);
+                    } else if (blockState.getBlock() instanceof LightBlockInterface) {
+                        GameUtils.resetPoints.add(blockPos6);
+                    } else if (blockState.getBlock() instanceof ToggleableFacingLightBlock) {
+                        GameUtils.resetPoints.add(blockPos6);
+                    } else if (blockState.getBlock() instanceof VentHatchBlock) {
+                        GameUtils.resetPoints.add(blockPos6);
+                    } else if (blockState.getBlock() instanceof AutoResetBlockInterface) {
+                        GameUtils.resetPoints.add(blockPos6);
+                    } else if (blockState.getBlock() instanceof CustomBlock
+                            && CustomBlockLoader.isBlackoutAffected(serverWorld, blockPos6)) {
+                        // 自定义方块勾了「受关灯影响」时才登记（关灯事件按这份点位表工作）
+                        GameUtils.resetPoints.add(blockPos6);
+                    }
+                }
+            }
+        }
+
+    }
+
+    public static void saveArea(ServerLevel world) {
+        var areaC = AreasWorldComponent.KEY.get(world);
+        Path mapsDirPath = Paths.get(world.getServer().getWorldPath(LevelResource.ROOT).toString(),
+                "map_reset_point_caches");
+        File mapsDir = mapsDirPath.toFile();
+        if (!mapsDir.exists()) {
+            mapsDir.mkdirs();
+        }
+        String mapName = areaC.mapName;
+        if (mapName == null)
+            return;
+        Path mapConfigPath = Paths.get(world.getServer().getWorldPath(LevelResource.ROOT).toString(),
+                "map_reset_point_caches", mapName + ".cache.json");
+        File dir = mapConfigPath.getParent().toFile();
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+        File mapConfigFile = mapConfigPath.toFile();
+        try {
+            FileWriter writer = new FileWriter(mapConfigFile);
+            MapResetInfos infos = new MapResetInfos(GameUtils.resetPoints);
+            gson.toJson(infos, writer);
+            writer.close();
+            SRE.LOGGER.info("Successfully cache reset points for map: " + mapName);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    public static void loadArea(ServerLevel world) {
+        GameUtils.resetPoints.clear();
+        var areaC = AreasWorldComponent.KEY.get(world);
+        String mapName = areaC.mapName;
+        if (mapName == null)
+            return;
+        Path mapConfigPath = Paths.get(world.getServer().getWorldPath(LevelResource.ROOT).toString(),
+                "map_reset_point_caches", mapName + ".cache.json");
+        File mapConfigFile = mapConfigPath.toFile();
+
+        // 检查地图配置文件是否存在
+        if (!mapConfigFile.exists()) {
+            SRE.LOGGER.warn("Map cache file does not exist: " + mapConfigFile.getAbsolutePath());
+            return;
+        }
+        try {
+            FileReader reader = new FileReader(mapConfigFile);
+            JsonObject jsonObject = JsonParser.parseReader(reader).getAsJsonObject();
+            MapResetInfos mapinfos = gson.fromJson(jsonObject, MapResetInfos.class);
+            GameUtils.resetPoints = mapinfos.getAllBlockPos();
+            reader.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+}

@@ -1,0 +1,186 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.client.screen;
+
+import io.wifi.starrailexpress.api.data.RoleData;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+import net.minecraft.ChatFormatting;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.network.chat.Component;
+import org.agmas.noellesroles.role_data.innocence.BroadcasterRoleData;
+import org.agmas.noellesroles.packet.BroadcasterC2SPacket;
+
+/**
+ * 电报员消息编辑屏幕
+ * 
+ * 功能：
+ * - 输入匿名消息文本
+ * - 点击确认发送给所有玩家
+ * - 显示剩余使用次数
+ */
+public class BroadcasterScreen extends Screen {
+
+    // 文本输入框
+    private EditBox messageField;
+    // 确认按钮
+    private Button confirmButton;
+    // 关闭按钮
+    private Button closeButton;
+
+    // 剩余使用次数
+    @SuppressWarnings("unused")
+    private int remainingUses = 0;
+
+    public BroadcasterScreen() {
+        super(Component.translatable("screen.noellesroles.broadcaster.title"));
+    }
+
+    @Override
+    protected void init() {
+        super.init();
+        String stored_str = null;
+        // 获取存储的文本
+        if (minecraft != null && minecraft.player != null) {
+            var comp = RoleData.getOptional(BroadcasterRoleData.class, minecraft.player);
+            if (comp.isPresent())
+                stored_str = comp.get().getStoredStr();
+        }
+
+        // 创建文本输入框
+        int fieldWidth = 300;
+        int fieldHeight = 20;
+        int fieldX = (width - fieldWidth) / 2;
+        int fieldY = height / 2 - 10;
+
+        messageField = new EditBox(
+                font,
+                fieldX,
+                fieldY,
+                fieldWidth,
+                fieldHeight,
+                Component.translatable("screen.noellesroles.broadcaster.message"));
+        messageField.setValue(stored_str != null ? stored_str : "");
+        messageField.setMaxLength(200); // 限制最大长度
+        messageField.setHint(Component.translatable("screen.noellesroles.broadcaster.placeholder")
+                .withStyle(ChatFormatting.GRAY));
+        addWidget(messageField);
+        setInitialFocus(messageField);
+
+        {
+            // 创建确认按钮
+            int buttonWidth = 100;
+            int buttonHeight = 20;
+            int buttonX = (width) / 2 + 8;
+            int buttonY = fieldY + fieldHeight + 10;
+
+            confirmButton = Button.builder(
+                    Component.translatable("screen.noellesroles.broadcaster.confirm"),
+                    button -> onConfirm())
+                    .bounds(buttonX, buttonY, buttonWidth, buttonHeight)
+                    .build();
+
+            addRenderableWidget(confirmButton);
+        }
+        {// 创建关闭按钮
+            int buttonWidth = 100;
+            int buttonHeight = 20;
+            int buttonX = (width) / 2 - buttonWidth - 8;
+            int buttonY = fieldY + fieldHeight + 10;
+
+            closeButton = Button.builder(
+                    Component.translatable("screen.noellesroles.broadcaster.close"),
+                    button -> onClose())
+                    .bounds(buttonX, buttonY, buttonWidth, buttonHeight)
+                    .build();
+
+            addRenderableWidget(closeButton);
+        }
+
+    }
+
+    /**
+     * 确认按钮被点击
+     */
+    private void onConfirm() {
+        if (minecraft == null || minecraft.player == null)
+            return;
+
+        String message = messageField.getValue().trim();
+
+        // 发送网络包到服务端
+        if (!message.isEmpty()) {
+            // 发送包到服务器
+            ClientPlayNetworking.send(new BroadcasterC2SPacket(message));
+        }
+        RoleData.getOptional(BroadcasterRoleData.class, minecraft.player)
+                .ifPresent(d -> d.setStoredStr(message));
+        // 关闭屏幕
+        if (this.minecraft != null)
+            this.minecraft.setScreen((Screen) null);
+    }
+
+    @Override
+    public void render(GuiGraphics context, int mouseX, int mouseY, float delta) {
+        // 渲染背景
+        renderBackground(context, mouseX, mouseY, delta);
+
+        super.render(context, mouseX, mouseY, delta);
+        // 在super.render之后渲染文本，确保它在最上层
+        // 渲染标题
+        Component title = Component.translatable("screen.noellesroles.broadcaster.title")
+                .withStyle(ChatFormatting.AQUA, ChatFormatting.BOLD);
+        context.drawCenteredString(font, title, width / 2, 40, 0xFFFFFF);
+
+        // 渲染剩余次数提示
+        // Component usesText =
+        // Component.translatable("screen.noellesroles.broadcaster.remaining",
+        // remainingUses)
+        // .withStyle(remainingUses > 0 ? ChatFormatting.GREEN : ChatFormatting.RED);
+        // context.drawCenteredString(font, usesText, width / 2, 60, 0xFFFFFF);
+
+        // 渲染说明文本
+        Component hint = Component.translatable("screen.noellesroles.broadcaster.hint")
+                .withStyle(ChatFormatting.GRAY);
+        context.drawCenteredString(font, hint, width / 2, height / 2 - 30, 0x888888);
+
+        messageField.render(context, mouseX, mouseY, delta);
+    }
+
+    @Override
+    public boolean isPauseScreen() {
+        return false;
+    }
+
+    @Override
+    public void resize(Minecraft client, int width, int height) {
+        String text = messageField.getValue();
+        super.resize(client, width, height);
+        messageField.setValue(text);
+    }
+
+    @Override
+    public void onClose() {
+        if (messageField != null) {
+            ClientPlayNetworking.send(new BroadcasterC2SPacket(messageField.getValue(), true));
+
+        }
+        this.minecraft.setScreen((Screen) null);
+    }
+}

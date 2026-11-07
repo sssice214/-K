@@ -1,0 +1,161 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.role.touhou.roles;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+
+import org.agmas.noellesroles.init.FunnyItems;
+import org.agmas.noellesroles.utils.MCItemsUtils;
+import org.jetbrains.annotations.Nullable;
+
+import io.wifi.starrailexpress.api.SRERole;
+import io.wifi.starrailexpress.api.TMMRoles;
+import io.wifi.starrailexpress.api.TouhouRole;
+import io.wifi.starrailexpress.cca.SREAbilityPlayerComponent;
+import io.wifi.starrailexpress.cca.SREGameWorldComponent;
+import io.wifi.starrailexpress.content.entity.PlayerBodyEntity;
+import io.wifi.starrailexpress.index.TMMItems;
+import io.wifi.starrailexpress.util.ShopEntry;
+import net.minecraft.ChatFormatting;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.item.component.ItemLore;
+
+public class THKaenbyouRinRole extends TouhouRole {
+    public static final int COLLECT_COOLDOWN = 20 * 10;
+
+    public THKaenbyouRinRole(ResourceLocation identifier, int color, boolean isInnocent, boolean canUseKiller,
+            MoodType moodType, int maxSprintTime, boolean canSeeTime) {
+        super(identifier, color, isInnocent, canUseKiller, moodType, maxSprintTime, canSeeTime);
+    }
+
+    @Override
+    public List<ShopEntry> getShopEntries(@Nullable Player player) {
+        ArrayList<ShopEntry> SHOP = new ArrayList<>();
+        float baseMutiplier = 1f;
+        if (player != null) {
+            var cca = SREGameWorldComponent.getInstance(player);
+            baseMutiplier = Math.max(1f, cca.getStartingPlayerCount() / 9f);
+        }
+        SHOP.add(new KaenbyouRinShopEntry(TMMItems.CROWBAR.getDefaultInstance(), (int)(1 * baseMutiplier),
+                ShopEntry.Type.TOOL));
+        SHOP.add(new KaenbyouRinShopEntry(TMMItems.REVOLVER.getDefaultInstance(), (int)(1.5 * baseMutiplier), ShopEntry.Type.TOOL));
+        SHOP.add(new KaenbyouRinShopEntry(FunnyItems.SHISIYE.getDefaultInstance(), (int)(2.5 * baseMutiplier), ShopEntry.Type.TOOL));
+        SHOP.add(new KaenbyouRinShopEntry(TMMItems.KNIFE.getDefaultInstance(), (int)(4 * baseMutiplier), ShopEntry.Type.TOOL));
+        SHOP.add(new KaenbyouRinShopEntry(TMMItems.DEFENSE_VIAL.getDefaultInstance(), (int)(4 * baseMutiplier), ShopEntry.Type.TOOL));
+        SHOP.add(new KaenbyouRinShopEntry(TMMItems.BAT.getDefaultInstance(), (int)(7 * baseMutiplier), ShopEntry.Type.TOOL));
+        return SHOP;
+    }
+
+    public static class KaenbyouRinShopEntry extends ShopEntry {
+        final int boneNeeds;
+
+        public KaenbyouRinShopEntry(ItemStack stack, int priceOfBones, Type type) {
+            super(stack, 0, type);
+            this.boneNeeds = priceOfBones;
+        }
+
+        public int priceOfBones() {
+            return boneNeeds;
+        }
+
+        @Override
+        public boolean canBuy(Player player) {
+            if (MCItemsUtils.countItem(player, Items.BONE) >= boneNeeds) {
+                return true;
+            } else {
+                setFailedMessage(Component.translatable("message.noellesroles.kaenbyou_rin.buy.not_enough"));
+                return false;
+            }
+        }
+
+        public ItemStack getTrueStack() {
+            return super.stack();
+        }
+
+        @Override
+        public ItemStack stack() {
+            var it = super.stack();
+            var lores = it.getOrDefault(DataComponents.LORE, new ItemLore(List.of()));
+            List<Component> loreLines = new ArrayList<>();
+            loreLines.addAll(lores.lines());
+            loreLines.addFirst(Component
+                    .translatable("message.noellesroles.kaenbyou_rin.buy.lore",
+                            Component.literal(String.valueOf(boneNeeds)).withStyle(ChatFormatting.AQUA))
+                    .withStyle(ChatFormatting.LIGHT_PURPLE).withStyle(style -> style.withItalic(false)));
+            it.set(DataComponents.LORE, new ItemLore(loreLines));
+            return it;
+        }
+
+        @Override
+        public boolean onBuy(Player player) {
+            if (MCItemsUtils.countItem(player, Items.BONE) >= boneNeeds) {
+                if (MCItemsUtils.insertStackInFreeSlot(player, super.stack())) {
+                    MCItemsUtils.clearItem(player, Items.BONE, boneNeeds);
+                    return true;
+                }
+                return false;
+            } else {
+                setFailedMessage(Component.translatable("message.noellesroles.kaenbyou_rin.buy.not_enough"));
+            }
+            return false;
+        }
+    }
+
+    public static void collectBody(Player player, PlayerBodyEntity body) {
+        SREAbilityPlayerComponent.KEY.get(player).setCooldown(COLLECT_COOLDOWN);
+        player.displayClientMessage(
+                Component.translatable("message.noellesroles.kaenbyou_rin.collected")
+                        .withStyle(ChatFormatting.LIGHT_PURPLE),
+                true);
+
+        player.level().playSound(null, player.blockPosition(),
+                SoundEvents.ENDERMAN_TELEPORT, SoundSource.PLAYERS, 0.5F, 1.5F);
+        UUID targetUid = body.getPlayerUuid();
+        int count = 1;
+        SRERole role = null;
+        if (targetUid != null) {
+            final var gamecca = SREGameWorldComponent.getInstance(player.level());
+            role = gamecca.getRole(targetUid);
+        }
+        if (role == null) {
+            // 实时阵营拿不到时，退回尸体生成时记录的职业（见 GameUtils.spawnBodyEntity）
+            var bodyComponent = body.getComponent();
+            if (bodyComponent.playerRole != null) {
+                role = TMMRoles.ROLES.get(bodyComponent.playerRole);
+            }
+        }
+        if (SREGameWorldComponent.isKillerTeamRoleStatic(role)) {
+            count = 2;
+        } else if (role != null && role.isNeutrals()) {
+            count = 3;
+        }
+        ItemStack bone = Items.BONE.getDefaultInstance();
+        bone.set(DataComponents.MAX_STACK_SIZE, 99);
+        bone.setCount(count);
+        bone.set(DataComponents.ITEM_NAME, Component.translatable("item_name.noellesroles.kaenbyou_rin.bone"));
+        MCItemsUtils.insertOrDropItem(player, bone);
+    }
+
+}

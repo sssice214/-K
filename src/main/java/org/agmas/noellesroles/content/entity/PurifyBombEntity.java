@@ -1,0 +1,119 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.content.entity;
+
+import io.wifi.starrailexpress.cca.SREPlayerPoisonComponent;
+import io.wifi.starrailexpress.content.entity.no_water_influenced.NoHeavyWaterInfluencedThrowableItemProjectile;
+import io.wifi.starrailexpress.game.GameUtils;
+import io.wifi.starrailexpress.util.ParticleFx;
+import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.phys.AABB;
+import org.agmas.noellesroles.component.InfectedPlayerComponent;
+import org.agmas.noellesroles.component.ModComponents;
+import org.agmas.noellesroles.init.ModItems;
+
+import java.util.List;
+
+/**
+ * 净化弹实体
+ * - 落地时播放GUARDIAN_ATTACK（守卫者激光射击声）
+ * - 取消半径3格内玩家的中毒状态
+ * - 粒子效果为dripping_water（水滴）
+ */
+public class PurifyBombEntity extends NoHeavyWaterInfluencedThrowableItemProjectile {
+
+    // 净化半径：3格
+    private static final double PURIFY_RADIUS = 3.0;
+
+    public PurifyBombEntity(EntityType<? extends NoHeavyWaterInfluencedThrowableItemProjectile> entityType, Level world) {
+        super(entityType, world);
+    }
+
+    @Override
+    protected Item getDefaultItem() {
+        return ModItems.PURIFY_BOMB;
+    }
+
+    @Override
+    protected void onHit(net.minecraft.world.phys.HitResult hitResult) {
+        super.onHit(hitResult);
+
+        if (this.level() instanceof ServerLevel world) {
+            // 播放声音 - GUARDIAN_ATTACK（守卫者激光射击声）
+            world.playSound(null, this.blockPosition(),
+                    SoundEvents.GUARDIAN_ATTACK, SoundSource.PLAYERS, 1.0f, 1.0f);
+
+            // 取消半径3格内玩家的中毒状态
+            purifyPlayersInRadius(world);
+
+            // 生成气泡粒子效果
+            spawnBubbleParticles(world);
+
+            this.discard();
+        }
+    }
+
+    /**
+     * 取消半径3格内玩家的中毒状态
+     */
+    private void purifyPlayersInRadius(ServerLevel world) {
+        AABB area = new AABB(
+                this.getX() - PURIFY_RADIUS, this.getY() - 1, this.getZ() - PURIFY_RADIUS,
+                this.getX() + PURIFY_RADIUS, this.getY() + 3, this.getZ() + PURIFY_RADIUS
+        );
+
+        List<ServerPlayer> players = world.getEntitiesOfClass(
+                ServerPlayer.class, area,
+                player -> GameUtils.isPlayerAliveAndSurvival(player)
+        );
+
+        for (ServerPlayer player : players) {
+            // 清除中毒状态
+            SREPlayerPoisonComponent poisonComponent = SREPlayerPoisonComponent.KEY.get(player);
+            if (poisonComponent.poisonTicks > 0) {
+                poisonComponent.cure(null);
+            }
+            
+            // 清除感染状态
+            InfectedPlayerComponent infectedComponent = ModComponents.INFECTED.get(player);
+            if (infectedComponent.infectedTicks > 0) {
+                infectedComponent.cure();
+            }
+        }
+    }
+
+    /**
+     * 生成水滴粒子效果
+     */
+    private void spawnBubbleParticles(ServerLevel world) {
+        // 使用水滴粒子模拟净化效果：两段效果各一个包（原实现是逐颗粒子一个包）
+        ParticleFx.burst(world, ParticleTypes.DRIPPING_WATER,
+                this.getX(), this.getY() + 1.5, this.getZ(),
+                80, PURIFY_RADIUS * 0.5, 1.5, PURIFY_RADIUS * 0.5, 0.03);
+
+        // 额外的水滴下落效果
+        ParticleFx.burst(world, ParticleTypes.DRIPPING_WATER,
+                this.getX(), this.getY(), this.getZ(),
+                30, PURIFY_RADIUS * 0.25, 0.1, PURIFY_RADIUS * 0.25, 0.05);
+    }
+}

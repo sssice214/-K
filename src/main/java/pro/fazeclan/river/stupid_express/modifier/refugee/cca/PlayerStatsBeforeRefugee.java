@@ -1,0 +1,162 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package pro.fazeclan.river.stupid_express.modifier.refugee.cca;
+
+import io.wifi.starrailexpress.SRE;
+import io.wifi.starrailexpress.api.SRERole;
+import io.wifi.starrailexpress.cca.*;
+import io.wifi.starrailexpress.compat.TrainVoicePlugin;
+import io.wifi.starrailexpress.content.entity.PlayerBodyEntity;
+import io.wifi.starrailexpress.event.OnPlayerDeathWithKiller;
+import io.wifi.starrailexpress.game.GameUtils;
+import io.wifi.starrailexpress.index.TMMItems;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.Pose;
+import net.minecraft.world.level.GameType;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.phys.Vec2;
+import net.minecraft.world.phys.Vec3;
+import org.agmas.harpymodloader.component.WorldModifierComponent;
+import org.agmas.noellesroles.content.entity.PuppeteerBodyEntity;
+import org.agmas.noellesroles.init.ModEffects;
+import org.agmas.noellesroles.role.bouns.BounsRoles;
+import org.agmas.noellesroles.utils.RoleUtils;
+import pro.fazeclan.river.stupid_express.constants.SEModifiers;
+
+import java.util.function.Consumer;
+
+public record PlayerStatsBeforeRefugee(Vec3 pos, int money, ListTag inventory, Vec2 rotation, boolean isAlive,
+        float mood, int shieldAmount) {
+    public static Consumer<ServerPlayer> beforeLoadFunc = null;
+
+    // 期间死亡的其它玩家会复活，玩家物品栏、金币、位置重置到亡命徒复活的时刻
+    public static void registerDeathEvent() {
+        (OnPlayerDeathWithKiller.EVENT).register((victim, killer, deathReason) -> {
+            var level = victim.level();
+            var worldModifierComponent = WorldModifierComponent.KEY.get(level);
+            if (worldModifierComponent.isModifier(victim.getUUID(), SEModifiers.REFUGEE)) {
+                var refugeeComponent = RefugeeComponent.KEY.get(level);
+                Vec3 pos = GameUtils.getSpawnPos(AreasWorldComponent.KEY.get(level),
+                        GameUtils.roomToPlayer.get(victim.getUUID()));
+                if (pos != null) {
+                    refugeeComponent.addPendingRevival(victim.getUUID(), pos.x(), pos.y() + 1, pos.z());
+                } else {
+                    refugeeComponent.addPendingRevival(victim.getUUID(), victim.getX(), victim.getY(), victim.getZ());
+                }
+                // 亡命徒倒计时结束后该玩家会被复活：其尸体在复活前不可被他人交互
+                if (victim instanceof ServerPlayer serverVictim) {
+                    PlayerBodyEntity body = GameUtils.findPlayerBodyEntity(serverVictim);
+                    if (body != null) {
+                        body.setNonInteractable(true);
+                    }
+                }
+            }
+        });
+    }
+
+    public static void LoadToPlayer(ServerPlayer player, PlayerStatsBeforeRefugee playerStats, SRERole role,
+            RefugeeComponent refugeeComponent, WorldModifierComponent worldModifierComponent) {
+        LoadToPlayer(player, playerStats, role, refugeeComponent, worldModifierComponent, true);
+    }
+
+    static void LoadToPlayer(ServerPlayer player, PlayerStatsBeforeRefugee playerStats, SRERole role,
+            RefugeeComponent refugeeComponent, WorldModifierComponent worldModifierComponent,
+            boolean invokeBeforeLoad) {
+        if (playerStats == null)
+            return;
+        if (!playerStats.isAlive())
+            return;
+        if (invokeBeforeLoad) {
+            invokeBeforeLoad(player);
+        }
+        player.getInventory().clearContent();
+        player.getInventory().load(playerStats.inventory());
+        // 棒球员的球棒是职业自带武器，亡命徒恢复时不清除
+        if (!SREGameWorldComponent.KEY.get(player.level()).isRole(player, BounsRoles.BASEBALL_PLAYER)) {
+            RoleUtils.clearAllSatisfiedItems(player, TMMItems.BAT);
+        }
+        player.setPose(Pose.STANDING);
+        player.setSwimming(false);
+        player.stopRiding();
+        player.stopFallFlying();
+        player.stopSleeping();
+        player.stopUsingItem();
+        player.setShiftKeyDown(false);
+        player.setCamera(player);
+        player.clearFire();
+        SREArmorPlayerComponent bartenderPlayerComponent = SREArmorPlayerComponent.KEY.get(player);
+
+        player.teleportTo(playerStats.pos().x, playerStats.pos().y, playerStats.pos().z);
+        player.setPos(playerStats.pos());
+
+        bartenderPlayerComponent.armor = playerStats.shieldAmount;
+        if (!GameUtils.isPlayerAliveAndSurvival(player)) {
+            if (GameUtils.shouldGiveSpectatorsDeathPenalty(player)) {
+                GameUtils.pendingReJudgeSpectatorsPenalty();
+            }
+            SRE.REPLAY_MANAGER.recordPlayerRevival(player.getUUID(), role);
+            player.setGameMode(GameType.ADVENTURE);
+        }
+        player.addEffect(ModEffects.of(ModEffects.SAFE_TIME, 20, 0, true, false, true));
+        player.teleportTo(playerStats.pos().x, playerStats.pos().y, playerStats.pos().z);
+        player.setPos(playerStats.pos());
+        player.setXRot(playerStats.rotation().x);
+        player.setYRot(playerStats.rotation().y);
+        
+        player.updateFluidOnEyes();
+        player.updateInWaterStateAndDoFluidPushing();
+        
+        TrainVoicePlugin.resetPlayer(player.getUUID());
+        var shopComponent = SREPlayerShopComponent.KEY.get(player);
+        var moodComponent = SREPlayerMoodComponent.KEY.get(player);
+        shopComponent.balance = playerStats.money();
+        moodComponent.setMood(playerStats.mood());
+        shopComponent.sync();
+        moodComponent.sync();
+    }
+
+    static void invokeBeforeLoad(ServerPlayer player) {
+        if (beforeLoadFunc != null) {
+            beforeLoadFunc.accept(player);
+        }
+    }
+
+    public static PlayerStatsBeforeRefugee SaveFromPlayer(ServerPlayer player, boolean isAlive) {
+        var inventory = player.getInventory();
+        ListTag listTag = new ListTag();
+        inventory.save(listTag);
+        var shopComponent = SREPlayerShopComponent.KEY.get(player);
+        var moodComponent = SREPlayerMoodComponent.KEY.get(player);
+        int armorAmount = SREArmorPlayerComponent.KEY.get(player).getNormalArmor();
+
+        Vec3 pos = player.position();
+        Level level = player.level();
+        AreasWorldComponent areas = AreasWorldComponent.KEY.get(level);
+        var puppeteerBodyEntities = level.getEntitiesOfClass(PuppeteerBodyEntity.class, areas.getPlayArea());
+        for (PuppeteerBodyEntity puppeteerBodyEntity : puppeteerBodyEntities) {
+            if (puppeteerBodyEntity.getOwner() == player) {
+                // 当存在玩家傀儡位置时，优先存储傀儡位置
+                pos = puppeteerBodyEntity.position();
+                break;
+            }
+        }
+        var playerStats = new PlayerStatsBeforeRefugee(pos,
+                shopComponent.balance, listTag.copy(), player.getRotationVector(),
+                isAlive, moodComponent.getMood(), armorAmount);
+        return playerStats;
+    }
+}

@@ -1,0 +1,117 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.mixin.client.restrictions;
+
+import com.llamalad7.mixinextras.injector.ModifyReturnValue;
+import io.wifi.starrailexpress.anticheat.ClickAntiCheatClient;
+import io.wifi.starrailexpress.api.RoleMethodDispatcher;
+import io.wifi.starrailexpress.client.SREClient;
+import io.wifi.starrailexpress.content.item.api.SREItemProperties.DropAndClearItem;
+import io.wifi.starrailexpress.rules.DropRules;
+import net.minecraft.client.KeyMapping;
+import net.minecraft.client.Minecraft;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.world.InteractionResult;
+import org.agmas.noellesroles.content.item.LoanContractItem;
+import org.agmas.noellesroles.init.ModItems;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
+import org.spongepowered.asm.mixin.injection.At;
+
+@Mixin(KeyMapping.class)
+public abstract class KeyBindingMixin {
+    @Shadow
+    public abstract boolean same(KeyMapping other);
+
+    @Unique
+    private boolean shouldSuppressKey() {
+        final var instance = Minecraft.getInstance();
+        if (instance == null)
+            return false;
+        if (instance.options == null)
+            return false;
+        final var player = instance.player;
+        if (player == null)
+            return false;
+        if (!SREClient.isPlayerCreative() && this.same(instance.options.keyDrop)
+                && player.getMainHandItem().is(ModItems.LOAN_CONTRACT)
+                && !LoanContractItem.canBeDroppedBy(player.getMainHandItem(), player.getUUID())) {
+            return true;
+        }
+        final var options = instance.options;
+        if (ClickAntiCheatClient.isLocked()
+                && (this.same(options.keyAttack) || this.same(options.keyUse))) {
+            return true;
+        }
+        if (SREClient.isInLobby) {
+            return false;
+        }
+        if (!SREClient.isPlayerCreative() && this.same(options.keyDrop)) {
+            InteractionResult result = RoleMethodDispatcher.callOnDropItem(player, player.getMainHandItem());
+            if (result == InteractionResult.CONSUME || result == InteractionResult.FAIL
+                    || result == InteractionResult.CONSUME_PARTIAL) {
+                return true;
+            } else if (result == InteractionResult.SUCCESS || result == InteractionResult.SUCCESS_NO_ITEM_USED) {
+                return false;
+            }
+            if (player.getMainHandItem().getItem() instanceof DropAndClearItem)
+                return false;
+            if (DropRules.canDropItem
+                    .contains(BuiltInRegistries.ITEM.getKey(player.getMainHandItem().getItem()).toString())
+                    || DropRules.canDrop.stream().anyMatch((p) -> {
+                        return p.test(player);
+                    })) {
+                if (instance.screen == null) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        if (SREClient.gameComponent != null && SREClient.gameComponent.isRunning()
+                && SREClient.isPlayerAliveAndInSurvival()) {
+            if (this.same(options.keyJump)) {
+                if (SREClient.areaComponent.areasSettings.canSwim) {
+                    if (SREClient.cached_player != null && SREClient.cached_player.isInWater()) {
+                        if (!SREClient.gameComponent.isJumpAvailable()) {
+                            return false;
+                        }
+                    }
+                }
+                if (SREClient.gameComponent.isJumpAvailable())
+                    return false;
+                return true;
+            }
+            return this.same(options.keySwapOffhand) || this.same(options.keyAdvancements);
+        }
+        return false;
+    }
+
+    @ModifyReturnValue(method = "consumeClick", at = @At("RETURN"))
+    private boolean tmm$restrainWasPressedKeys(boolean original) {
+        return original && !this.shouldSuppressKey();
+    }
+
+    @ModifyReturnValue(method = "isDown", at = @At("RETURN"))
+    private boolean tmm$restrainIsPressedKeys(boolean original) {
+        return original && !this.shouldSuppressKey();
+    }
+
+    @ModifyReturnValue(method = "matches", at = @At("RETURN"))
+    private boolean tmm$restrainMatchesKey(boolean original) {
+        return original && !this.shouldSuppressKey();
+    }
+}

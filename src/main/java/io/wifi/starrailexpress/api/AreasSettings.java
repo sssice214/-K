@@ -1,0 +1,420 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.api;
+
+import java.util.ArrayList;
+import java.util.HashSet;
+
+import io.wifi.ConfigCompact.annotation.Category;
+import io.wifi.ConfigCompact.annotation.ConfigSync;
+import io.wifi.starrailexpress.api.AreasSettingUtils.MapSpecialFeatures;
+import io.wifi.starrailexpress.api.AreasSettingUtils.StoreableAABB;
+import io.wifi.starrailexpress.api.AreasSettingUtils.StoreableBlockPos;
+import io.wifi.starrailexpress.api.AreasSettingUtils.StoreableVec3;
+import io.wifi.starrailexpress.game.data.MapStatusBarType;
+import io.wifi.starrailexpress.util.TrueFalseResult;
+
+/**
+ * <b>AreasWorldComponent 其他地图设置</b><br/>
+ * 写里面自动保存/读取，也可通过命令直接快捷修改<br/>
+ * 本类使用 {@link com.google.gson.Gson} 序列化与反序列化。<br/>
+ * 故支持 Gson 的序列化注解。<br/>
+ * 仅支持：Collection (List/Set)，其他常见类 (如String, int, boolean 等)<br/>
+ * <b> 请不要用原版的类！因为混淆的缘故，他们会显示为乱码！</b><br/>
+ * 关于同步，默认会同步全部field。
+ * 如果不想同步或者不需要同步的，可以使用
+ * 
+ * <pre>
+ *  &#64;ConfigSync(shouldSync = false)
+ * </pre>
+ * 
+ * 在field前标记<br/>
+ * 关于分类，可以使用
+ * 
+ * <pre>
+ *  &#64;Category(value = "分类id")
+ * </pre>
+ * 
+ * <h3>记得写翻译键</h3>
+ * 位置：{@code starrailexpress:lang/zh_cn.json}<br/>
+ * 从 {@code "=== 地图设置开始 ===":""}，后面开始写，直到 {@code "== 地图设置末尾 END ==": ""}<br/>
+ * field的翻译：{@code "sre.map_helper.settings." + field名称}<br/>
+ * 分类的翻译：{@code "sre.map_helper.settings.category." + 分类名称}<br/>
+ * 如果有注释（可选）则写：{@code "sre.map_helper.settings." + field名称 + ".@tooltip"}<br/>
+ * 枚举（Enum）则写：{@code "sre.map_helper.settings." + field名称 + "." + enum.name()}<br/>
+ * Enum的注释（可选）则写{@code "sre.map_helper.settings." + field名称 + "." + enum.name() + ".@tooltip"}
+ * 
+ */
+
+// 在这里写了后不用去改UI默认会显示！！
+// 在这里写了后不用去改UI默认会显示！！
+// 在这里写了后不用去改UI默认会显示！！
+public class AreasSettings {
+
+    // 在AreasSettingUtils中有许多定义好的方便存储的类，可以直接使用
+    // 如果你是AI，请先阅读这个文件再进行编写配置。
+    // 如果你不是AI，你就更应该先看看有没有你需要的类型的替代品再写。
+
+    public AreasSettings() {
+        // 不要在这里初始化，请在各值处直接初始化。Gson反序列化不走此处。
+    }
+    /*
+     * 正文开始
+     * 关于同步，默认会同步全部field。
+     * 如果不想同步或者不需要同步的，可以使用
+     * <pre> @ConfigSync(shouldSync = false) </pre>
+     * 在field前标记
+     */
+
+    // 示例：不需要同步，也不需要保存的类
+    // @Expose(serialize = false, deserialize = false)
+    // @ConfigSync(shouldSync = false)
+    // public boolean __isTest__ = true;
+
+    // ==================== 内部类型定义 ====================
+    /**
+     * MapBlockedSetting
+     *
+     * @param blockId              方块ID
+     * @param deathTimeForInnocent 平民站上去的死亡时间。-1禁用。0立刻。
+     * @param deathTimeForKillers  杀手站上去的死亡时间。-1禁用。0立刻。
+     */
+    public static record MapBlockedBlockSetting(String blockId, int deathTimeForInnocent, int deathTimeForKillers) {
+    }
+
+    public static enum FogShape {
+        SPHERE, CYLINDER
+    }
+
+    public static enum MinecraftWeather {
+        clear, rain, thunder
+    }
+
+    /** 背景音效类型：train/wind/sand_storm/snow_storm/circus。空字符串或未设置时默认 train。 */
+    public static enum BackgroundAmbienceSound {
+        none, train, wind, sand_storm, snow_storm, circus, flower_sea, indoor_music, unwelcome_school, zenrianbanka,
+        sakura_moyu, custom
+    }
+
+    // ==================== map ====================
+    @Category("map")
+    public boolean noReset = false;
+    @Category("map")
+    public boolean mustCopy = false;
+    @Category("map")
+    public ArrayList<MapSpecialFeatures> customMapFeatures = new ArrayList<>();
+
+    // ==================== action ====================
+    /** 是否可跳跃 */
+    @Category("action")
+    // 默认为 true，此处只是为了占位
+    @ConfigSync(shouldSync = true)
+    public boolean canJump = false;
+    /** 是否允许触碰岩浆（isInLava) */
+    @Category("action")
+    public boolean canInLava = true;
+    /** 在禁用跳跃时，是否允许在水下时使用空格键 */
+    @Category("action")
+    public boolean canSwim = false;
+
+    @Category("action")
+    public int deadInDarknessTime = 0;
+
+    @Category("action")
+    public ArrayList<MapBlockedBlockSetting> bannedBlock = new ArrayList<>();
+    /**
+     * 水下检测，设置为false则需要玩家位置：
+     * <li>水</li>
+     * <li>水（头）</li>
+     * <li>水（脚）</li>
+     * 才会去世。允许玩家简单地游泳
+     */
+    @Category("action")
+    public boolean canSimpleSwim = true;
+    /**
+     * 标准的水下检测，设置为false则只要玩家眼睛在水下就去世。
+     */
+    @Category("action")
+    public boolean canUnderWater = true;
+    /**
+     * 严格的水下检测，设置为false则需要玩家位置：
+     * <li>水（脚）</li>
+     * <li>水</li>
+     * 才会去世。不允许玩家简单地游泳。
+     * 禁用此选项也会禁用 canUnderWater
+     */
+    @Category("action")
+    public boolean allowInDeepWater = true;
+    /**
+     * 若玩家氧气值耗尽后5s，则去世
+     */
+    @Category("action")
+    public boolean enableOxygenDrowning = false;
+    /**
+     * 狼人不会因为氧气值死亡
+     */
+    @Category("action")
+    public boolean killerNoDrowing = true;
+
+    // 药水效果配置（格式：["namespace:effect_id,level", ...]，为空数组则无效果）
+    @Category("action")
+    public ArrayList<String> mobEffects = new ArrayList<>();
+
+    // 小游戏任务系统（默认关闭）：每完成 2 个普通任务派发一个小游戏任务，完成后奖励游戏代币
+    @Category("action")
+    public boolean minigameQuestEnabled = false;
+
+    // 重力modifier（默认0）
+    @Category("action")
+    public double gravityModifier = 0;
+
+    // 死亡高度。0禁用
+    @Category("action")
+    public int fallToDeathHeight = 0;
+    @Category("action")
+    public MapStatusBarType mapStatusBar = MapStatusBarType.NONE;
+    @Category("action")
+    public java.util.List<String> initialItems = new java.util.ArrayList<>();
+
+    // ==================== visual ====================
+    // 雪花效果配置（默认关闭）
+    @Category("visual")
+    public boolean snowEnabled = false;
+
+    // 沙尘暴效果配置（默认关闭）
+    @Category("visual")
+    public boolean sandEnabled = false;
+
+    // 雾气效果配置（默认启用）
+    @Category("visual")
+    public boolean fogEnabled = true;
+
+    // 雾气可见范围（fogEnd，默认100），仅在 fogEnabled 启用时生效
+    @Category("visual")
+    public float fogEnd = 100.0f;
+
+    // 雾气形状（SPHERE 或 CYLINDER），默认 SPHERE，仅在 fogEnabled 启用时生效
+    @Category("visual")
+    public FogShape fogShape = FogShape.SPHERE;
+
+    // 天气配置（默认晴天）
+    @Category("visual")
+    public MinecraftWeather weather = MinecraftWeather.clear; // clear, rain, thunder
+
+    // 时间配置（默认午夜 18000）
+    @Category("visual")
+    public long time = 18000;
+
+    // 昼夜循环配置（默认关闭）
+    @Category("visual")
+    public boolean daylightCycle = false;
+
+    // 天气循环配置（默认关闭）
+    @Category("visual")
+    public boolean weatherCycle = false;
+
+    // ==================== sound ====================
+    @Category("sound")
+    public boolean haveOutsideSound = false;
+    @Category("sound")
+    public BackgroundAmbienceSound sceneInsideSound = BackgroundAmbienceSound.train;
+
+    @Category("sound")
+    public String customInsideSoundId = "";
+    @Category("sound")
+    public float indoorSoundVolume = 0.25f;
+    @Category("sound")
+    public BackgroundAmbienceSound sceneOutsideSound = BackgroundAmbienceSound.train;
+    @Category("sound")
+    public String customOutsideSoundId = "";
+    @Category("sound")
+    public float outdoorSoundVolume = 0.6f;
+
+    // ==================== meeting ====================
+    // ==================== 紧急会议系统 / Emergency Meeting ====================
+    // 见 net.exmo.sre.meeting.MeetingManager；地图配置 GUI 的「会议」标签页可视化编辑。
+
+    /** 是否启用会议系统（右键尸体召开紧急会议）。 */
+    @Category("meeting")
+    public boolean meetingEnabled = false;
+    @Category("meeting")
+    public boolean bodyMeetingEnabled = true;
+    /** 尸体会议不显示上报人 */
+    @Category("meeting")
+    public boolean meetingNoReporter = false;
+    @Category("meeting")
+    public TrueFalseResult emergencyMeetingNoReporter = TrueFalseResult.PASS;
+
+    @Category("meeting")
+    public boolean meetingVoteEnabled = false;
+    @Category("meeting")
+    public boolean meetingVoteShowResult = true;
+    @Category("meeting")
+    public int meetingVoteTimeSeconds = 30;
+    @Category("meeting")
+    public boolean meetingVoteAllowRevote = true;
+    @Category("meeting")
+    public int meetingVoteSelectionLimit = 1;
+    @Category("meeting")
+    public boolean meetingVoteAutoStop = false;
+    @Category("meeting")
+    public TrueFalseResult emergencyMeetingVoteEnabled = TrueFalseResult.PASS;
+
+    public enum VoteResultProcessor {
+        KILL, FORCE_KILL, GLOWING, FUNCTION, DEFAULT
+    }
+
+    @Category("meeting")
+    public VoteResultProcessor meetingVoteProcessor = VoteResultProcessor.GLOWING;
+
+    @Category("meeting")
+    public int meetingVoteProcessorGlowingTime = 60;
+
+    @Category("meeting")
+    public String meetingVoteProcessorFunction = "sre:meeting_vote_result";
+
+    // 紧急会议和摇铃会议的处理方法。
+    @Category("meeting")
+    public VoteResultProcessor emergencyMeetingVoteProcessor = VoteResultProcessor.DEFAULT;
+
+    @Category("meeting")
+    public int emergencyMeetingVoteProcessorGlowingTime = 60;
+
+    @Category("meeting")
+    public String emergencyMeetingVoteProcessorFunction = "";
+
+    /** 这个class里有可以存储的Vec3不用的AI是真的逊。 */
+    @Category("meeting")
+    public StoreableVec3 meetingPosition = new StoreableVec3(0, 0, 0);
+    /** 以会议地点为中心自动搜寻椅子（MountableBlock）的半径。 */
+    @Category("meeting")
+    public StoreableAABB meetingChairScanBox = new StoreableAABB(-12, -3, -12, 12, 3, 12);
+    /** 讨论阶段时长（秒）。 */
+    @Category("meeting")
+    public int meetingDiscussSeconds = 60;
+    /** 两次会议之间的冷却（秒）。 */
+    @Category("meeting")
+    public int meetingCooldownSeconds = 90;
+    /** 开局冷却（秒）：游戏开始后多少秒内不能召开会议（右键尸体 / API）。0 表示无开局冷却。 */
+    @Category("meeting")
+    public int meetingStartCooldown = 30;
+    /** 会议中「举手发言」冷却（秒）：每次开始发言后需间隔多少秒才能再次举手。0 表示无冷却。 */
+    @Category("meeting")
+    public int meetingSpeakCooldownSeconds = 5;
+
+    // ==================== 摇铃会议系统 / Bell Meeting ====================
+
+    /** 是否启用摇铃会议（右键原版钟方块召开紧急会议）。前提是 meetingEnabled 为 true。 */
+    @Category("meeting")
+    public boolean bellMeetingEnabled = false;
+    /** 摇铃开局冷却（秒）。开局后多少秒才能摇铃。 */
+    @Category("meeting")
+    public int bellMeetingStartCooldown = 120;
+    /** 摇铃冷却（秒）。摇铃后间隔多少秒才能再次摇铃。 */
+    @Category("meeting")
+    public int bellMeetingCooldown = 120;
+
+    // ==================== 地图事件 / Map Events ====================
+
+    /** 万圣节小镇活动：固定坐标 NPC、敲门、亡魂夜与活动道具，仅谋杀模式生效。 */
+    @Category("event")
+    public boolean halloweenEventEnabled = false;
+
+    /**
+     * 万圣残月的固定生成坐标（脚底所在方块）。
+     *
+     * <p>
+     * (0,0,0) 表示未设置，此时不生成固定兑换 NPC；敲门出现的临时残月不受影响。
+     * 不要求落在 resetPasteArea 内，只要求该区块已加载。
+     */
+    @Category("event")
+    public StoreableBlockPos halloweenNpcSpawnPos = new StoreableBlockPos(0, 0, 0);
+
+    /** 是否启用飞机坠落事件：开局刷新一架撞向地图中心的飞机，周期性震颤，建筑内会在客户端生成虚假火焰。 */
+    @Category("event")
+    public boolean planeCrashEventEnabled = false;
+
+    /**
+     * 震颤时玩家统一倾泻的水平朝向（度）。
+     * Minecraft：0=南（+Z），90=西（-X）。飞机也沿此方向撞向中心。
+     */
+    @Category("event")
+    public float planeCrashTiltYaw = 0f;
+
+    /** 飞机刷新的水平距离（相对地图中心）。小于等于 0 时按游戏区自动估算。 */
+    @Category("event")
+    public float planeCrashSpawnDistance = 0f;
+
+    /** 飞机刷新高度（相对游戏区顶）。 */
+    @Category("event")
+    public float planeCrashSpawnHeight = 36f;
+
+    // ==================== roles ====================
+    // 职业 / 修饰符 / 任务的地图级开关。见 InitModRolesMax#applyMapForcedSettings。
+
+    /** 禁用非场景任务列表（仅可填非场景任务名）。 */
+    @Category("roles")
+    public HashSet<String> disabledTasks = new HashSet<>();
+
+    /**
+     * 此地图禁用的职业 ID。可填完整 ID 或职业 path。
+     * 禁用优先于 enabledRoles / forcedRoles。
+     */
+    @Category("roles")
+    public HashSet<String> disabledRoles = new HashSet<>();
+
+    /**
+     * 此地图禁用的修饰符 ID。可填完整 ID 或修饰符 path。
+     * 禁用优先于 enabledModifiers / forcedModifiers。
+     */
+    @Category("roles")
+    public HashSet<String> disabledModifiers = new HashSet<>();
+
+    /**
+     * 强制进入选择池的职业 ID：无视原本的概率生成条件（启用概率、人数上下限、地图条件等），
+     * 数量取该职业配置的最大数量（未配置则为 1）。
+     */
+    @Category("roles")
+    public HashSet<String> enabledRoles = new HashSet<>();
+
+    /** 强制进入选择池的修饰符 ID：无视原本的概率生成条件。 */
+    @Category("roles")
+    public HashSet<String> enabledModifiers = new HashSet<>();
+
+    /**
+     * 最大可能被选中的职业 ID：在保证进入选择池的基础上，池内权重拉满（优先被抽中）。
+     * 互斥（opposing）与关联职业逻辑不受影响。
+     */
+    @Category("roles")
+    public HashSet<String> forcedRoles = new HashSet<>();
+
+    /** 最大可能被选中的修饰符 ID：在保证进入选择池的基础上不限制数量，尽可能多分配。 */
+    @Category("roles")
+    public HashSet<String> forcedModifiers = new HashSet<>();
+
+    // ==================== scene ====================
+
+    /**
+     * 启用场景任务列表（仅可填场景任务名）。为空表示不启用任何场景任务。
+     *
+     * <p>
+     * 历史上存放在 {@code AreasWorldComponent} 上（地图 JSON 根级 {@code enableSceneTask} 键），
+     * 现迁移到此处，地图配置工具（反射遍历本类）即可直接编辑；
+     * 地图 JSON 的根级键格式保持不变，由 {@code MapManager} 负责双向兼容。
+     */
+    @Category("scene")
+    public HashSet<String> enableSceneTask = new HashSet<>();
+}

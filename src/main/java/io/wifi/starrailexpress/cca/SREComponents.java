@@ -1,0 +1,102 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.cca;
+
+import io.wifi.starrailexpress.cca.gamemode.CustomRoleGameModeTeamsPlayerComponent;
+import io.wifi.starrailexpress.cca.gamemode.CustomRoleGameModeWorldComponent;
+import io.wifi.starrailexpress.content.entity.PlayerBodyEntity;
+
+import net.exmo.sre.nametag.NameTagInventoryComponent;
+import net.minecraft.world.entity.player.Player;
+import org.jetbrains.annotations.NotNull;
+import org.ladysnake.cca.api.v3.entity.EntityComponentFactoryRegistry;
+import org.ladysnake.cca.api.v3.entity.EntityComponentInitializer;
+import org.ladysnake.cca.api.v3.entity.RespawnCopyStrategy;
+import org.ladysnake.cca.api.v3.world.WorldComponentFactoryRegistry;
+import org.ladysnake.cca.api.v3.world.WorldComponentInitializer;
+
+public class SREComponents
+        implements WorldComponentInitializer, EntityComponentInitializer {
+    @Override
+    public void registerWorldComponentFactories(@NotNull WorldComponentFactoryRegistry registry) {
+        registry.register(SRETrainWorldComponent.KEY, SRETrainWorldComponent::new);
+        registry.register(CustomRoleGameModeWorldComponent.KEY, CustomRoleGameModeWorldComponent::new);
+        registry.register(SREGameWorldComponent.KEY, SREGameWorldComponent::new);
+        registry.register(SRERoleWorldComponent.KEY, SRERoleWorldComponent::new);
+        registry.register(AreasWorldComponent.KEY, AreasWorldComponent::new);
+        registry.register(SREWorldBlackoutComponent.KEY, SREWorldBlackoutComponent::new);
+        registry.register(SREMonitorWorldComponent.KEY, SREMonitorWorldComponent::new);
+        registry.register(SREGameTimeComponent.KEY, SREGameTimeComponent::new);
+        registry.register(MurderTimeEventComponent.KEY, MurderTimeEventComponent::new);
+        registry.register(AutoStartComponent.KEY, AutoStartComponent::new);
+        registry.register(ParticipationComponent.KEY, ParticipationComponent::new);
+        registry.register(SREGameRoundEndComponent.KEY, SREGameRoundEndComponent::new);
+        registry.register(MapVotingComponent.KEY, MapVotingComponent::new);
+    }
+
+    @Override
+    public void registerEntityComponentFactories(@NotNull EntityComponentFactoryRegistry registry) {
+        registry.beginRegistration(Player.class, SREArmorPlayerComponent.KEY)
+                .respawnStrategy(RespawnCopyStrategy.NEVER_COPY).end(SREArmorPlayerComponent::new);
+        registry.beginRegistration(Player.class, SRERoleDataPlayerComponent.KEY)
+                .respawnStrategy(RespawnCopyStrategy.NEVER_COPY).end(SRERoleDataPlayerComponent::new);
+        registry.beginRegistration(Player.class, SREWeakArmorPlayerComponent.KEY)
+                .respawnStrategy(RespawnCopyStrategy.NEVER_COPY).end(SREWeakArmorPlayerComponent::new);
+        registry.beginRegistration(Player.class, SREPlayerTaskComponent.KEY)
+                .respawnStrategy(RespawnCopyStrategy.NEVER_COPY).end(SREPlayerTaskComponent::new);
+        registry.beginRegistration(Player.class, ExtraSlotComponent.KEY)
+                .respawnStrategy(RespawnCopyStrategy.NEVER_COPY).end(ExtraSlotComponent::new);
+        registry.beginRegistration(Player.class, SREPlayerMoodComponent.KEY)
+                .respawnStrategy(RespawnCopyStrategy.NEVER_COPY).end(SREPlayerMoodComponent::new);
+        registry.beginRegistration(Player.class, SREPlayerShopComponent.KEY)
+                .respawnStrategy(RespawnCopyStrategy.NEVER_COPY).end(SREPlayerShopComponent::new);
+        registry.beginRegistration(Player.class, SREPlayerMinigameTaskComponent.KEY)
+                .respawnStrategy(RespawnCopyStrategy.NEVER_COPY).end(SREPlayerMinigameTaskComponent::new);
+        registry.beginRegistration(Player.class, DynamicShopComponent.KEY)
+                .respawnStrategy(RespawnCopyStrategy.NEVER_COPY).end(DynamicShopComponent::new);
+        registry.beginRegistration(Player.class, SREPlayerPoisonComponent.KEY)
+                .respawnStrategy(RespawnCopyStrategy.NEVER_COPY).end(SREPlayerPoisonComponent::new);
+        registry.beginRegistration(Player.class, SREPlayerPsychoComponent.KEY)
+                .respawnStrategy(RespawnCopyStrategy.NEVER_COPY).end(SREPlayerPsychoComponent::new);
+        registry.beginRegistration(Player.class, SREPlayerNoteComponent.KEY)
+                .respawnStrategy(RespawnCopyStrategy.NEVER_COPY).end(SREPlayerNoteComponent::new);
+
+        registry.beginRegistration(Player.class, SREPlayerAFKComponent.KEY)
+                .respawnStrategy(RespawnCopyStrategy.NEVER_COPY)
+                .end(SREPlayerAFKComponent::new);
+        registry.beginRegistration(Player.class, SREPlayerSkinsComponent.KEY)
+                .respawnStrategy(RespawnCopyStrategy.ALWAYS_COPY).end(SREPlayerSkinsComponent::new);
+
+        registry.beginRegistration(PlayerBodyEntity.class, PlayerBodyEntityComponent.KEY)
+                .respawnStrategy(RespawnCopyStrategy.NEVER_COPY).end(PlayerBodyEntityComponent::new);
+        registry.beginRegistration(Player.class, SREPlayerNunchuckComponent.KEY)
+                .respawnStrategy(RespawnCopyStrategy.NEVER_COPY).end(SREPlayerNunchuckComponent::new);
+        registry.beginRegistration(Player.class, NameTagInventoryComponent.KEY)
+                .respawnStrategy(RespawnCopyStrategy.ALWAYS_COPY).end(NameTagInventoryComponent::new);
+        registry.beginRegistration(Player.class, CustomRoleGameModeTeamsPlayerComponent.KEY)
+                .respawnStrategy(RespawnCopyStrategy.ALWAYS_COPY)
+                .end(CustomRoleGameModeTeamsPlayerComponent::new);
+        registry.beginRegistration(Player.class, SREPlayerDamageTrackerComponent.KEY)
+                .respawnStrategy(RespawnCopyStrategy.NEVER_COPY).end(SREPlayerDamageTrackerComponent::new);
+        // 自定义列车物品的命中标记（挂在被击中者身上，按物品 id 分开计数、超时自动消失）
+        registry.beginRegistration(Player.class, CustomItemHitMarkerComponent.KEY)
+                .respawnStrategy(RespawnCopyStrategy.NEVER_COPY).end(CustomItemHitMarkerComponent::new);
+        // 注意：自定义列车物品的冷却<b>没有</b>自己的 CCA 组件。
+        // 所有自定义列车物品共用同一个注册物品 starrailexpress:custom_item，
+        // 冷却统一写原版 ItemCooldowns（见 CustomItemRuntime.applyCooldown），
+        // 这样冷却的表现形式与原版完全一致，也不存在「原版冷却 + 自创冷却」两套状态。
+    }
+}

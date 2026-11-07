@@ -1,0 +1,99 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.client;
+
+import io.wifi.starrailexpress.api.data.RoleData;
+import io.wifi.starrailexpress.client.SREClient;
+import io.wifi.starrailexpress.game.GameUtils;
+import net.minecraft.ChatFormatting;
+import net.minecraft.client.Minecraft;
+import net.minecraft.network.chat.Component;
+import net.minecraft.world.entity.player.Player;
+import org.agmas.noellesroles.client.event.RoleHudRenderCallback;
+import org.agmas.noellesroles.role_data.neutral.WayfarerRoleData;
+import org.agmas.noellesroles.role.ModRoles;
+
+import java.awt.*;
+
+public class WayfarerHudRenderer {
+    public static void registerRendererEvent() {
+        RoleHudRenderCallback.EVENT.register(ModRoles.WAYFARER.identifier(),(guiGraphics, deltaTracker) -> {
+            // 渲染红尘客的提示
+            var client = Minecraft.getInstance();
+            if (client == null)
+                return;
+            if (client.player == null)
+                return;
+            if (SREClient.gameComponent == null
+                    || !SREClient.gameComponent.isRole(client.player, ModRoles.WAYFARER)) {
+                return;
+            }
+            if (!GameUtils.isPlayerAliveAndSurvival(client.player))
+                return;
+            // int screenWidth = guiGraphics.guiWidth();
+            int screenHeight = guiGraphics.guiHeight();
+            var font = client.font;
+            final int lineHeight = (font.lineHeight + 8);
+            int yOffset = screenHeight - lineHeight * 4; // 左下角
+            int xOffset = 30; // 距离左边缘
+            var wayC = RoleData.getOptional(WayfarerRoleData.class, client.player);
+            if (wayC.isEmpty()) return;
+            Component phaseText = Component
+                    .translatable("hud.noellesroles.wayfarer.phase." + wayC.get().phase + ".title")
+                    .withStyle(ChatFormatting.AQUA, ChatFormatting.BOLD);
+            Component descText = Component
+                    .translatable("hud.noellesroles.wayfarer.phase." + wayC.get().phase + ".desc")
+                    .withStyle(ChatFormatting.WHITE);
+            Component tipText = Component.translatable("hud.noellesroles.wayfarer.phase.0.tip")
+                    .withStyle(ChatFormatting.YELLOW);
+
+            if (wayC.get().phase == 1) {
+                Component killerText = Component
+                        .translatable("hud.noellesroles.wayfarer.phase.1.unknown_killer")
+                        .withStyle(ChatFormatting.GRAY);
+                if (wayC.get().killer != null) {
+                    Player killer = client.level.getPlayerByUUID(wayC.get().killer);
+                    if (killer != null) {
+                        killerText = Component.literal(killer.getName().getString())
+                                .withStyle(ChatFormatting.GOLD);
+                    }
+                }
+                tipText = Component.translatable("hud.noellesroles.wayfarer.phase.1.tip", killerText)
+                        .withStyle(ChatFormatting.YELLOW);
+            } else if (wayC.get().phase == 2) {
+                Component killerText = Component
+                        .translatable("death_reason." + wayC.get().deathReason.toLanguageKey())
+                        .withStyle(ChatFormatting.LIGHT_PURPLE);
+                tipText = Component.translatable("hud.noellesroles.wayfarer.phase.2.tip", killerText)
+                        .withStyle(ChatFormatting.AQUA);
+            } else if (wayC.get().phase == 3) {
+                tipText = Component.translatable("hud.noellesroles.wayfarer.phase.3.tip")
+                        .withStyle(ChatFormatting.GREEN);
+            } else if (wayC.get().phase == 4) {
+                tipText = Component.translatable("hud.noellesroles.wayfarer.phase.4.tip")
+                        .withStyle(ChatFormatting.LIGHT_PURPLE);
+            }
+            guiGraphics.drawString(font, phaseText, xOffset, yOffset,
+                    Color.WHITE.getRGB());
+            guiGraphics.drawString(font, descText, xOffset, yOffset + lineHeight,
+                    Color.WHITE.getRGB());
+
+            guiGraphics.drawString(font, tipText, xOffset, yOffset + lineHeight * 2,
+                    Color.WHITE.getRGB());
+            return;
+        });
+    }
+}

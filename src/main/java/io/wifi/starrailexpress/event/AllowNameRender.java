@@ -1,0 +1,58 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.event;
+
+import net.fabricmc.fabric.api.event.Event;
+import net.minecraft.world.entity.player.Player;
+
+import static net.fabricmc.fabric.api.event.EventFactory.createArrayBacked;
+
+/**
+ * 事件接口：判断是否允许渲染玩家的名称标签。
+ * 若任意监听器返回 {@code false}，则不渲染名称标签。
+ *
+ * <p>Event interface to determine whether a player's name tag should be rendered.
+ * If any listener returns {@code false}, the name tag will not be rendered.
+ */
+public interface AllowNameRender {
+
+    /**
+     * 判断是否允许渲染玩家名称标签的事件。
+     * 任意监听器返回 {@code false} 即阻止渲染。
+     *
+     * <p>Event callback to determine if a player's name tag is allowed to be rendered.
+     * Any listener returning {@code false} prevents rendering.
+     */
+    Event<AllowNameRender> EVENT = createArrayBacked(AllowNameRender.class, listeners -> (player) -> {
+        for (AllowNameRender listener : listeners) {
+            if (!listener.allowRenderName(player)) {
+                return false;
+            }
+        }
+        return true;
+    });
+
+    /**
+     * 判断是否允许渲染指定玩家的名称标签。
+     *
+     * <p>Determines whether the given player's name tag is allowed to be rendered.
+     *
+     * @param player 需要判断的玩家 / the player whose name tag rendering is being checked
+     * @return {@code true} 若允许渲染名称标签 / {@code true} if rendering the name tag is allowed
+     */
+    @SuppressWarnings("BooleanMethodIsAlwaysInverted")
+    boolean allowRenderName(Player player);
+}

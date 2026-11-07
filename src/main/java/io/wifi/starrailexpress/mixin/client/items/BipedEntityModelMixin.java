@@ -1,0 +1,130 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.mixin.client.items;
+
+import org.agmas.noellesroles.content.item.HandCuffsItem;
+import org.spongepowered.asm.mixin.Final;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+
+import io.wifi.starrailexpress.cca.SREPlayerMoodComponent;
+import io.wifi.starrailexpress.cca.SREPlayerPsychoComponent;
+import io.wifi.starrailexpress.content.item.api.SREItemProperties.HeldLikeRevolver;
+import io.wifi.starrailexpress.event.AllowItemShowInHand;
+import io.wifi.starrailexpress.index.tag.TMMItemTags;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.model.HumanoidModel;
+import net.minecraft.client.model.geom.ModelPart;
+import net.minecraft.world.entity.HumanoidArm;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
+
+@Mixin(HumanoidModel.class)
+public class BipedEntityModelMixin<T extends LivingEntity> {
+    @Shadow
+    @Final
+    public ModelPart leftArm;
+
+    @Shadow
+    @Final
+    public ModelPart rightArm;
+
+    @Shadow
+    @Final
+    public ModelPart head;
+
+    @Inject(method = "poseRightArm", at = @At("TAIL"))
+    private void tmm$holdRevolverRightArm(T entity, CallbackInfo ci) {
+        if (entity instanceof Player p && HandCuffsItem.hasHandCuff(p))
+            return;
+        boolean frenzy = isShootingFrenzy(entity);
+        if (entity.getMainArm() == HumanoidArm.RIGHT) {
+            // 右手为主手：主手持枪或射击狂热时摆出持枪姿势
+            if (frenzy || isHoldingGun(entity, true)) {
+                holdGun(this.rightArm, this.leftArm, this.head, true);
+            }
+        } else if (frenzy || isHoldingGun(entity, false)) {
+            // 右手为副手：射击狂热（双持左轮）或副手持枪时同样伸直摆出持枪姿势
+            holdGun(this.rightArm, this.leftArm, this.head, true);
+        }
+    }
+
+    @Inject(method = "poseLeftArm", at = @At("TAIL"))
+    private void tmm$tmm$holdRevolverLeftArm(T entity, CallbackInfo ci) {
+        boolean frenzy = isShootingFrenzy(entity);
+        if (entity.getMainArm() != HumanoidArm.RIGHT) {
+            // 左手为主手：主手持枪或射击狂热时摆出持枪姿势
+            if (frenzy || isHoldingGun(entity, false)) {
+                holdGun(this.rightArm, this.leftArm, this.head, false);
+            }
+        } else if (frenzy || isGunLikeItem(entity.getOffhandItem())) {
+            // 左手为副手：射击狂热（双持左轮）或副手持枪时同样伸直摆出持枪姿势
+            holdGun(this.rightArm, this.leftArm, this.head, false);
+        }
+    }
+
+    private static ItemStack noellesroles$resolve(Player player, ItemStack stack, boolean mainhand) {
+        // 修复原代码 bug：根据 mainHand 参数取对应手的物品
+        ItemStack eventRes = AllowItemShowInHand.EVENT.invoker().allowShowInHand(player, stack, mainhand);
+        return eventRes != null ? eventRes : stack;
+    }
+
+    @Unique
+    private boolean isHoldingGun(T entity, boolean mainhand) {
+        var stack = entity.getMainHandItem();
+        if (entity instanceof Player player) {
+            stack = noellesroles$resolve(player, stack, mainhand);
+        }
+        ItemStack psychosisItemStack = SREPlayerMoodComponent.KEY.get(Minecraft.getInstance().player)
+                .getPsychosisItems().get(entity.getUUID());
+        if (psychosisItemStack != null) {
+            return isGunLikeItem(psychosisItemStack);
+        } else
+            return isGunLikeItem(stack);
+    }
+
+    @Unique
+    private boolean isShootingFrenzy(T entity) {
+        // 刽子手射击狂热：psycho type=1 期间双手渲染为左轮（见 InvisbleHandItem），姿势同步伸直形成双持
+        if (!(entity instanceof Player player))
+            return false;
+        var psycho = SREPlayerPsychoComponent.KEY.get(player);
+        return psycho.psychoTicks > 0 && psycho.type == 1;
+    }
+
+    @Unique
+    private boolean isGunLikeItem(ItemStack stack) {
+        if (stack.is(TMMItemTags.HELD_LIKE_GUNS_ITEMS))
+            return true;
+        if (stack.getItem() instanceof HeldLikeRevolver)
+            return true;
+        // 自定义列车物品：只有「枪械道具」把手持姿势设为「左轮手枪式」时才摆持枪姿势
+        // （holdPose 的默认值就是 REVOLVER，不加性质判断会把蓄力道具等也带上持枪姿势）
+        return io.wifi.starrailexpress.customitem.CustomItemLoader.isHeldLikeRevolver(stack);
+    }
+
+    @Unique
+    private static void holdGun(ModelPart holdingArm, ModelPart otherArm, ModelPart head, boolean rightArmed) {
+        ModelPart modelPart = rightArmed ? holdingArm : otherArm;
+        modelPart.yRot = (rightArmed ? -0.3F : 0.3F) + head.yRot;
+        modelPart.xRot = (float) (-Math.PI / 2) + head.xRot + 0.1F;
+    }
+}

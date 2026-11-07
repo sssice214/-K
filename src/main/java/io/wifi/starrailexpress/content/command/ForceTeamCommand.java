@@ -1,0 +1,105 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.content.command;
+
+import com.mojang.brigadier.CommandDispatcher;
+
+import io.wifi.starrailexpress.SREConfig;
+import net.minecraft.ChatFormatting;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.commands.Commands;
+import net.minecraft.commands.arguments.EntityArgument;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerPlayer;
+
+import org.agmas.harpymodloader.modded_murder.PlayerRoleWeightManager;
+import org.agmas.harpymodloader.modded_murder.ForceTeamInfo.ForceTeamType;
+import org.jetbrains.annotations.NotNull;
+
+import java.util.Collection;
+
+public class ForceTeamCommand {
+    public static void register(@NotNull CommandDispatcher<CommandSourceStack> dispatcher) {
+        dispatcher.register(Commands.literal("forceTeam").requires(
+                source -> source.hasPermission(SREConfig.instance().forceTeamRequiredPermission))
+                .then(Commands
+                        .argument("players", EntityArgument.players())
+                        .then(Commands.literal("innocent")
+                                .executes(context -> forceTeam(context.getSource(),
+                                        EntityArgument.getPlayers(context,
+                                                "players"),
+                                        1)))
+                        .then(Commands.literal("neutral")
+                                .executes(context -> forceTeam(context.getSource(),
+                                        EntityArgument.getPlayers(context,
+                                                "players"),
+                                        2)))
+                        .then(Commands.literal("neutral_for_killer")
+                                .executes(context -> forceTeam(context.getSource(),
+                                        EntityArgument.getPlayers(context,
+                                                "players"),
+                                        3)))
+                        .then(Commands.literal("killer")
+                                .executes(context -> forceTeam(context.getSource(),
+                                        EntityArgument.getPlayers(context,
+                                                "players"),
+                                        4)))
+                        .then(Commands.literal("vigilante")
+                                .executes(context -> forceTeam(context.getSource(),
+                                        EntityArgument.getPlayers(context,
+                                                "players"),
+                                        5)))
+                        .then(Commands.literal("reset")
+                                .executes(context -> forceTeam(context.getSource(),
+                                        EntityArgument.getPlayers(context,
+                                                "players"),
+                                        -1)))));
+    }
+
+    private static int forceTeam(@NotNull CommandSourceStack source, @NotNull Collection<ServerPlayer> players,
+            int roleType) {
+
+        for (var player : players) {
+            PlayerRoleWeightManager.forceTeam(player.getUUID(), roleType, ForceTeamType.COMMAND);
+        }
+        if (roleType == -1) {
+            source.sendSuccess(
+                    () -> Component
+                            .translatable("Reset thier forced team!")
+                            .withStyle(ChatFormatting.GOLD),
+                    true);
+            return 1;
+        }
+        final String[] TypeMappings = { "All", "Innocent", "Neutral", "Neutral for killers", "Killer",
+                "Vigilante" };
+        if (players.size() == 1) {
+            ServerPlayer player = players.iterator().next();
+            source.sendSuccess(
+                    () -> Component
+                            .translatable("Force %s Team: %s", player.getName().getString(),
+                                    TypeMappings[roleType])
+                            .withStyle(ChatFormatting.GOLD),
+                    true);
+        } else {
+            source.sendSuccess(
+                    () -> Component.translatable("Force %s players team: %s", players.size(),
+                            TypeMappings[roleType])
+                            .withStyle(style -> style.withColor(0x00FF00)),
+                    true);
+        }
+        return 1;
+    }
+}

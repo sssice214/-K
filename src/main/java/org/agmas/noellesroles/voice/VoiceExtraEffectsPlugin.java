@@ -1,0 +1,883 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.voice;
+
+import de.maxhenkel.voicechat.api.VoicechatApi;
+import de.maxhenkel.voicechat.api.VoicechatPlugin;
+import de.maxhenkel.voicechat.api.events.ClientReceiveSoundEvent;
+import de.maxhenkel.voicechat.api.events.EventRegistration;
+import de.maxhenkel.voicechat.api.events.OpenALSoundEvent;
+import io.wifi.starrailexpress.client.SREClient;
+import net.fabricmc.api.EnvType;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.loader.api.FabricLoader;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.level.Level;
+
+import org.agmas.noellesroles.init.ModEffects;
+import org.lwjgl.openal.AL11;
+import org.lwjgl.openal.EXTEfx;
+
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * 统一存放“说话者侧”额外语音药水效果的客户端处理：
+ *
+ * <ul>
+ * <li>PCM 级效果（{@code ClientReceiveSoundEvent}，在原始音频上传到 OpenAL 之前处理）：
+ * <ul>
+ * <li>{@code VOICE_HELMET} 远处/头盔声：低通滤波（截止频率随等级下降）</li>
+ * <li>{@code VOICE_SYNTH} 合成人声 / 自动调音：基频检测 + 量化到最近半音 + WSOLA 变调</li>
+ * <li>{@code VOICE_DISTORTION} 失真：tanh 软削波</li>
+ * <li>{@code VOICE_CHORUS} 合唱：延迟线 + LFO 调制</li>
+ * <li>{@code VOICE_TREMOLO} 颤音：幅度 LFO 调制</li>
+ * <li>{@code VOICE_STUTTER} 口吃：重复小段音频</li>
+ * <li>{@code VOICE_REVERSE} 倒放：分块缓冲后反向播放</li>
+ * </ul>
+ * </li>
+ * <li>OpenAL 源级效果（{@code OpenALSoundEvent.Post}，仅混响）：
+ * <ul>
+ * <li>{@code VOICE_REVERB} 混响：EFX REVERB 效果经辅助效果槽（aux send 1）路由</li>
+ * </ul>
+ * </li>
+ * </ul>
+ *
+ * <p>
+ * <b>为什么低通不做在 OpenAL 源上：</b>语音源是一次性的，说话结束即销毁、ID 会被 OpenAL 回收并重新分配
+ * 给 Minecraft 的音效通道。在源上挂 {@code AL_DIRECT_FILTER} 会让低通泄漏到世界音效上（表现为音效整体消失），
+ * 且效果结束后没有任何分支负责摘掉它，于是永久静音。改到 PCM 级后只作用于本段语音数据，效果到期自然无残留。
+ * 同理，{@code VOICE_UNDERWATER} 的低通也一并搬到 PCM。
+ * </p>
+ *
+ * <p>
+ * 说话者效果由 {@link org.agmas.noellesroles.voice.VoiceEffectSync} 广播到听者客户端，
+ * 因此本插件直接在听者侧查 {@code level.getPlayerByUUID(speaker).hasEffect(...)} 即可生效。
+ * </p>
+ */
+public class VoiceExtraEffectsPlugin implements VoicechatPlugin {
+
+    private static final int SAMPLE_RATE = 48000;
+
+    // ---- OpenAL / EFX 常量（显式定义以兼容） ----
+    private static final int AL_DIRECT_FILTER = 0x20005;
+    private static final int AL_FILTER_NULL = 0;
+    private static final int AL_EFFECT_TYPE = 0x8001;
+    private static final int AL_EFFECT_REVERB = 0x0004;
+    private static final int AL_EFFECTSLOT_EFFECT = 0x0001;
+    private static final int AL_AUXILIARY_SEND_FILTER = 0x20006;
+
+    // EFX REVERB 参数
+    private static final int AL_REVERB_DENSITY = 0x0001;
+    private static final int AL_REVERB_DIFFUSION = 0x0002;
+    private static final int AL_REVERB_GAIN = 0x0003;
+    private static final int AL_REVERB_GAINHF = 0x0004;
+    private static final int AL_REVERB_DECAY_TIME = 0x0005;
+    private static final int AL_REVERB_DECAY_HFRATIO = 0x0006;
+    private static final int AL_REVERB_REFLECTIONS_GAIN = 0x0007;
+    private static final int AL_REVERB_REFLECTIONS_DELAY = 0x0008;
+    private static final int AL_REVERB_LATE_REVERB_GAIN = 0x0009;
+    private static final int AL_REVERB_LATE_REVERB_DELAY = 0x000A;
+    private static final int AL_REVERB_AIR_ABSORPTION_GAINHF = 0x000B;
+    private static final int AL_REVERB_ROOM_ROLLOFF_FACTOR = 0x000C;
+
+    /** EFX 是否可用（不可用时跳过所有 OpenAL 效果）。 */
+    private static volatile boolean efxAvailable = true;
+
+    // ---- 每个说话者的 EFX 资源 ----
+    private static final Map<UUID, int[]> REVERB_RESOURCES = new ConcurrentHashMap<>(); // {slot, effect}
+
+    // ---- 每个说话者的 PCM 状态 ----
+    private static final Map<UUID, VoiceLowPassState> HELMET_LOWPASS = new ConcurrentHashMap<>();
+    private static final Map<UUID, VoiceLowPassState> UNDERWATER_LOWPASS = new ConcurrentHashMap<>();
+    private static final Map<UUID, HeliumPitchShifter> HELIUM_SHIFTERS = new ConcurrentHashMap<>();
+    private static final Map<UUID, HeliumPitchShifter> SYNTH_SHIFTERS = new ConcurrentHashMap<>();
+    private static final Map<UUID, Double> SYNTH_RATIO = new ConcurrentHashMap<>();
+    private static final Map<UUID, ChorusState> CHORUS = new ConcurrentHashMap<>();
+    private static final Map<UUID, Double> TREMOLO_PHASE = new ConcurrentHashMap<>();
+    private static final Map<UUID, StutterState> STUTTER = new ConcurrentHashMap<>();
+    private static final Map<UUID, ReverseState> REVERSE = new ConcurrentHashMap<>();
+    private static final Map<UUID, EchoState> ECHO = new ConcurrentHashMap<>();
+    private static final Map<UUID, MuffledHearingState> MUFFLED_HEARING_STATE = new ConcurrentHashMap<>();
+    private static final Map<UUID, Integer> VOICE_SOURCES = new ConcurrentHashMap<>();
+
+    @Override
+    public String getPluginId() {
+        return "noellesroles_voice_extra_effects";
+    }
+
+    @Override
+    public void initialize(VoicechatApi api) {
+        VoicechatPlugin.super.initialize(api);
+    }
+
+    @Override
+    public void registerEvents(EventRegistration registration) {
+        // 所有处理都在听者客户端完成，仅客户端注册。
+        if (FabricLoader.getInstance().getEnvironmentType() != EnvType.CLIENT) {
+            return;
+        }
+        registration.registerEvent(OpenALSoundEvent.Post.class, this::onOpenALSound);
+        registration.registerEvent(ClientReceiveSoundEvent.EntitySound.class, this::onClientSound);
+        registration.registerEvent(ClientReceiveSoundEvent.LocationalSound.class, this::onClientSound);
+        registration.registerEvent(ClientReceiveSoundEvent.StaticSound.class, this::onClientSound);
+        ClientTickEvents.END_CLIENT_TICK.register(client -> clearStaleVoiceEffects());
+    }
+
+    // =========================================================================
+    // OpenAL 源级效果（头盔 / 水下 / 混响）
+    // =========================================================================
+
+    private void onOpenALSound(OpenALSoundEvent.Post event) {
+        UUID speaker = event.getChannelId();
+        if (speaker == null)
+            return;
+        int source = event.getSource();
+        Level level = SREClient.getMinecraftLevel();
+        if (level == null)
+            return;
+        VOICE_SOURCES.put(speaker, source);
+        Player player = level.getPlayerByUUID(speaker);
+        if (player == null) {
+            cleanupSpeaker(speaker);
+            return;
+        }
+
+        int reverb = ModEffects.getVoiceReverbLevel(player);
+
+        // 只有混响留在 OpenAL（PCM 做不了混响）。
+        // 低通一律走 PCM：语音 OpenAL 源是一次性的，说话结束即销毁、ID 会被 OpenAL 回收并
+        // 分配给 Minecraft 的音效通道。在源上挂 AL_DIRECT_FILTER 会让低通泄漏到世界音效上
+        // （表现为音效整体消失），而且效果结束后再也没有任何分支负责把它摘掉。
+        applyReverb(source, speaker, reverb);
+    }
+
+    /**
+     * 收敛残留的语音源效果。
+     *
+     * <p>只做清除、绝不做挂载：语音源被回收后 ID 可能已经分配给 Minecraft 的音效通道，
+     * 此时往它身上写任何滤波器都会污染世界音效；而清除是幂等且无害的。
+     */
+    private static void clearStaleVoiceEffects() {
+        Level level = SREClient.getMinecraftLevel();
+        VOICE_SOURCES.forEach((speaker, source) -> {
+            if (!isSourceAlive(source)) {
+                VOICE_SOURCES.remove(speaker, source);
+                return;
+            }
+            // 说话者已离开世界：源马上会被回收/复用，现在把效果撤干净，别留给下一个使用者
+            if (level == null || level.getPlayerByUUID(speaker) == null) {
+                clearSourceEffects(source);
+                VOICE_SOURCES.remove(speaker, source);
+            }
+        });
+    }
+
+    /** 校验 OpenAL 源是否仍然存在（不存在说明 ID 已被回收）。 */
+    private static boolean isSourceAlive(int source) {
+        if (source == 0)
+            return false;
+        try {
+            return AL11.alIsSource(source);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 把源上的低通与混响 aux 撤掉，用于源即将被丢弃的场合。 */
+    private static void clearSourceEffects(int source) {
+        if (!isSourceAlive(source))
+            return;
+        try {
+            AL11.alSourcei(source, AL_DIRECT_FILTER, AL_FILTER_NULL);
+        } catch (Throwable ignored) {
+        }
+        try {
+            AL11.alSource3i(source, AL_AUXILIARY_SEND_FILTER, AL_FILTER_NULL, 1, 0);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * 头盔语音低通（PCM 级）。
+     *
+     * <p>不用 {@code AL_DIRECT_FILTER}：那个滤波挂在 OpenAL 源上，而语音源销毁后 ID 会被回收
+     * 给 Minecraft 的音效通道，低通就会泄漏到世界音效上。PCM 级只作用于本段语音数据，
+     * 效果到期后自然没有任何残留。
+     *
+     * <p>截止频率随等级下降：1 级约 3200Hz（只是稍微发闷），5 级约 1180Hz（明显隔着头盔）。
+     */
+    private static short[] helmetLowPassTransform(short[] pcm, UUID speaker, int level) {
+        VoiceLowPassState st = HELMET_LOWPASS.computeIfAbsent(speaker, k -> new VoiceLowPassState(3200.0f, 0.78f, 500.0f));
+        st.configure(level);
+        short[] result = new short[pcm.length];
+        for (int i = 0; i < pcm.length; i++) {
+            result[i] = clamp(st.filter.process(pcm[i]));
+        }
+        return result;
+    }
+
+    /** 混响：EFX REVERB 经辅助效果槽（aux send 1）路由。 */
+    private static void applyReverb(int source, UUID speaker, int reverb) {
+        if (reverb <= 0) {
+            try {
+                AL11.alSource3i(source, AL_AUXILIARY_SEND_FILTER, AL_FILTER_NULL, 1, 0);
+            } catch (Throwable ignored) {
+            }
+            return;
+        }
+        if (!efxAvailable)
+            return;
+
+        try {
+            int[] res = REVERB_RESOURCES.computeIfAbsent(speaker, k -> createReverbEffect());
+            if (res == null)
+                return;
+            int slot = res[0];
+            int effect = res[1];
+
+            EXTEfx.alEffectf(effect, AL_REVERB_DENSITY, 0.5f + reverb * 0.1f);
+            EXTEfx.alEffectf(effect, AL_REVERB_DIFFUSION, 0.6f + reverb * 0.08f);
+            EXTEfx.alEffectf(effect, AL_REVERB_GAIN, 0.4f + reverb * 0.05f); // 湿声量
+            EXTEfx.alEffectf(effect, AL_REVERB_GAINHF, 0.6f);
+            EXTEfx.alEffectf(effect, AL_REVERB_DECAY_TIME, 0.6f + reverb * 0.28f);
+            EXTEfx.alEffectf(effect, AL_REVERB_DECAY_HFRATIO, 0.6f);
+            EXTEfx.alEffectf(effect, AL_REVERB_REFLECTIONS_GAIN, 0.18f + reverb * 0.04f);
+            EXTEfx.alEffectf(effect, AL_REVERB_REFLECTIONS_DELAY, 0.02f);
+            EXTEfx.alEffectf(effect, AL_REVERB_LATE_REVERB_GAIN, 0.3f + reverb * 0.06f);
+            EXTEfx.alEffectf(effect, AL_REVERB_LATE_REVERB_DELAY, 0.03f + reverb * 0.01f);
+            EXTEfx.alEffectf(effect, AL_REVERB_AIR_ABSORPTION_GAINHF, 0.1f);
+            EXTEfx.alEffectf(effect, AL_REVERB_ROOM_ROLLOFF_FACTOR, 0.0f);
+
+            AL11.alSource3i(source, AL_AUXILIARY_SEND_FILTER, slot, 1, 0);
+        } catch (Throwable t) {
+            efxAvailable = false;
+        }
+    }
+
+    private static int[] createReverbEffect() {
+        int slot = EXTEfx.alGenAuxiliaryEffectSlots();
+        int effect = EXTEfx.alGenEffects();
+        EXTEfx.alEffecti(effect, AL_EFFECT_TYPE, AL_EFFECT_REVERB);
+        EXTEfx.alAuxiliaryEffectSloti(slot, AL_EFFECTSLOT_EFFECT, effect);
+        return new int[] { slot, effect };
+    }
+
+    // =========================================================================
+    // PCM 级效果（合成 / 失真 / 合唱 / 颤音 / 口吃 / 倒放）
+    // =========================================================================
+
+    private void onClientSound(ClientReceiveSoundEvent event) {
+        // SVC 音频线程只读 volatile 演出标记；不读取世界、不影响其他观众的会话。
+        if (io.wifi.starrailexpress.settlement.client.SettlementClient.isActive()) {
+            event.cancel();
+            return;
+        }
+        if (event.isCancelled())
+            return;
+        Player localPlayer = SREClient.getMinecraftPlayer();
+        Level level = SREClient.getMinecraftLevel();
+        if (localPlayer != null && localPlayer.hasEffect(ModEffects.DEAFNESS)) {
+            event.cancel();
+            return;
+        }
+        short[] pcm = event.getRawAudio();
+        if (pcm == null || pcm.length == 0)
+            return;
+
+        UUID speaker = event.getId();
+        if (speaker == null)
+            return;
+
+        if (level == null)
+            return;
+
+        // 万圣亡魂夜：听者授权快照先处理，旁观者实体尚未跟踪到时也不能漏出清晰原声。
+        pcm = org.agmas.noellesroles.game.halloween.village.VillageGhostAudio.transform(speaker, pcm);
+        event.setRawAudio(pcm);
+
+        Player player = level.getPlayerByUUID(speaker);
+        if (player == null) {
+            cleanupSpeaker(speaker);
+            return;
+        }
+
+        int synth = ModEffects.getVoiceSynthLevel(player);
+        int dist = ModEffects.getVoiceDistortionLevel(player);
+        int chorus = ModEffects.getVoiceChorusLevel(player);
+        int trem = ModEffects.getVoiceTremoloLevel(player);
+        int stut = ModEffects.getVoiceStutterLevel(player);
+        int rev = ModEffects.getVoiceReverseLevel(player);
+        int helium = ModEffects.getVoiceHeliumLevel(player);
+        int helmet = ModEffects.getVoiceHelmetLevel(player);
+        int underwater = ModEffects.getVoiceUnderwaterLevel(player);
+        int echo = ModEffects.getVoiceEchoCount(player);
+
+        // 听觉模糊是听者侧效果：保留声音，但降低清晰度和音量。
+        int muffledHearing = localPlayer == null ? 0 : ModEffects.getMuffledHearingLevel(localPlayer);
+
+        // 注意：多个效果可叠加，按固定顺序串联处理。
+        // 升调（氦气）最先处理，作用在原始信号上，使其余效果叠加在变调后的音频上。
+        // 低通类（头盔 / 水下）放在最前面：它们模拟的是"听到的东西"，应先于所有音高/时域处理。
+        if (helmet > 0) {
+            pcm = helmetLowPassTransform(pcm, speaker, helmet);
+        } else {
+            HELMET_LOWPASS.remove(speaker);
+        }
+        if (underwater > 0) {
+            pcm = underwaterTransform(pcm, speaker, underwater);
+        } else {
+            UNDERWATER_LOWPASS.remove(speaker);
+        }
+        if (helium > 0)
+            pcm = heliumTransform(pcm, speaker, helium);
+        if (rev > 0)
+            pcm = reverseTransform(pcm, speaker, rev);
+        if (synth > 0)
+            pcm = synthTransform(pcm, speaker, synth);
+        if (chorus > 0)
+            pcm = chorusTransform(pcm, speaker, chorus);
+        if (dist > 0)
+            pcm = distortionTransform(pcm, speaker, dist);
+        if (trem > 0)
+            pcm = tremoloTransform(pcm, speaker, trem);
+        if (echo > 0)
+            pcm = echoTransform(pcm, speaker, echo);
+        if (stut > 0)
+            pcm = stutterTransform(pcm, speaker, stut);
+        if (muffledHearing > 0) {
+            pcm = muffledHearingTransform(pcm, speaker, muffledHearing);
+        } else {
+            MUFFLED_HEARING_STATE.remove(speaker);
+        }
+
+        if (localPlayer != null) {
+            float keenScale = ModEffects.getKeenHearingVolumeScale(localPlayer);
+            if (keenScale < 1.0f) {
+                pcm = scalePcm(pcm, keenScale);
+            }
+        }
+
+        event.setRawAudio(pcm);
+    }
+
+    /** 按倍率缩放语音 PCM，用于耳聪把周围说话声压到极小。 */
+    private static short[] scalePcm(short[] pcm, float gain) {
+        short[] result = new short[pcm.length];
+        for (int i = 0; i < pcm.length; i++) {
+            result[i] = (short) Math.round(pcm[i] * gain);
+        }
+        return result;
+    }
+
+    /** 简单的一阶低通：保留低频轮廓，让语音能听见但不再清楚。 */
+    private static short[] muffledHearingTransform(short[] pcm, UUID speaker, int level) {
+        short[] result = new short[pcm.length];
+        // Keep voice chat in step with the global MASTER attenuation:
+        // level I is 15%, and level VI (and above) is silent.
+        float gain = Math.max(0.0f, 0.15f - Math.max(0, level - 1) * 0.03f);
+        MuffledHearingState state = MUFFLED_HEARING_STATE.computeIfAbsent(speaker,
+                ignored -> new MuffledHearingState());
+        state.configureFilter(level);
+        for (int i = 0; i < pcm.length; i++) {
+            float filtered = state.filter1.process(pcm[i]);
+            filtered = state.filter2.process(filtered);
+
+            // A very short, moving smear makes consonants overlap slightly,
+            // giving the sound a hazy/chaotic edge instead of simple silence.
+            int delay = Math.min(state.smear.length - 1, 120 + level * 20);
+            int delayedIndex = (state.smearPos - delay + state.smear.length) % state.smear.length;
+            float delayed = state.smear[delayedIndex];
+            state.smear[state.smearPos] = filtered;
+            state.smearPos = (state.smearPos + 1) % state.smear.length;
+            float wet = Math.min(0.26f, 0.10f + level * 0.012f);
+            float smeared = filtered * (1.0f - wet) + delayed * wet;
+
+            // Two slow, incommensurate oscillations keep the smear from
+            // sounding like a clean static echo.
+            float wobble = (float) (0.5 * Math.sin(state.phase)
+                    + 0.5 * Math.sin(state.phase * 1.71 + 1.2));
+            state.phase += 2.0 * Math.PI * (0.65 + level * 0.04) / SAMPLE_RATE;
+
+            // Recruitment: compress loud peaks with a soft clip instead of
+            // hard-clipping them, which gives loud speech a slightly rough
+            // inner-ear distortion.
+            float normalized = smeared / 32768.0f;
+            float drive = 1.15f + level * 0.12f;
+            float clipped = (float) (Math.tanh(normalized * drive) / Math.tanh(drive));
+            float noise = state.nextPinkNoise() * (0.0015f + level * 0.00035f)
+                    * (gain / 0.15f);
+            float output = clipped * (1.0f + wobble * (0.012f + level * 0.002f)) * gain;
+            result[i] = clamp((output + noise) * 32767.0f);
+        }
+        return result;
+    }
+
+    /** 合成人声 / 自动调音：检测基频，量化到最近半音，用 WSOLA 变调（复用 HeliumPitchShifter）。 */
+    private static short[] synthTransform(short[] pcm, UUID speaker, int level) {
+        double f0 = detectPitch(pcm);
+        double ratio = 1.0;
+        if (f0 >= 70.0 && f0 <= 1200.0) {
+            double note = Math.round(12.0 * Math.log(f0 / 440.0) / Math.log(2.0));
+            double snapped = 440.0 * Math.pow(2.0, note / 12.0);
+            ratio = snapped / f0;
+        }
+        ratio = Math.max(0.5, Math.min(2.0, ratio));
+        // 等级越高：在自动调音基础上额外整体上移音高（每级 +2 半音），越来越"电子歌姬/尖细"。
+        double transpose = Math.pow(2.0, (level - 1) * 2.0 / 12.0);
+        ratio = Math.max(0.5, Math.min(2.0, ratio * transpose));
+        // 平滑避免抖动
+        double prev = SYNTH_RATIO.getOrDefault(speaker, 1.0);
+        double smoothed = prev + 0.3 * (ratio - prev);
+        SYNTH_RATIO.put(speaker, smoothed);
+        HeliumPitchShifter shifter = SYNTH_SHIFTERS.computeIfAbsent(speaker, k -> new HeliumPitchShifter());
+        return shifter.process(pcm, (float) smoothed);
+    }
+
+    /**
+     * 水下语音：低通 + 降音量（PCM 级）。
+     * <p>
+     * 衰减系数与原本一致：1 级≈0.7，最高 5 级≈0.46；低通截止频率随等级下降。
+     * </p>
+     */
+    private static short[] underwaterTransform(short[] pcm, UUID speaker, int level) {
+        VoiceLowPassState st = UNDERWATER_LOWPASS.computeIfAbsent(speaker,
+                k -> new VoiceLowPassState(2400.0f, 0.75f, 400.0f));
+        st.configure(level);
+        float gain = Math.max(0.4f, 0.7f - (level - 1) * 0.06f);
+        short[] result = new short[pcm.length];
+        for (int i = 0; i < pcm.length; i++) {
+            result[i] = clamp(st.filter.process(pcm[i]) * gain);
+        }
+        return result;
+    }
+
+    /**
+     * 氦气变声：WSOLA 实时升调。变调倍率随等级提升（等级越高声音越尖）。
+     * ratio：1 级≈1.3，每升 1 级 +0.25，最高 2.5（HeliumPitchShifter 上限）。
+     */
+    private static short[] heliumTransform(short[] pcm, UUID speaker, int level) {
+        float ratio = (float) Math.min(2.5, 1.3 + (level - 1) * 0.25);
+        HeliumPitchShifter shifter = HELIUM_SHIFTERS.computeIfAbsent(speaker, k -> new HeliumPitchShifter());
+        return shifter.process(pcm, ratio);
+    }
+
+    /**
+     * 失真：预增益 + 硬削波（hard clip）。
+     * <p>
+     * 相较 tanh 软削波，硬削波在小信号时也放大、到达阈值后直接截平，
+     * 1 级即可明显听出"破音/电吉他"质感；等级越高驱动越强、削波越狠。
+     * </p>
+     */
+    private static short[] distortionTransform(short[] pcm, UUID speaker, int level) {
+        double drive = 5.0 + (level - 1) * 1.5; // 5.0 -> 11.0
+        double threshold = 0.75 - (level - 1) * 0.06; // 削波阈值，等级越高越早截平
+        for (int i = 0; i < pcm.length; i++) {
+            double s = ((double) pcm[i]) * drive / 32767.0;
+            s = Math.max(-threshold, Math.min(threshold, s));
+            pcm[i] = clamp(s / threshold * 32767.0);
+        }
+        return pcm;
+    }
+
+    /** 合唱：延迟线 + 正弦 LFO 调制延迟，干/湿混合。 */
+    private static short[] chorusTransform(short[] pcm, UUID speaker, int level) {
+        ChorusState st = CHORUS.computeIfAbsent(speaker, k -> new ChorusState());
+        int baseDelay = (int) (0.018 * SAMPLE_RATE); // 18ms
+        int depth = (int) ((2.0 + level) * 0.001 * SAMPLE_RATE); // 调制深度 ~2~7ms
+        double lfoRate = 0.5 + level * 0.1; // Hz
+        double wet = Math.min(0.8, 0.4 + level * 0.05);
+        for (int i = 0; i < pcm.length; i++) {
+            double lfo = Math.sin(st.phase);
+            st.phase += 2.0 * Math.PI * lfoRate / SAMPLE_RATE;
+            int d = baseDelay + (int) (depth * lfo);
+            if (d < 1)
+                d = 1;
+            if (d >= st.buf.length)
+                d = st.buf.length - 1;
+            int readPos = (st.bufPos - d + st.buf.length) % st.buf.length;
+            float delayed = st.buf[readPos];
+            float s = pcm[i];
+            float out = (float) ((1.0 - wet) * s + wet * delayed);
+            st.buf[st.bufPos] = s;
+            st.bufPos = (st.bufPos + 1) % st.buf.length;
+            pcm[i] = clamp(out);
+        }
+        return pcm;
+    }
+
+    /** 颤音：幅度 LFO 调制。 */
+    private static short[] tremoloTransform(short[] pcm, UUID speaker, int level) {
+        double phase = TREMOLO_PHASE.getOrDefault(speaker, 0.0);
+        double rate = 5.0 + level * 1.5; // Hz
+        double depth = Math.min(0.95, 0.55 + level * 0.1); // 1 级≈0.65，5 级≈0.95
+        for (int i = 0; i < pcm.length; i++) {
+            double factor = 1.0 - depth * (0.5 - 0.5 * Math.sin(phase));
+            phase += 2.0 * Math.PI * rate / SAMPLE_RATE;
+            pcm[i] = clamp(pcm[i] * factor);
+        }
+        TREMOLO_PHASE.put(speaker, phase);
+        return pcm;
+    }
+
+    /**
+     * 回响（echo）：单条反馈延迟线，产生清晰、可分辨的重复回声。
+     * <p>
+     * 与混响（多条线融合成空间尾音）不同，回响是"明显的延迟重复"：
+     * 声音延迟 delay 后原样复读，并逐次衰减。等级越高延迟越长、回声越多越明显。
+     * </p>
+     */
+    private static short[] echoTransform(short[] pcm, UUID speaker, int level) {
+        EchoState st = getEchoState(speaker, level);
+        float feedback = Math.min(0.8f, 0.5f + level * 0.06f); // 0.56 -> 0.8，回声衰减
+        float wet = Math.min(0.7f, 0.45f + level * 0.05f); // 湿声比例 0.5 -> 0.7
+        for (int i = 0; i < pcm.length; i++) {
+            int readPos = (st.bufPos - st.delay + st.buf.length) % st.buf.length;
+            float delayed = st.buf[readPos];
+            st.buf[st.bufPos] = pcm[i] + delayed * feedback;
+            st.bufPos = (st.bufPos + 1) % st.buf.length;
+            pcm[i] = clamp(pcm[i] * (1f - wet) + delayed * wet);
+        }
+        return pcm;
+    }
+
+    /** 口吃：填充一小段后重复播放该段 level 次（level=1 即至少重复 1 次，保证默认等级可听）。 */
+    private static short[] stutterTransform(short[] pcm, UUID speaker, int level) {
+        StutterState st = STUTTER.computeIfAbsent(speaker, k -> new StutterState((int) (0.04 * SAMPLE_RATE)));
+        short[] out = new short[pcm.length];
+        for (int i = 0; i < pcm.length; i++) {
+            if (st.repeatLeft > 0) {
+                out[i] = st.chunk[st.rIdx++];
+                if (st.rIdx >= st.size) {
+                    st.rIdx = 0;
+                    st.repeatLeft--;
+                }
+            } else {
+                st.chunk[st.wIdx++] = pcm[i];
+                out[i] = pcm[i];
+                if (st.wIdx >= st.size) {
+                    st.wIdx = 0;
+                    st.rIdx = 0;
+                    st.repeatLeft = level;
+                }
+            }
+        }
+        return out;
+    }
+
+    /** 倒放：累积一个固定块后整体反向播放（双缓冲，保证输出长度 == 输入长度）。 */
+    private static short[] reverseTransform(short[] pcm, UUID speaker, int level) {
+        ReverseState st = getReverseState(speaker, level);
+        short[] out = new short[pcm.length];
+        int outPos = 0;
+        if (st.ready) {
+            while (st.outPos < st.outBuf.length && outPos < pcm.length) {
+                out[outPos++] = st.outBuf[st.outPos++];
+            }
+            if (st.outPos >= st.outBuf.length)
+                st.ready = false;
+        }
+        for (int i = outPos; i < pcm.length; i++) {
+            st.inBuf[st.inLen++] = pcm[i];
+            if (st.inLen >= st.inBuf.length) {
+                for (int k = 0; k < st.inBuf.length; k++) {
+                    st.outBuf[k] = st.inBuf[st.inBuf.length - 1 - k];
+                }
+                st.outPos = 0;
+                st.inLen = 0;
+                st.ready = true;
+                while (st.outPos < st.outBuf.length && outPos < pcm.length) {
+                    out[outPos++] = st.outBuf[st.outPos++];
+                }
+                if (st.outPos >= st.outBuf.length)
+                    st.ready = false;
+            }
+        }
+        return out;
+    }
+
+    // =========================================================================
+    // 工具方法
+    // =========================================================================
+
+    /** 自相关基频检测，返回 Hz；无法判定（静音/非浊音）返回 0。 */
+    private static double detectPitch(short[] pcm) {
+        int n = Math.min(pcm.length, 1600);
+        double sum = 0.0;
+        for (int i = 0; i < n; i++)
+            sum += (long) pcm[i] * pcm[i];
+        double rms = Math.sqrt(sum / n);
+        if (rms < 500.0)
+            return 0.0;
+
+        int minLag = 50; // ~960Hz
+        int maxLag = Math.min(700, n - 1); // ~68Hz
+        double best = -1.0;
+        int bestLag = 0;
+        for (int lag = minLag; lag <= maxLag; lag++) {
+            long s = 0;
+            for (int i = 0; i + lag < n; i++)
+                s += (long) pcm[i] * pcm[i + lag];
+            if (s > best) {
+                best = s;
+                bestLag = lag;
+            }
+        }
+        if (bestLag <= 0)
+            return 0.0;
+        return SAMPLE_RATE / (double) bestLag;
+    }
+
+    private static short clamp(double v) {
+        if (v > 32767.0)
+            return Short.MAX_VALUE;
+        if (v < -32768.0)
+            return Short.MIN_VALUE;
+        return (short) Math.round(v);
+    }
+
+    /** 清理某说话者的全部状态与 EFX 资源（说话者离开时调用）。 */
+    private static void cleanupSpeaker(UUID speaker) {
+        VOICE_SOURCES.remove(speaker);
+        HELMET_LOWPASS.remove(speaker);
+        UNDERWATER_LOWPASS.remove(speaker);
+        HELIUM_SHIFTERS.remove(speaker);
+        MUFFLED_HEARING_STATE.remove(speaker);
+        SYNTH_SHIFTERS.remove(speaker);
+        SYNTH_RATIO.remove(speaker);
+        CHORUS.remove(speaker);
+        TREMOLO_PHASE.remove(speaker);
+        STUTTER.remove(speaker);
+        REVERSE.remove(speaker);
+        ECHO.remove(speaker);
+
+        int[] r = REVERB_RESOURCES.remove(speaker);
+        if (r != null) {
+            try {
+                EXTEfx.alDeleteAuxiliaryEffectSlots(r[0]);
+                EXTEfx.alDeleteEffects(r[1]);
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    /** 卸载时清理全部 EFX 资源。 */
+    public static void cleanupAll() {
+        for (Map.Entry<UUID, int[]> e : REVERB_RESOURCES.entrySet()) {
+            int[] r = e.getValue();
+            if (r != null) {
+                try {
+                    EXTEfx.alDeleteAuxiliaryEffectSlots(r[0]);
+                    EXTEfx.alDeleteEffects(r[1]);
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+        REVERB_RESOURCES.clear();
+        HELMET_LOWPASS.clear();
+        UNDERWATER_LOWPASS.clear();
+        HELIUM_SHIFTERS.clear();
+        MUFFLED_HEARING_STATE.clear();
+        SYNTH_SHIFTERS.clear();
+        SYNTH_RATIO.clear();
+        CHORUS.clear();
+        TREMOLO_PHASE.clear();
+        STUTTER.clear();
+        REVERSE.clear();
+        ECHO.clear();
+        VOICE_SOURCES.clear();
+    }
+
+    // =========================================================================
+    // PCM 效果内部状态
+    // =========================================================================
+
+    private static final class MuffledHearingState {
+        final BiquadLowPass filter1 = new BiquadLowPass();
+        final BiquadLowPass filter2 = new BiquadLowPass();
+        final float[] smear = new float[2048];
+        int smearPos;
+        double phase;
+        int filterLevel;
+        long noiseState = 0x4D595DF4D0F33173L;
+        float pink0;
+        float pink1;
+        float pink2;
+        float pink3;
+        float pink4;
+        float pink5;
+        float pink6;
+
+        void configureFilter(int level) {
+            if (filterLevel == level) {
+                return;
+            }
+            float cutoff = Math.max(320.0f, 2200.0f
+                    * (float) Math.pow(0.72f, Math.max(0, level - 1)));
+            filter1.configure(cutoff, SAMPLE_RATE);
+            filter2.configure(cutoff, SAMPLE_RATE);
+            filterLevel = level;
+        }
+
+        float nextPinkNoise() {
+            long x = noiseState;
+            x ^= x << 13;
+            x ^= x >>> 7;
+            x ^= x << 17;
+            noiseState = x;
+            float white = (float) ((x >>> 40) / (double) (1L << 24) - 0.5);
+            pink0 = pink0 * 0.99886f + white * 0.0555179f;
+            pink1 = pink1 * 0.99332f + white * 0.0750759f;
+            pink2 = pink2 * 0.96900f + white * 0.1538520f;
+            pink3 = pink3 * 0.86650f + white * 0.3104856f;
+            pink4 = pink4 * 0.55000f + white * 0.5329522f;
+            pink5 = pink5 * -0.7616f - white * 0.0168980f;
+            pink6 = white * 0.115926f;
+            return (pink0 + pink1 + pink2 + pink3 + pink4 + pink5 + pink6) * 0.11f;
+        }
+    }
+
+    /** 二阶 Butterworth 低通，保留跨语音包的状态以避免分块爆音。 */
+    private static final class BiquadLowPass {
+        private float b0;
+        private float b1;
+        private float b2;
+        private float a1;
+        private float a2;
+        private float x1;
+        private float x2;
+        private float y1;
+        private float y2;
+
+        void configure(float cutoff, float sampleRate) {
+            double omega = 2.0 * Math.PI * cutoff / sampleRate;
+            double cos = Math.cos(omega);
+            double sin = Math.sin(omega);
+            double alpha = sin / (2.0 * Math.sqrt(0.5));
+            double a0 = 1.0 + alpha;
+            b0 = (float) (((1.0 - cos) * 0.5) / a0);
+            b1 = (float) ((1.0 - cos) / a0);
+            b2 = b0;
+            a1 = (float) ((-2.0 * cos) / a0);
+            a2 = (float) ((1.0 - alpha) / a0);
+        }
+
+        float process(float sample) {
+            float output = b0 * sample + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+            x2 = x1;
+            x1 = sample;
+            y2 = y1;
+            y1 = output;
+            return output;
+        }
+    }
+
+    /**
+     * 一阶低通状态：跨语音包保留滤波器系数，避免分块之间出现爆音。
+     *
+     * <p>截止频率 = {@code max(floor, base * decay^(level-1))}，等级越高越闷。
+     */
+    private static final class VoiceLowPassState {
+        final BiquadLowPass filter = new BiquadLowPass();
+        private final float base;
+        private final float decay;
+        private final float floor;
+        private int configuredLevel = -1;
+
+        VoiceLowPassState(float base, float decay, float floor) {
+            this.base = base;
+            this.decay = decay;
+            this.floor = floor;
+        }
+
+        void configure(int level) {
+            if (configuredLevel == level) {
+                return;
+            }
+            float cutoff = Math.max(floor, base * (float) Math.pow(decay, Math.max(0, level - 1)));
+            filter.configure(cutoff, SAMPLE_RATE);
+            configuredLevel = level;
+        }
+    }
+
+    private static final class ChorusState {
+        final float[] buf = new float[2048];
+        int bufPos = 0;
+        double phase = 0.0;
+    }
+
+    private static final class StutterState {
+        final short[] chunk;
+        final int size;
+        int wIdx = 0;
+        int rIdx = 0;
+        int repeatLeft = 0;
+
+        StutterState(int size) {
+            this.size = size;
+            this.chunk = new short[size];
+        }
+    }
+
+    private static final class ReverseState {
+        final int blockSize; // 反向块大小，随等级增大（50ms * 等级）
+        final short[] inBuf;
+        final short[] outBuf;
+        int inLen = 0;
+        int outPos = 0;
+        boolean ready = false;
+
+        ReverseState(int blockSize) {
+            this.blockSize = blockSize;
+            this.inBuf = new short[blockSize];
+            this.outBuf = new short[blockSize];
+        }
+    }
+
+    /** 按等级取/建倒放状态：等级越高反向块越长（更明显的倒放感）。等级变化则重建。 */
+    private static ReverseState getReverseState(UUID speaker, int level) {
+        int blockSize = 2400 * level; // 50ms * 等级（1 级=50ms … 5 级=250ms）
+        ReverseState st = REVERSE.get(speaker);
+        if (st == null || st.blockSize != blockSize) {
+            st = new ReverseState(blockSize);
+            REVERSE.put(speaker, st);
+        }
+        return st;
+    }
+
+    private static final class EchoState {
+        final int delay; // 延迟采样数，随等级增大
+        final float[] buf;
+        int bufPos = 0;
+
+        EchoState(int level) {
+            // 回响间隔：1 级 90ms，每级 +40ms（1 级可清晰分辨，5 级接近 250ms 明显拖尾）
+            this.delay = (int) ((0.09 + (level - 1) * 0.04) * SAMPLE_RATE);
+            this.buf = new float[delay + 1];
+        }
+    }
+
+    /** 按等级取/建回响状态：等级越高回声间隔越长。等级变化则重建。 */
+    private static EchoState getEchoState(UUID speaker, int level) {
+        EchoState st = ECHO.get(speaker);
+        if (st == null || st.delay != (int) ((0.09 + (level - 1) * 0.04) * SAMPLE_RATE)) {
+            st = new EchoState(level);
+            ECHO.put(speaker, st);
+        }
+        return st;
+    }
+}

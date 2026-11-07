@@ -1,0 +1,143 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.content.entity;
+
+
+import io.wifi.starrailexpress.cca.SREPlayerMoodComponent;
+import io.wifi.starrailexpress.content.entity.no_water_influenced.NoHeavyWaterInfluencedThrowableItemProjectile;
+import io.wifi.starrailexpress.game.GameUtils;
+import io.wifi.starrailexpress.util.ParticleFx;
+import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.EntityHitResult;
+import net.minecraft.world.phys.HitResult;
+import org.agmas.noellesroles.init.ModItems;
+
+import java.util.List;
+
+/**
+ * 烟雾弹实体
+ * - 碰撞时爆炸形成烟雾区域
+ * - 烟雾持续10秒
+ * - 进入烟雾的玩家获得失明效果
+ * - 直接命中玩家时清空目标的san值
+ */
+public class SmokeGrenadeEntity extends NoHeavyWaterInfluencedThrowableItemProjectile {
+    
+    // 烟雾持续时间：10秒 = 200 ticks
+    private static final int SMOKE_DURATION_TICKS = 200;
+    // 烟雾半径
+    private static final double SMOKE_RADIUS = 4.0;
+    // 失明效果持续时间（比烟雾略长，确保连续性）
+    private static final int BLINDNESS_DURATION = 70; // 2秒
+    
+    private boolean directHit = false;
+    private Player directHitTarget = null;
+    
+    public SmokeGrenadeEntity(EntityType<? extends NoHeavyWaterInfluencedThrowableItemProjectile> entityType, Level world) {
+        super(entityType, world);
+    }
+    
+    @Override
+    protected Item getDefaultItem() {
+        return ModItems.SMOKE_GRENADE;
+    }
+    
+    @Override
+    protected void onHitEntity(EntityHitResult entityHitResult) {
+        super.onHitEntity(entityHitResult);
+        
+        // 检查是否直接命中玩家
+        if (entityHitResult.getEntity() instanceof Player player) {
+            if (GameUtils.isPlayerAliveAndSurvival(player)) {
+                directHit = true;
+                directHitTarget = player;
+            }
+        }
+    }
+    
+    @Override
+    protected void onHit(HitResult hitResult) {
+        super.onHit(hitResult);
+        
+        if (this.level() instanceof ServerLevel world) {
+            // 播放烟雾爆炸音效
+            world.playSound(null, this.blockPosition(), SoundEvents.FIREWORK_ROCKET_BLAST, 
+                    SoundSource.PLAYERS, 1.5f, 0.5f);
+            
+            // 如果直接命中玩家，清空目标san值
+            if (directHit && directHitTarget != null && directHitTarget instanceof ServerPlayer serverTarget) {
+                // 给予目标额外的失明效果
+                serverTarget.addEffect(new MobEffectInstance(MobEffects.DARKNESS, 100, 0, false, false));
+            }
+            
+            // 生成烟雾区域实体（使用粒子模拟）
+            // 创建一个区域效果云或使用定时任务
+            ServerSmokeAreaManager.createSmokeArea(world, this.position(), SMOKE_RADIUS, SMOKE_DURATION_TICKS);
+            
+            // 初始烟雾粒子爆发：三种粒子各合并成一个包（原实现 150 次循环 = 230 个包同 tick 喷出）
+            double smokeSpread = Math.max(0.5D, SMOKE_RADIUS * 0.5D);
+            ParticleFx.burst(world, ParticleTypes.CAMPFIRE_COSY_SMOKE,
+                    this.getX(), this.getY() + 1.5D, this.getZ(),
+                    450, smokeSpread, 1.5D, smokeSpread, 0.03D);
+            ParticleFx.burst(world, ParticleTypes.LARGE_SMOKE,
+                    this.getX(), this.getY() + 1.5D, this.getZ(),
+                    100, smokeSpread, 1.5D, smokeSpread, 0.05D);
+            ParticleFx.burst(world, ParticleTypes.SMOKE,
+                    this.getX(), this.getY() + 1.5D, this.getZ(),
+                    30, smokeSpread, 1.5D, smokeSpread, 0.04D);
+            
+            // 立即对范围内玩家应用失明
+            applyBlindnessToPlayersInRadius(world);
+            
+            this.discard();
+        }
+    }
+    
+    /**
+     * 对范围内的玩家应用失明效果
+     */
+
+    private void applyBlindnessToPlayersInRadius(ServerLevel world) {
+        AABB area = new AABB(
+                this.getX() - SMOKE_RADIUS, this.getY() - 1, this.getZ() - SMOKE_RADIUS,
+                this.getX() + SMOKE_RADIUS, this.getY() + 3, this.getZ() + SMOKE_RADIUS
+        );
+        
+        List<ServerPlayer> players = world.getEntitiesOfClass(
+                ServerPlayer.class, area,
+                player -> GameUtils.isPlayerAliveAndSurvival(player) && player != this.getOwner()
+        );
+        
+        for (ServerPlayer player : players) {
+            SREPlayerMoodComponent moodComponent = SREPlayerMoodComponent.KEY.get(player);
+            // 设置san值为0（疯狂状态）
+            moodComponent.setMood(0.25f);
+            moodComponent.sync();
+            player.addEffect(new MobEffectInstance(MobEffects.DARKNESS, BLINDNESS_DURATION, 0, false, false));
+        }
+    }
+}

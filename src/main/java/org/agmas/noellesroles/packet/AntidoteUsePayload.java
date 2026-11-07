@@ -1,0 +1,64 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.packet;
+
+import io.wifi.starrailexpress.cca.SREPlayerPoisonComponent;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.network.codec.ByteBufCodecs;
+import net.minecraft.network.codec.StreamCodec;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.player.Player;
+import org.agmas.noellesroles.Noellesroles;
+import org.agmas.noellesroles.init.ModItems;
+import org.agmas.noellesroles.init.NRSounds;
+import org.jetbrains.annotations.NotNull;
+
+public record AntidoteUsePayload(int target) implements CustomPacketPayload {
+    public static final CustomPacketPayload.Type<AntidoteUsePayload> ID = new CustomPacketPayload.Type<>(
+            Noellesroles.id("antidoteuse"));
+    public static final StreamCodec<FriendlyByteBuf, AntidoteUsePayload> CODEC;
+
+    public CustomPacketPayload.Type<? extends CustomPacketPayload> type() {
+        return ID;
+    }
+
+    static {
+        CODEC = StreamCodec.composite(ByteBufCodecs.INT, AntidoteUsePayload::target, AntidoteUsePayload::new);
+    }
+
+    public static class Receiver implements ServerPlayNetworking.PlayPayloadHandler<AntidoteUsePayload> {
+        public void receive(@NotNull AntidoteUsePayload payload, ServerPlayNetworking.@NotNull Context context) {
+            ServerPlayer player = context.player();
+            Entity var5 = player.serverLevel().getEntity(payload.target());
+            if (var5 instanceof Player target) {
+                if (!((double) target.distanceTo(player) > (double) 3.0F)) {
+                    SREPlayerPoisonComponent.KEY.get(target).cure(player);
+                    target.playSound(NRSounds.SYRINGE_STAB, 0.4F, 1.0F);
+                    player.swing(InteractionHand.MAIN_HAND);
+                    if (!player.isCreative()) {
+                        int cd = ModItems.getAntidoteCooldown(player);
+                        player.getCooldowns().addCooldown(ModItems.ANTIDOTE, cd);
+                    }
+
+                }
+            }
+        }
+    }
+}

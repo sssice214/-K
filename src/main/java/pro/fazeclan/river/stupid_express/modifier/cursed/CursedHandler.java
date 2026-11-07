@@ -1,0 +1,79 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package pro.fazeclan.river.stupid_express.modifier.cursed;
+
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.minecraft.core.Holder;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.effect.MobEffect;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
+import pro.fazeclan.river.stupid_express.constants.SEModifiers;
+
+import java.util.Arrays;
+import java.util.List;
+import java.util.Random;
+
+import org.agmas.harpymodloader.component.WorldModifierComponent;
+
+import io.wifi.starrailexpress.cca.SREGameTimeComponent;
+import io.wifi.starrailexpress.game.GameUtils;
+
+public class CursedHandler {
+    private static int tickCounter = 0;
+    private static final int INTERVAL = 30 * 20; // 30 seconds
+
+    private static final List<Holder<MobEffect>> POSSIBLE_EFFECTS = Arrays.asList(
+            MobEffects.MOVEMENT_SPEED,
+            MobEffects.DIG_SPEED,
+            MobEffects.MOVEMENT_SLOWDOWN,
+            MobEffects.DIG_SLOWDOWN,
+            MobEffects.CONFUSION,
+            MobEffects.INVISIBILITY,
+            MobEffects.BLINDNESS,
+            MobEffects.NIGHT_VISION,
+            MobEffects.LUCK,
+            MobEffects.UNLUCK,
+            MobEffects.GLOWING,
+            MobEffects.SLOW_FALLING,
+            MobEffects.DARKNESS,
+            MobEffects.WEAKNESS);
+
+    public static void init() {
+        ServerTickEvents.END_SERVER_TICK.register(server -> {
+            if (SREGameTimeComponent.KEY.get(server.overworld()).isTimeFrozen()) {
+                return;
+            }
+            tickCounter++;
+            if (tickCounter >= INTERVAL) {
+                tickCounter = 0;
+
+                Random random = new Random();
+                var worldcca = WorldModifierComponent.getInstance(server.overworld());
+                for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+                    if (GameUtils.isPlayerAliveAndSurvival(player)) {
+
+                        if (worldcca.isModifier(player, SEModifiers.CURSED)) {
+                            Holder<MobEffect> effect = POSSIBLE_EFFECTS.get(random.nextInt(POSSIBLE_EFFECTS.size()));
+                            // 5 seconds = 100 ticks, amplifier 1 = level 2
+                            player.addEffect(new MobEffectInstance(effect, 100, 1));
+                        }
+                    }
+                }
+            }
+        });
+    }
+}

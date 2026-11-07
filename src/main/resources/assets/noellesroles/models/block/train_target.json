@@ -1,0 +1,12 @@
+{
+  "parent": "minecraft:block/cube",
+  "textures": {
+    "particle": "noellesroles:block/train_target_side",
+    "north": "noellesroles:block/train_target_top",
+    "south": "noellesroles:block/train_target_side",
+    "east": "noellesroles:block/train_target_side",
+    "west": "noellesroles:block/train_target_side",
+    "up": "noellesroles:block/train_target_side",
+    "down": "noellesroles:block/train_target_side"
+  }
+}

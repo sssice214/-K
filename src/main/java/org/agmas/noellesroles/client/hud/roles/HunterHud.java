@@ -1,0 +1,64 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.client.hud.roles;
+
+import io.wifi.starrailexpress.api.data.RoleData;
+import io.wifi.starrailexpress.client.SREClient;
+import net.minecraft.client.Minecraft;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.world.item.Items;
+import org.agmas.noellesroles.client.event.RoleHudRenderCallback;
+import org.agmas.noellesroles.role.ModRoles;
+import org.agmas.noellesroles.role_data.killer.HunterRoleData;
+
+public class HunterHud {
+
+    public static void register() {
+        RoleHudRenderCallback.EVENT.register(ModRoles.HUNTER_ID, (guiGraphics, deltaTracker) -> {
+            Minecraft client = Minecraft.getInstance();
+            if (SREClient.gameComponent == null) return;
+            if (!SREClient.isPlayerAliveAndInSurvival()) return;
+
+            var hunterData = RoleData.getOptional(HunterRoleData.class, client.player);
+            if (hunterData.isEmpty()) return;
+
+            int screenWidth = client.getWindow().getGuiScaledWidth();
+            int screenHeight = client.getWindow().getGuiScaledHeight();
+            int x = screenWidth - 130;
+            int y = screenHeight - 60;
+
+            // 显示杀敌进度：杀敌数/3
+            int kills = hunterData.get().killCount;
+            int progress = kills % 3;
+
+            MutableComponent killText = Component.translatable("hud.noellesroles.hunter.kill_progress", progress, 3);
+            guiGraphics.drawString(client.font, killText, x, y, ModRoles.HUNTER.color());
+
+            // 显示总杀敌数
+            MutableComponent totalText = Component.translatable("hud.noellesroles.hunter.total_kills", kills);
+            guiGraphics.drawString(client.font, totalText, x, y + 12, 0xFFFFFF);
+
+            // 显示弓冷却状态
+            if (client.player.getCooldowns().isOnCooldown(Items.BOW)) {
+                float remaining = client.player.getCooldowns().getCooldownPercent(Items.BOW, 0f);
+                int seconds = Math.round(remaining * 5.0f); // 5秒总冷却
+                MutableComponent cooldownText = Component.translatable("hud.noellesroles.hunter.bow_cooldown", seconds);
+                guiGraphics.drawString(client.font, cooldownText, x, y + 24, 0xFF5555);
+            }
+        });
+    }
+}

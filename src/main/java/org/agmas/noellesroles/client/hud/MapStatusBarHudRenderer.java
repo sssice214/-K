@@ -1,0 +1,225 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.client.hud;
+
+import io.wifi.starrailexpress.cca.SREGameWorldComponent;
+import io.wifi.starrailexpress.client.SREClient;
+import io.wifi.starrailexpress.client.StaminaRenderer;
+import io.wifi.starrailexpress.game.data.MapStatusBarType;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
+import org.agmas.noellesroles.Noellesroles;
+
+public final class MapStatusBarHudRenderer {
+    private static final ResourceLocation WARMTH_ICON = Noellesroles.id("stamina/warmth_icon");
+    private static final ResourceLocation THIRST_ICON = Noellesroles.id("stamina/thirst_icon");
+    private static final ResourceLocation HUNGER_ICON = ResourceLocation.fromNamespaceAndPath("minecraft",
+            "hud/food_full");
+    private static final ResourceLocation POLLUTION_ICON = Noellesroles.id("stamina/pollution_icon");
+
+    private static final int BAR_WIDTH = 120;
+    private static final int BAR_HEIGHT = 2;
+    private static final int ICON_SIZE = 9;
+    private static final int ICON_GAP = 4;
+
+    /** 低于此比例触发屏幕边框效果（保暖/口渴/饥饿） */
+    private static final float LOW_THRESHOLD = 0.35f;
+    private static final float LOW_THRESHOLD_1 = 0.3f;
+    private static final float LOW_THRESHOLD_2 = 0.25f;
+    private static final float LOW_THRESHOLD_3 = 0.2f;
+    private static final float LOW_THRESHOLD_4 = 0.15f;
+    private static final float LOW_THRESHOLD_5 = 0.1f;
+    /** 高于此比例触发屏幕边框效果（污染值） */
+    private static final float HIGH_THRESHOLD = 0.65f;
+    private static final float HIGH_THRESHOLD_1 = 0.7f;
+    private static final float HIGH_THRESHOLD_2 = 0.75f;
+    private static final float HIGH_THRESHOLD_3 = 0.8f;
+    private static final float HIGH_THRESHOLD_4 = 0.85f;
+    private static final float HIGH_THRESHOLD_5 = 0.9f;
+    /** 边框颜色：口渴=蓝色、保暖=雪色、饥饿=棕色、污染=灰色 */
+    private static final int THIRST_EDGE_COLOR = 0xFF4488FF;
+    private static final int WARMTH_EDGE_COLOR = 0xFFFFFAFA;
+    private static final int HUNGER_EDGE_COLOR = 0xFFC89632;
+    private static final int POLLUTION_EDGE_COLOR = 0xFF888888;
+    private static long lastWarnedTime = 0;
+    private static boolean warningVisible = false;
+
+    private MapStatusBarHudRenderer() {
+    }
+
+    public static void render(GuiGraphics graphics) {
+        Minecraft client = Minecraft.getInstance();
+        if (client.player == null || client.level == null || client.options.hideGui) {
+            return;
+        }
+        SREGameWorldComponent gameComponent = SREGameWorldComponent.KEY.get(client.player.level());
+        if (gameComponent == null || !gameComponent.isRunning()) {
+            return;
+        }
+        // 自由相机/观战状态下不渲染，和体力条一致
+        if (!SREClient.isPlayerAliveAndInSurvival()) {
+            return;
+        }
+        MapStatusBarType type = MapStatusBarClientState.type();
+        if (type == MapStatusBarType.NONE) {
+            return;
+        }
+        if (SREClient.areaComponent != null) {
+            type = SREClient.areaComponent.areasSettings.mapStatusBar;
+        }
+        if (type == MapStatusBarType.NONE) {
+            return;
+        }
+
+        float value = (float) MapStatusBarClientState.value() / MapStatusBarClientState.maxValue();
+
+        // 边框效果：污染值（值越高越危险），其他（值越低越危险）
+        boolean critical = false;
+        if (type == MapStatusBarType.POLLUTION) {
+            if (value >= HIGH_THRESHOLD) {
+                critical = true;
+                int warnGap = 20;
+                float intensity = 0.5f;
+                if (value >= HIGH_THRESHOLD_5) {
+                    warnGap = 5; intensity = 1f;
+                } else if (value >= HIGH_THRESHOLD_4) {
+                    warnGap = 10; intensity = 0.9f;
+                } else if (value >= HIGH_THRESHOLD_3) {
+                    warnGap = 20; intensity = 0.8f;
+                } else if (value >= HIGH_THRESHOLD_2) {
+                    warnGap = 30; intensity = 0.7f;
+                } else if (value >= HIGH_THRESHOLD_1) {
+                    warnGap = 40; intensity = 0.6f;
+                }
+                long nowTime = client.level.getGameTime();
+                if (lastWarnedTime <= 0 || nowTime - lastWarnedTime >= warnGap) {
+                    // 持续时间覆盖整个 warnGap 间隔，避免效果结束后频繁重触发导致闪烁
+                    StaminaRenderer.triggerScreenEdgeEffect(POLLUTION_EDGE_COLOR, Math.max(warnGap * 50L, 200L), intensity);
+                    showStatusWarning(client, type);
+                    lastWarnedTime = nowTime;
+                }
+            }
+        } else if (value < LOW_THRESHOLD) {
+            critical = true;
+            int warnGap = 20; // 1s = 20tick
+            float intensity = 0.5f;
+            if (value < LOW_THRESHOLD_5) {
+                warnGap = 5;
+                intensity = 1f;
+            } else if (value < LOW_THRESHOLD_4) {
+                warnGap = 10;
+                intensity = 0.9f;
+            } else if (value < LOW_THRESHOLD_3) {
+                warnGap = 20;
+                intensity = 0.8f;
+            } else if (value < LOW_THRESHOLD_2) {
+                warnGap = 30;
+                intensity = 0.7f;
+            } else if (value < LOW_THRESHOLD_1) {
+                warnGap = 40;
+                intensity = 0.6f;
+            }
+            long nowTime = client.level.getGameTime();
+            if (lastWarnedTime <= 0 || nowTime - lastWarnedTime >= warnGap) {
+                int edgeColor = switch (type) {
+                    case WARMTH -> WARMTH_EDGE_COLOR;
+                    case THIRST -> THIRST_EDGE_COLOR;
+                    case HUNGER -> HUNGER_EDGE_COLOR;
+                    default -> 0xFFFFFFFF;
+                };
+                // 持续时间覆盖整个 warnGap 间隔，避免效果结束后频繁重触发导致闪烁
+                StaminaRenderer.triggerScreenEdgeEffect(edgeColor, Math.max(warnGap * 50L, 200L), intensity);
+                showStatusWarning(client, type);
+                lastWarnedTime = nowTime;
+            }
+        }
+
+        // 状态恢复正常：立即清除提示并重置边框节流；处于危险时保持标记
+        if (!critical && warningVisible) {
+            warningVisible = false;
+            lastWarnedTime = 0;
+            if (client.player != null) {
+                // 直接修改
+                client.gui.overlayMessageTime = 0;
+            }
+        } else if (critical) {
+            warningVisible = true;
+        }
+
+        int barX = graphics.guiWidth() / 2 - BAR_WIDTH / 2;
+        int barY = graphics.guiHeight() - 28;
+        int iconX = barX - ICON_SIZE - ICON_GAP;
+        int iconY = barY - ICON_SIZE / 2 + BAR_HEIGHT / 2;
+
+        // 绘制图标——默认常驻显示
+        graphics.blitSprite(icon(type), iconX, iconY, ICON_SIZE, ICON_SIZE);
+
+        // 绘制背景条
+        graphics.fill(barX, barY, barX + BAR_WIDTH, barY + BAR_HEIGHT, 0x66000000);
+
+        // 绘制填充条
+        int fillWidth = Math.round(BAR_WIDTH * value);
+        if (fillWidth > 0) {
+            graphics.fill(barX, barY, barX + fillWidth, barY + BAR_HEIGHT, color(type, value));
+        }
+    }
+
+    private static ResourceLocation icon(MapStatusBarType type) {
+        return switch (type) {
+            case WARMTH -> WARMTH_ICON;
+            case THIRST -> THIRST_ICON;
+            case HUNGER -> HUNGER_ICON;
+            case POLLUTION -> POLLUTION_ICON;
+            default -> HUNGER_ICON;
+        };
+    }
+
+    private static int color(MapStatusBarType type, float value) {
+        // 污染值：大于80%变红（与其他状态栏方向相反）
+        if (type == MapStatusBarType.POLLUTION) {
+            if (value > 0.8f) return 0xFFDD3333;
+            return 0xFFAAAAAA; // 淡灰色
+        }
+        if (value < 0.2f) {
+            return 0xFFDD3333; // 红色 (低于1/5)
+        }
+        return switch (type) {
+            case WARMTH -> 0xFFFF8830; // 橙色
+            case THIRST -> 0xFF4488FF; // 蓝色
+            case HUNGER -> 0xFFC89632; // 棕黄色
+            default -> 0xFFFFFFFF;
+        };
+    }
+
+    /** 与屏幕边框同时出现的 actionbar 提示 */
+    private static void showStatusWarning(Minecraft client, MapStatusBarType type) {
+        if (client.player == null) {
+            return;
+        }
+        Component msg = switch (type) {
+            case WARMTH -> Component.translatable("status_bar.warn.warmth");
+            case THIRST -> Component.translatable("status_bar.warn.thirst");
+            case HUNGER -> Component.translatable("status_bar.warn.hunger");
+            case POLLUTION -> Component.translatable("status_bar.warn.pollution");
+            default -> null;
+        };
+        if (msg != null) {
+            client.player.displayClientMessage(msg, true);
+        }
+    }
+}

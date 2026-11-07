@@ -1,0 +1,1201 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.client;
+
+import java.util.HashMap;
+
+import org.agmas.harpymodloader.component.WorldModifierComponent;
+import org.agmas.noellesroles.component.FoodDrinkGlowComponent;
+import org.agmas.noellesroles.component.InfectedPlayerComponent;
+import org.agmas.noellesroles.component.ModComponents;
+import org.agmas.noellesroles.config.NoellesRolesConfig;
+import org.agmas.noellesroles.content.entity.SaltedFishBodyEntity;
+import org.agmas.noellesroles.content.item.SignedPaperItem;
+import org.agmas.noellesroles.role_data.innocence.AgentRoleData;
+import org.agmas.noellesroles.role_data.innocence.LeatherPigRoleData;
+import org.agmas.noellesroles.role_data.innocence.TomatoHeadRoleData;
+import org.agmas.noellesroles.role_data.neutral.PhantomSpiritRoleData;
+import org.agmas.noellesroles.role_data.innocence.AwesomeRoleData;
+import org.agmas.noellesroles.role_data.innocence.FoolRoleData;
+import org.agmas.noellesroles.role_data.innocence.MonitorRoleData;
+import org.agmas.noellesroles.role_data.killer.ExecutionerRoleData;
+import org.agmas.noellesroles.role_data.killer.InsaneKillerRoleData;
+import org.agmas.noellesroles.role_data.killer.ManipulatorRoleData;
+import org.agmas.noellesroles.role_data.neutral.AdmirerRoleData;
+import org.agmas.noellesroles.role_data.neutral.AmonRoleData;
+import org.agmas.noellesroles.role_data.neutral.CandleBearerRoleData;
+import org.agmas.noellesroles.role_data.neutral.DaywalkerRoleData;
+import org.agmas.noellesroles.role_data.neutral.LicensedVillainRoleData;
+import org.agmas.noellesroles.role_data.neutral.MercenaryRoleData;
+import org.agmas.noellesroles.role_data.neutral.GodfatherRoleData;
+import org.agmas.noellesroles.role_data.neutral.RavenRoleData;
+import org.agmas.noellesroles.role_data.neutral.RecorderRoleData;
+import org.agmas.noellesroles.game.roles.killer.dream.DreamHealthComponent;
+import org.agmas.noellesroles.game.roles.neutral.cuckoo.CuckooEggData;
+import org.agmas.noellesroles.game.roles.neutral.monokuma.MonokumaEventHandler;
+import org.agmas.noellesroles.role_data.neutral.PelicanRoleData;
+import org.agmas.noellesroles.role_data.neutral.WayfarerRoleData;
+import org.agmas.noellesroles.role_data.special.BetterVigilanteRoleData;
+import org.agmas.noellesroles.role_data.vigilante.GhostEyeRoleData;
+import org.agmas.noellesroles.init.ModEffects;
+import org.agmas.noellesroles.role.ModRoles;
+import org.agmas.noellesroles.role.bouns.BounsRoles;
+import org.agmas.noellesroles.role.TraitorAndModifiers;
+import org.agmas.noellesroles.role.touhou.THRedHouseRoles;
+import org.agmas.noellesroles.utils.MCItemsUtils;
+import org.agmas.noellesroles.utils.RoleUtils;
+import io.wifi.starrailexpress.api.InstinctType;
+import io.wifi.starrailexpress.api.SREGameModes;
+import io.wifi.starrailexpress.api.SRERole;
+import io.wifi.starrailexpress.api.data.RoleData;
+import io.wifi.starrailexpress.api.TMMRoles;
+import io.wifi.starrailexpress.cca.SREArmorPlayerComponent;
+import io.wifi.starrailexpress.cca.SREPlayerMoodComponent;
+import io.wifi.starrailexpress.cca.SREPlayerPoisonComponent;
+import io.wifi.starrailexpress.client.SREClient;
+import io.wifi.starrailexpress.content.entity.PlayerBodyEntity;
+import io.wifi.starrailexpress.customrole.CustomRoleLoader;
+import io.wifi.starrailexpress.event.client.CommonInstinctEvents;
+import io.wifi.starrailexpress.event.client.RoleInstinctEvents;
+import io.wifi.starrailexpress.game.GameConstants;
+import io.wifi.starrailexpress.game.GameUtils;
+import io.wifi.starrailexpress.game.roles.SpecialGameModeModifiers;
+import io.wifi.starrailexpress.index.SREDataComponentTypes;
+import io.wifi.starrailexpress.index.TMMItems;
+import io.wifi.starrailexpress.util.Color;
+import io.wifi.starrailexpress.util.SREItemUtils;
+import io.wifi.starrailexpress.util.TrueFalseAndCustomResult;
+import net.minecraft.client.Minecraft;
+import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.entity.Display;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.player.Player;
+import pro.fazeclan.river.stupid_express.constants.SEModifiers;
+import pro.fazeclan.river.stupid_express.constants.SERoles;
+import pro.fazeclan.river.stupid_express.modifier.lovers.cca.LoversComponent;
+import pro.fazeclan.river.stupid_express.role.arsonist.ArsonistRoleData;
+
+/**
+ * 高亮获取顺序：
+ * <li>通用逻辑：{@link CommonInstinctEvents#ALIVE_COMMON_BEFORE_EVENT}</li>
+ * <li>被看逻辑：{@link RoleInstinctEvents#TARGET_HIGHLIGHT_EVENT}</li>
+ * <li>被看职业逻辑 {@link SRERole#setToggledOffBeSeenInstinctType(InstinctType)}</li>
+ * <li>看人逻辑：{@link RoleInstinctEvents#OBSERVER_HIGHLIGHT_EVENT}</li>
+ * <li>看人职业逻辑 {@link SRERole#setInstinctType(InstinctType)}</li>
+ * <li>通用逻辑：{@link CommonInstinctEvents#ALIVE_COMMON_AFTER_EVENT}</li>
+ * <li>杀手直觉（杀手默认）</li>
+ */
+public class RoleInstinctRegister {
+    public static void registerInstinctEvents() {
+        CustomRoleLoader.registerClientInstinctHandler();
+        // 注册使用新 API 的看人 / 被看逻辑
+        registerObserverHighlights();
+        registerTargetHighlights();
+        // 保留原有的特殊逻辑（已部分迁移）
+        registerSpecialLogic();
+        // 通用兜底逻辑
+        registerNormalLogic();
+    }
+
+    // ---------- 看人高亮（OBSERVER） ----------
+    private static void registerObserverHighlights() {
+
+        // 验尸官
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.CORONER_ID,
+                (client, self, target, hasInstinct) -> {
+                    long time = self.level().getGameTime();
+                    if (time % 400 >= 100)
+                        return TrueFalseAndCustomResult.pass();
+                    if (target instanceof PlayerBodyEntity)
+                        return TrueFalseAndCustomResult.custom(ModRoles.CORONER.color());
+                    if (target instanceof Player targetPlayer) {
+                        InsaneKillerRoleData comp = RoleData.getNullable(InsaneKillerRoleData.class, targetPlayer);
+                        if (comp != null && comp.isActive)
+                            return TrueFalseAndCustomResult.custom(ModRoles.CORONER.color());
+                    }
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // 失忆
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(SERoles.AMNESIAC.identifier(),
+                (client, self, target, hasInstinct) -> {
+                    if (SREClient.gameComponent == null || !(target instanceof PlayerBodyEntity))
+                        return TrueFalseAndCustomResult.pass();
+                    return TrueFalseAndCustomResult.custom(SERoles.AMNESIAC.color());
+                });
+        // 葬仪：看所有人和尸体都是自己的颜色，且可以透视场上所有尸体
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.MORTICIAN_BODYMAKER_ID,
+                (client, self, target, hasInstinct) -> {
+                    if (SREClient.gameComponent == null)
+                        return TrueFalseAndCustomResult.pass();
+                    if (!SREClient.gameComponent.isRole(self, ModRoles.MORTICIAN_BODYMAKER))
+                        return TrueFalseAndCustomResult.pass();
+
+                    // 葬仪总是可以看到尸体（不需要开启杀手直觉）
+                    if (target instanceof PlayerBodyEntity) {
+                        return TrueFalseAndCustomResult.custom(ModRoles.MORTICIAN_BODYMAKER.color());
+                    }
+
+                    // 需要开启杀手直觉才能看到玩家
+                    if (!hasInstinct)
+                        return TrueFalseAndCustomResult.pass();
+
+                    // 所有玩家都显示葬仪的颜色（无法透视的职业除外）
+                    if (target instanceof Player targetPlayer) {
+                        // 无法被透视的职业（小透明/秉烛人/雇佣兵/捣蛋鬼）
+                        if (isTargetInvisibleToInstinct(targetPlayer)) {
+                            return TrueFalseAndCustomResult.disallow();
+                        }
+                        return TrueFalseAndCustomResult.custom(ModRoles.MORTICIAN_BODYMAKER.color());
+                    }
+                    return TrueFalseAndCustomResult.pass();
+                });
+        // 秉烛人：可透视被秉烛的活人与对应尸体
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.CANDLE_BEARER_ID,
+                (client, self, target, hasInstinct) -> {
+                    if (!hasInstinct)
+                        return TrueFalseAndCustomResult.pass();
+                    CandleBearerRoleData component = RoleData.getNullable(CandleBearerRoleData.class, self);
+                    if (component == null)
+                        return TrueFalseAndCustomResult.pass();
+                    // 尸体：已被完成秉烛的显示蓝色
+                    if (target instanceof PlayerBodyEntity body) {
+                        if (body.getPlayerUuid() != null && component.isCorpseCandleCompleted(body.getPlayerUuid())) {
+                            return TrueFalseAndCustomResult.custom(Color.BLUE.getRGB());
+                        }
+                        if (body.getPlayerUuid() != null && component.isCandleLit(body.getPlayerUuid())) {
+                            return TrueFalseAndCustomResult.custom(ModRoles.CANDLE_BEARER.color());
+                        }
+                        return TrueFalseAndCustomResult.custom(Color.GRAY.getRGB());
+                    }
+                    // 活人：无法透视的职业不显示，被秉烛过的显示原色，其余灰色
+                    if (target instanceof Player targetPlayer) {
+                        if (targetPlayer.distanceToSqr(self) > 40 * 40)
+                            return TrueFalseAndCustomResult.disallow();
+                        // 无法被透视的职业（小透明/秉烛人/雇佣兵/捣蛋鬼）
+                        if (isTargetInvisibleToInstinct(targetPlayer)) {
+                            return TrueFalseAndCustomResult.disallow();
+                        }
+                        if (component.isCandleLit(targetPlayer.getUUID())) {
+                            return TrueFalseAndCustomResult.custom(ModRoles.CANDLE_BEARER.color());
+                        }
+                        return TrueFalseAndCustomResult.custom(Color.GRAY.getRGB());
+                    }
+                    return TrueFalseAndCustomResult.pass();
+                });
+        // 独裁者：本能只能透视 8 格内的玩家，且所有玩家都显示为自己的颜色
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.DICTATOR_ID,
+                (client, self, target, hasInstinct) -> {
+                    if (!hasInstinct || !(target instanceof Player targetPlayer)) {
+                        return TrueFalseAndCustomResult.pass();
+                    }
+                    if (targetPlayer.distanceToSqr(self) > (double) org.agmas.noellesroles.role.vigilante.DictatorRole.INSTINCT_RANGE_SQR) {
+                        return TrueFalseAndCustomResult.disallow();
+                    }
+                    // 无法被透视的职业（小透明/秉烛人/雇佣兵/捣蛋鬼等）
+                    if (isTargetInvisibleToInstinct(targetPlayer)) {
+                        return TrueFalseAndCustomResult.disallow();
+                    }
+                    return TrueFalseAndCustomResult.custom(ModRoles.DICTATOR.color());
+                });
+        // 丘比特
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.CUPID_ID, (client, self, target, hasInstinct) -> {
+            {
+                if (!hasInstinct)
+                    return TrueFalseAndCustomResult.pass();
+                if (target instanceof Player targetPlayer) {
+                    if (WorldModifierComponent.KEY.get(targetPlayer.level()).isModifier(targetPlayer,
+                            SEModifiers.LOVERS)
+                            || LoversComponent.KEY.get(targetPlayer).isLover())
+                        return TrueFalseAndCustomResult.custom(Color.ORANGE.getRGB());
+                    return TrueFalseAndCustomResult.custom(ModRoles.CUPID.color());
+                }
+            }
+            return TrueFalseAndCustomResult.pass();
+        });
+
+        // 无我：本能透视无法看到其他玩家，仅能透视无妄（黄框）
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.ANATMAN_ID,
+                (client, self, target, hasInstinct) -> {
+                    if (!hasInstinct)
+                        return TrueFalseAndCustomResult.pass();
+                    if (target instanceof Player targetPlayer) {
+                        if (SREClient.gameComponent != null
+                                && SREClient.gameComponent.isRole(targetPlayer, ModRoles.ASATYA)) {
+                            return TrueFalseAndCustomResult.custom(Color.YELLOW.getRGB());
+                        }
+                        return TrueFalseAndCustomResult.disallow();
+                    }
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // 无妄：本能透视无法看到其他玩家，仅能透视无我（黄框）
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.ASATYA_ID,
+                (client, self, target, hasInstinct) -> {
+                    if (!hasInstinct)
+                        return TrueFalseAndCustomResult.pass();
+                    if (target instanceof Player targetPlayer) {
+                        if (SREClient.gameComponent != null
+                                && SREClient.gameComponent.isRole(targetPlayer, ModRoles.ANATMAN)) {
+                            return TrueFalseAndCustomResult.custom(Color.YELLOW.getRGB());
+                        }
+                        return TrueFalseAndCustomResult.disallow();
+                    }
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // 疫使：透视所有玩家，被感染者显示橙色边框
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.INFECTED_ID,
+                (client, self, target, hasInstinct) -> {
+                    {
+                        if (!hasInstinct)
+                            return TrueFalseAndCustomResult.pass();
+                        if (target instanceof Player targetPlayer) {
+                            // 无法被透视的职业（小透明/秉烛人/雇佣兵/捣蛋鬼）
+                            if (isTargetInvisibleToInstinct(targetPlayer)) {
+                                return TrueFalseAndCustomResult.disallow();
+                            }
+                            // 检查目标玩家是否被感染（非疫使角色的玩家被感染）
+                            InfectedPlayerComponent infectedComponent = ModComponents.INFECTED.get(targetPlayer);
+                            if (infectedComponent != null && infectedComponent.infectedTicks > 0) {
+                                // 被感染者显示橙色边框
+                                return TrueFalseAndCustomResult.custom(Color.ORANGE.getRGB());
+                            }
+                            // 其他玩家显示疫使的颜色
+                            return TrueFalseAndCustomResult.custom(ModRoles.INFECTED.color());
+                        }
+                        return TrueFalseAndCustomResult.pass();
+                    }
+                });
+        // 雇佣兵合约目标已在下面保留
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.MERCENARY_ID,
+                (client, self, target, hasInstinct) -> {
+                    var mercComp = RoleData.getNullable(MercenaryRoleData.class, self);
+                    if (mercComp == null || !mercComp.contractActive)
+                        return TrueFalseAndCustomResult.pass();
+                    if (target instanceof Player targetPlayer
+                            && targetPlayer.getUUID().equals(mercComp.contractTargetUuid))
+                        return TrueFalseAndCustomResult.custom(ModRoles.MERCENARY.color());
+                    if (target instanceof PlayerBodyEntity body && body.getPlayerUuid() != null
+                            && body.getPlayerUuid().equals(mercComp.contractTargetUuid))
+                        return TrueFalseAndCustomResult.custom(ModRoles.MERCENARY.color());
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // 初学者
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(SERoles.INITIATE.identifier(),
+                (client, self, target, hasInstinct) -> {
+                    if (SREItemUtils.countItem(self, TMMItems.KNIFE) <= 0)
+                        return TrueFalseAndCustomResult.pass();
+                    if (target instanceof Player targetPlayer
+                            && SREClient.gameComponent.isRole(targetPlayer, SERoles.INITIATE))
+                        return TrueFalseAndCustomResult.custom(SERoles.INITIATE.color());
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // 纵火犯
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(SERoles.ARSONIST.identifier(),
+                (client, self, target, hasInstinct) -> {
+                    if (!hasInstinct)
+                        return TrueFalseAndCustomResult.pass();
+                    if (!(target instanceof Player targetPlayer)) {
+                        return TrueFalseAndCustomResult.pass();
+                    }
+                    if (targetPlayer.distanceToSqr(self) > 40 * 40)
+                        return TrueFalseAndCustomResult.disallow();
+                    ArsonistRoleData arsonist = ArsonistRoleData.of(self);
+                    boolean doused = arsonist != null && arsonist.isDoused(targetPlayer.getUUID());
+                    return doused ? TrueFalseAndCustomResult.custom(SERoles.ARSONIST.color())
+                            : TrueFalseAndCustomResult.custom(Color.GRAY.getRGB());
+                });
+        // 推理者：无法透视玩家
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.REASONER_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    if (GameUtils.isPlayerAliveAndSurvival(viewer) && target instanceof Player) {
+                        return TrueFalseAndCustomResult.disallow();
+                    }
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // 阿蒙：开启直觉后透视所有被时之虫标记的宿主（潜伏中与已成熟）
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.AMON_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    if (!isInstinctEnabled)
+                        return TrueFalseAndCustomResult.pass();
+                    if (!(target instanceof Player targetPlayer) || !GameUtils.isPlayerAliveAndSurvival(targetPlayer))
+                        return TrueFalseAndCustomResult.pass();
+                    AmonRoleData amon = RoleData.getNullable(AmonRoleData.class, viewer);
+                    if (amon == null)
+                        return TrueFalseAndCustomResult.disallow();
+                    if (amon.isClientMarked(targetPlayer.getUUID())) {
+                        return TrueFalseAndCustomResult.custom(ModRoles.AMON.color());
+                    }
+                    return TrueFalseAndCustomResult.disallow();
+                });
+
+        // 布谷鸟：无法透视玩家；可以透视自己的蛋
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.CUCKOO_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    if (!GameUtils.isPlayerAliveAndSurvival(viewer))
+                        return TrueFalseAndCustomResult.pass();
+                    if (target instanceof Player) {
+                        return TrueFalseAndCustomResult.disallow();
+                    }
+                    if (target instanceof Display.BlockDisplay blockDisplay) {
+                        if (!isInstinctEnabled)
+                            return TrueFalseAndCustomResult.pass();
+                        try {
+                            if (CuckooEggData.isOwnEggClient(blockDisplay)) {
+                                return TrueFalseAndCustomResult.custom(ModRoles.CUCKOO.color());
+                            }
+                        } catch (Exception ignored) {
+                        }
+                    }
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // 红尘客
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.WAYFARER_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    if (target instanceof Player targetPlayer && GameUtils.isPlayerAliveAndSurvival(targetPlayer)) {
+                        var wayC = RoleData.getNullable(WayfarerRoleData.class, viewer);
+                        if (wayC != null && wayC.phase == 1 && wayC.killer != null
+                                && targetPlayer.getUUID().equals(wayC.killer)) {
+                            return TrueFalseAndCustomResult.custom(Color.RED.getRGB());
+                        }
+                    }
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // DIO / JOJO：双方不再互相透视
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.DIO_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    if (target instanceof Player targetPlayer && GameUtils.isPlayerAliveAndSurvival(targetPlayer)
+                            && SREClient.gameComponent.isRole(targetPlayer, ModRoles.JOJO)) {
+                        return TrueFalseAndCustomResult.disallow();
+                    }
+                    return TrueFalseAndCustomResult.pass();
+                });
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.JOJO_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    if (target instanceof Player targetPlayer && GameUtils.isPlayerAliveAndSurvival(targetPlayer)
+                            && SREClient.gameComponent.isRole(targetPlayer, ModRoles.DIO)) {
+                        return TrueFalseAndCustomResult.disallow();
+                    }
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // 更好的义警：背水一战激活时蓝色
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.BETTER_VIGILANTE_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    var betterC = RoleData.getNullable(BetterVigilanteRoleData.class, viewer);
+                    if (betterC != null && betterC.lastStandActivated) {
+                        return TrueFalseAndCustomResult.custom(Color.BLUE.getRGB());
+                    }
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // 帕秋莉 -> 芙兰朵露
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(THRedHouseRoles.PACHURI_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    if (viewer.hasEffect(ModEffects.SAFE_TIME))
+                        return TrueFalseAndCustomResult.pass();
+                    if (target instanceof Player targetPlayer && target.distanceToSqr(viewer) <= 25) {
+                        if (SREClient.gameComponent.isRole(targetPlayer, THRedHouseRoles.FURANDORU)) {
+                            return TrueFalseAndCustomResult.custom(THRedHouseRoles.FURANDORU.color());
+                        }
+                    }
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // 厨师
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.CHEF_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    if (viewer.hasEffect(ModEffects.SAFE_TIME))
+                        return TrueFalseAndCustomResult.pass();
+                    if (target instanceof Player targetPlayer) {
+                        int t = FoodDrinkGlowComponent.KEY.get(viewer).glowTicks
+                                .getOrDefault(targetPlayer.getScoreboardName(), new HashMap<>())
+                                .getOrDefault(1, 0);
+                        if (t > 0)
+                            return TrueFalseAndCustomResult.custom(Color.GREEN.getRGB());
+                    }
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // 酒保
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.BARTENDER_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    if (viewer.hasEffect(ModEffects.SAFE_TIME))
+                        return TrueFalseAndCustomResult.pass();
+                    if (target instanceof Player targetPlayer) {
+                        var armorComp = SREArmorPlayerComponent.KEY.get(targetPlayer);
+                        var poisonComp = SREPlayerPoisonComponent.KEY.get(targetPlayer);
+                        var weakArmorComp = io.wifi.starrailexpress.cca.SREWeakArmorPlayerComponent.KEY
+                                .get(targetPlayer);
+                        boolean hasWeakArmor = weakArmorComp != null && weakArmorComp.getWeakArmor() > 0;
+
+                        // 客户端拿到的护盾层数已经按「可被酒保透视」过滤过：
+                        // 普通护盾/限时护盾只有护盾试剂给予的层才会同步到酒保这里。
+                        boolean hasVisibleArmor = armorComp.getArmor() > 0;
+                        if (hasVisibleArmor && poisonComp.poisonTicks > 0)
+                            return TrueFalseAndCustomResult.custom(new Color(186, 255, 65).getRGB());
+                        if (hasVisibleArmor || hasWeakArmor)
+                            return TrueFalseAndCustomResult.custom(Color.BLUE.getRGB());
+                        if (poisonComp.poisonTicks > 0)
+                            return TrueFalseAndCustomResult.custom(Color.RED.getRGB());
+                        int t = FoodDrinkGlowComponent.KEY.get(viewer).glowTicks
+                                .getOrDefault(targetPlayer.getScoreboardName(), new HashMap<>())
+                                .getOrDefault(0, 0);
+                        if (t > 0)
+                            return TrueFalseAndCustomResult.custom(Color.GREEN.getRGB());
+                    }
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // 毒师/酒保看中毒玩家红色
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.POISONER_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    if (target instanceof Player targetPlayer) {
+                        if (SREPlayerPoisonComponent.KEY.get(targetPlayer).poisonTicks > 0)
+                            return TrueFalseAndCustomResult.custom(Color.RED.getRGB());
+                    }
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // 刽子手
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.EXECUTIONER_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    ExecutionerRoleData comp = RoleData.getNullable(ExecutionerRoleData.class, viewer);
+                    if (comp != null && comp.target != null && target instanceof Player targetPlayer) {
+                        if (comp.target.equals(targetPlayer.getUUID())
+                                && !SREClient.gameComponent.isRole(targetPlayer, ModRoles.GHOST))
+                            return TrueFalseAndCustomResult.custom(new Color(0, 254, 254).getRGB());
+                    }
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // 护士：透视 30 格内虚拟血量不满（≠满值）的玩家
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.NURSE_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    if (viewer.hasEffect(ModEffects.SAFE_TIME))
+                        return TrueFalseAndCustomResult.pass();
+                    if (target instanceof Player targetPlayer) {
+                        if (viewer.distanceToSqr(targetPlayer) > 30.0 * 30.0)
+                            return TrueFalseAndCustomResult.pass();
+                        DreamHealthComponent health = DreamHealthComponent.KEY.get(targetPlayer);
+                        if (health.getEffectiveHealth(targetPlayer.level().getGameTime())
+                                < DreamHealthComponent.maxHealth()) {
+                            return TrueFalseAndCustomResult.custom(new Color(0xFF, 0x8A, 0xB3).getRGB());
+                        }
+                    }
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // 操纵者
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.MANIPULATOR_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    ManipulatorRoleData comp = RoleData.getNullable(ManipulatorRoleData.class, viewer);
+                    if (comp != null && comp.target != null && target instanceof Player targetPlayer) {
+                        if (comp.target.equals(targetPlayer.getUUID()))
+                            return TrueFalseAndCustomResult.custom(Color.orange.getRGB());
+                    }
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // 爱慕者（绑定目标）
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.ADMIRER_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    AdmirerRoleData comp = RoleData.getNullable(AdmirerRoleData.class, viewer);
+                    if (comp != null && comp.getBoundTarget() != null && target instanceof Player targetPlayer) {
+                        if (comp.getBoundTarget().getUUID().equals(targetPlayer.getUUID())) {
+                            if (isInstinctEnabled) {
+                                return TrueFalseAndCustomResult.custom(Color.CYAN.getRGB());
+                            }
+                            return TrueFalseAndCustomResult.custom(Color.PINK.getRGB());
+                        }
+                    }
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // 监视者
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.MONITOR_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    var comp = RoleData.getOptional(MonitorRoleData.class, viewer);
+                    if (comp.isPresent() && comp.get().getMarkedTarget() != null
+                            && target instanceof Player targetPlayer) {
+                        if (comp.get().getMarkedTarget().equals(targetPlayer.getUUID()))
+                            return TrueFalseAndCustomResult.custom(Color.CYAN.getRGB());
+                    }
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // 鹈鹕
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.PELICAN_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    if (!isInstinctEnabled)
+                        return TrueFalseAndCustomResult.pass();
+                    if (target instanceof Player targetPlayer) {
+                        double distSq = targetPlayer.distanceToSqr(viewer);
+                        if (distSq > PelicanRoleData.INSTINCT_RANGE * PelicanRoleData.INSTINCT_RANGE)
+                            return TrueFalseAndCustomResult.disallow();
+                        PelicanRoleData comp = RoleData.getNullable(PelicanRoleData.class, viewer);
+                        if (comp != null && comp.uniqueEaten.contains(targetPlayer.getUUID()))
+                            return TrueFalseAndCustomResult.custom(Color.ORANGE.getRGB());
+                        return TrueFalseAndCustomResult.custom(ModRoles.PELICAN.color());
+                    }
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // 芙兰朵露
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(THRedHouseRoles.FURANDORU_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    if (target instanceof Player targetPlayer) {
+                        var targetRole = SREClient.gameComponent.getRole(targetPlayer);
+                        if (RoleUtils.compareRole(targetRole, THRedHouseRoles.PACHURI))
+                            return TrueFalseAndCustomResult.custom(THRedHouseRoles.PACHURI.color());
+                        if (isInstinctEnabled)
+                            return TrueFalseAndCustomResult.custom(new Color(2, 224, 2).getRGB());
+                    }
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // 傀儡师
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.PUPPETEER_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    var comp = ModComponents.PUPPETEER.get(viewer);
+                    if (comp.isControllingPuppet && SREClient.isPlayerAliveAndInSurvivalIgnoreShitSplit())
+                        return TrueFalseAndCustomResult.custom(ModRoles.PUPPETEER.color());
+                    if (comp.isPuppeteerMarked && SREClient.isPlayerAliveAndInSurvivalIgnoreShitSplit()
+                            && comp.phase >= 1)
+                        return TrueFalseAndCustomResult.pass();
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // 冤魂刺客
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.WRAITH_ASSASSIN_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    if (!isInstinctEnabled)
+                        return TrueFalseAndCustomResult.pass();
+                    if (target instanceof Player targetPlayer && targetPlayer != viewer
+                            && SREClient.isPlayerAliveAndInSurvival()) {
+                        int san = Math.round(SREPlayerMoodComponent.KEY.get(targetPlayer).getMood() * 100.0f);
+                        if (san < 10)
+                            return TrueFalseAndCustomResult.custom(0x2C8DFF);
+                        if (san < 30)
+                            return TrueFalseAndCustomResult.custom(0xFFD84A);
+                    }
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // 记录员
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.RECORDER_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    if (!isInstinctEnabled)
+                        return TrueFalseAndCustomResult.pass();
+                    if (target instanceof Player targetPlayer) {
+                        if (targetPlayer.distanceToSqr(viewer) > 20 * 20 || targetPlayer == viewer)
+                            return TrueFalseAndCustomResult.disallow();
+                        var recorder = RoleData.getNullable(RecorderRoleData.class, viewer);
+                        if (recorder != null && recorder.getGuesses().containsKey(targetPlayer.getUUID()))
+                            return TrueFalseAndCustomResult.custom(0xFFFF55);
+                        return TrueFalseAndCustomResult.custom(0x0000AA);
+                    }
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // // 小丑/亡命徒系列
+        // RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.JESTER_ID,
+        // (client, viewer, target, isInstinctEnabled) -> {
+        // if (!SREClient.isPlayerAliveAndInSurvival())
+        // return TrueFalseAndCustomResult.pass();
+        // if (target instanceof Player targetPlayer) {
+        // if (SREClient.gameComponent.isRole(targetPlayer, ModRoles.GHOST))
+        // return TrueFalseAndCustomResult.disallow();
+        // return TrueFalseAndCustomResult.custom(Color.PINK.getRGB());
+        // }
+        // return TrueFalseAndCustomResult.pass();
+        // });
+
+        // 家族本能（为所有 mafia 家族职业注册通用高亮逻辑）
+        // getAllMafiaRoles() 返回 TMMRoles.CACHE.MAFIA_ROLES，即所有 setMafiaTeam(true) 的角色类型
+        // 内置角色在此初始化时注册；运行时加载的自定义 mafia 角色由 CustomRoleLoader.reloadClient 调用
+        // registerFamilyInstinct 注册（保证自定义家族也能看到彼此的特殊框）。
+        for (var familyRole : ModRoles.getAllMafiaRoles()) {
+            registerGodFamilyInstinct(familyRole);
+        }
+
+        // 领袖：招募教父后按家族透视看待自己（家族成员棕框 / 教父天蓝框 / 远处非家族禁止透视）。
+        // 这里直接注册而不是靠 isMafiaTeam()，因为领袖的家族身份是玩家级、且只在招募教父后成立。
+        registerGodFamilyInstinct(ModRoles.LEADER);
+
+        // --- 以下从 registerSpecialLogic 迁移过来的角色相关逻辑 ---
+        // 皮革噶的：疯魔模式高亮周围玩家
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.LEATHER_PIG_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    if (!(target instanceof Player targetPlayer))
+                        return TrueFalseAndCustomResult.pass();
+                    var comp = RoleData.getNullable(LeatherPigRoleData.class, viewer);
+                    if (comp == null || !comp.isFrenzyActive())
+                        return TrueFalseAndCustomResult.pass();
+                    if (targetPlayer == viewer)
+                        return TrueFalseAndCustomResult.pass();
+                    if (isTargetInvisibleToInstinct(targetPlayer))
+                        return TrueFalseAndCustomResult.disallow();
+                    if (targetPlayer.distanceToSqr(viewer) > LeatherPigRoleData.INSTINCT_RANGE
+                            * LeatherPigRoleData.INSTINCT_RANGE)
+                        return TrueFalseAndCustomResult.pass();
+                    return TrueFalseAndCustomResult.custom(Color.RED.getRGB());
+                });
+
+        // 幻灵：附身灵视期间高亮周围玩家
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.PHANTOM_SPIRIT_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    if (!(target instanceof Player targetPlayer))
+                        return TrueFalseAndCustomResult.pass();
+                    if (!PhantomSpiritRoleData.isRevealActiveFor(viewer))
+                        return TrueFalseAndCustomResult.pass();
+                    if (targetPlayer == viewer)
+                        return TrueFalseAndCustomResult.pass();
+                    if (targetPlayer.distanceToSqr(viewer) > PhantomSpiritRoleData.REVEAL_RANGE
+                            * PhantomSpiritRoleData.REVEAL_RANGE)
+                        return TrueFalseAndCustomResult.pass();
+                    return TrueFalseAndCustomResult.custom(ModRoles.PHANTOM_SPIRIT.color());
+                });
+
+        // 鬼眼·杨间：扫描期间白色轮廓
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.GHOST_EYE_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    if (!(target instanceof Player targetPlayer))
+                        return TrueFalseAndCustomResult.pass();
+                    if (!isGhostEyeRole(viewer) || !isGhostEyeScanActive(viewer))
+                        return TrueFalseAndCustomResult.pass();
+                    if (targetPlayer == viewer)
+                        return TrueFalseAndCustomResult.pass();
+                    if (targetPlayer.distanceToSqr(viewer) > GhostEyeRoleData.SCAN_RADIUS
+                            * GhostEyeRoleData.SCAN_RADIUS)
+                        return TrueFalseAndCustomResult.pass();
+                    return TrueFalseAndCustomResult.custom(Color.WHITE.getRGB());
+                });
+
+        // 渡鸦
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.RAVEN_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    if (!(target instanceof Player) || !isInstinctEnabled)
+                        return TrueFalseAndCustomResult.pass();
+                    var raven = RoleData.getNullable(RavenRoleData.class, viewer);
+                    if (raven != null && raven.isHunting())
+                        return TrueFalseAndCustomResult.custom(Color.WHITE.getRGB());
+                    if (viewer.distanceTo(target) <= 10.0)
+                        return TrueFalseAndCustomResult.custom(Color.WHITE.getRGB());
+                    return TrueFalseAndCustomResult.disallow();
+                });
+
+        // 记者（近距离死亡时间渐变）
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.AWESOME_BINGLUS_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    if (!(target instanceof Player targetPlayer))
+                        return TrueFalseAndCustomResult.pass();
+                    if (targetPlayer.isInvisible())
+                        return TrueFalseAndCustomResult.pass();
+                    if (targetPlayer.distanceTo(viewer) <= 5) {
+                        var awpc = RoleData.getOptional(AwesomeRoleData.class, viewer);
+                        if (awpc.isEmpty() || awpc.get().nearByDeathTime <= 1)
+                            return TrueFalseAndCustomResult.pass();
+                        int redDepth = (int) (255 * ((float) awpc.get().nearByDeathTime
+                                / (float) AwesomeRoleData.nearByDeathTimeRecordTime));
+                        redDepth = Math.clamp(redDepth, 0, 255);
+                        return TrueFalseAndCustomResult.custom(new Color(redDepth, 0, 0).getRGB());
+                    }
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // 侦探（共谋者高亮）
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.AGENT_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    if (!(target instanceof Player targetPlayer))
+                        return TrueFalseAndCustomResult.pass();
+                    if (!SREClient.gameComponent.isRole(targetPlayer, ModRoles.CONSPIRATOR))
+                        return TrueFalseAndCustomResult.pass();
+                    var awpc = RoleData.getNullable(AgentRoleData.class, viewer);
+                    if (awpc == null || awpc.conspiratorInstinctTime <= 0)
+                        return TrueFalseAndCustomResult.pass();
+                    return TrueFalseAndCustomResult.custom(ModRoles.AGENT.color());
+                });
+
+        // 愚者（异端目标）
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(ModRoles.THE_FOOL_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    if (!(target instanceof Player targetPlayer))
+                        return TrueFalseAndCustomResult.pass();
+                    var comp = RoleData.getNullable(FoolRoleData.class, viewer);
+                    if (comp == null || comp.hereticTarget == null
+                            || !comp.hereticTarget.equals(targetPlayer.getUUID()))
+                        return TrueFalseAndCustomResult.pass();
+                    return TrueFalseAndCustomResult.custom(0xF2C56A);
+                });
+
+        // 黑警：未触发时看所有人浅黑；黑警时刻触发后，目标阵营玩家染红，其余仍为黑警颜色
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(BounsRoles.LICENSED_VILLAIN.identifier(),
+                (client, viewer, target, hasInstinct) -> {
+                    if (!hasInstinct)
+                        return TrueFalseAndCustomResult.pass();
+                    if (!(target instanceof Player targetPlayer))
+                        return TrueFalseAndCustomResult.pass();
+                    if (!SREClient.gameComponent.isRole(viewer, BounsRoles.LICENSED_VILLAIN))
+                        return TrueFalseAndCustomResult.pass();
+                    // 无法被透视的职业不显示（小透明/秉烛人/捣蛋鬼/赌徒）
+                    if (isTargetInvisibleToInstinct(targetPlayer))
+                        return TrueFalseAndCustomResult.disallow();
+                    LicensedVillainRoleData data = RoleData.getNullable(LicensedVillainRoleData.class, viewer);
+                    if (data == null)
+                        return TrueFalseAndCustomResult.pass();
+                    if (data.momentTriggered) {
+                        SRERole targetRole = SREClient.gameComponent.getRole(targetPlayer);
+                        if (targetRole != null
+                                && data.isTargetRole(targetRole))
+                            return TrueFalseAndCustomResult.custom(new Color(0xC1, 0x38, 0x38).getRGB());
+                        return TrueFalseAndCustomResult.custom(LicensedVillainRoleData.LICENSED_VILLAIN_COLOR);
+                    }
+                    // 未触发黑警时刻：看所有人为黑警颜色（浅黑）
+                    return TrueFalseAndCustomResult.custom(LicensedVillainRoleData.LICENSED_VILLAIN_COLOR);
+                });
+    }
+
+    /**
+     * 为指定 mafia 家族职业注册通用高亮逻辑（家族本能）：
+     * 开启本能后，该角色看到家族成员显示棕色框、看到教父显示天蓝框；
+     * 看到远处非家族玩家则禁止透视。
+     * <p>
+     * 既用于内置 mafia 角色（{@code registerObserverHighlights} 初始化时），
+     * 也用于运行时加载的自定义 mafia 角色（{@code CustomRoleLoader.reloadClient} 中调用），
+     * 使自定义家族角色也能互相看到特殊框。
+     *
+     * @param familyRole 需要注册家族本能的职业（其 isMafiaTeam() 应为 true）
+     */
+    public static void registerGodFamilyInstinct(SRERole familyRole) {
+        RoleInstinctEvents.OBSERVER_HIGHLIGHT_EVENT.register(familyRole.getIdentifier(),
+                (client, viewer, target, isInstinctEnabled) -> {
+                    if (!SREClient.isPlayerAliveAndInSurvival())
+                        return TrueFalseAndCustomResult.pass();
+                    if (!isInstinctEnabled)
+                        return TrueFalseAndCustomResult.pass();
+                    if (!isGodfatherFamilyMember(viewer))
+                        return TrueFalseAndCustomResult.pass();
+                    if (target instanceof Player targetPlayer) {
+                        if (isGodfatherFamilyMember(targetPlayer)) {
+                            if (SREClient.gameComponent.isRole(targetPlayer, ModRoles.GODFATHER))
+                                return TrueFalseAndCustomResult.custom(new Color(135, 206, 235).getRGB());
+                            return TrueFalseAndCustomResult.custom(new Color(139, 69, 19).getRGB());
+                        }
+                        if (viewer.distanceTo(targetPlayer) > 20.0D)
+                            return TrueFalseAndCustomResult.disallow();
+                    }
+                    return TrueFalseAndCustomResult.pass();
+                });
+    }
+
+    /**
+     * 该玩家是否属于教父家族（含职业级 mafia 家族成员，以及招募教父后的领袖）。
+     *
+     * <p>领袖本身不是 mafia 职业，但招募教父后应被视为家族成员；这里优先读
+     * {@code LeaderRoleData.mafiaTeamActive}（该状态下会全服同步），
+     * 专用服务器客户端也能正确识别。
+     */
+    private static boolean isGodfatherFamilyMember(Player player) {
+        if (SREClient.gameComponent == null || player == null)
+            return false;
+        var role = SREClient.gameComponent.getRole(player);
+        if (role == null)
+            return false;
+        if (role.identifier().equals(ModRoles.LEADER.identifier())) {
+            var leaderData = RoleData.getNullable(org.agmas.noellesroles.role_data.neutral.LeaderRoleData.class,
+                    player);
+            return leaderData != null && leaderData.mafiaTeamActive;
+        }
+        if (role.isMafiaTeam()) {
+            return true;
+        }
+        return isInAnyGodfatherFamily(player);
+    }
+
+    /** 玩家是否属于任意教父的家族成员（读取 familyMembers，含被教父招募的领袖等非 mafia 职业） */
+    private static boolean isInAnyGodfatherFamily(Player target) {
+        Minecraft client = Minecraft.getInstance();
+        if (client.level == null) {
+            return false;
+        }
+        for (Player p : client.level.players()) {
+            if (SREClient.gameComponent != null && SREClient.gameComponent.isRole(p, ModRoles.GODFATHER)) {
+                GodfatherRoleData comp = RoleData.getNullable(GodfatherRoleData.class, p);
+                if (comp != null && comp.familyMembers.contains(target.getUUID())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // ---------- 被看高亮（TARGET） ----------
+    private static void registerTargetHighlights() {
+
+        RoleInstinctEvents.TARGET_HIGHLIGHT_EVENT.register(ModRoles.MERCENARY_ID,
+                (client, self, target, hasInstinct) -> {
+                    if (SREClient.gameComponent.isKillerTeam(self)) {
+                        return TrueFalseAndCustomResult.disallow();
+                    }
+                    return TrueFalseAndCustomResult.pass();
+                });
+        // 对明星的高亮
+        RoleInstinctEvents.TARGET_HIGHLIGHT_EVENT.register(ModRoles.SUPERSTAR_ID,
+                (client, self, target, hasInstinct) -> {
+                    if (!(target instanceof Player targetPlayer))
+                        return TrueFalseAndCustomResult.pass();
+                    var stack = MCItemsUtils.getFirstMatchedItem(self, it -> it.getItem() instanceof SignedPaperItem);
+                    if (stack != null) {
+                        String owner = stack.getOrDefault(SREDataComponentTypes.OWNER, "NULL");
+                        if (targetPlayer.getScoreboardName().equals(owner))
+                            return TrueFalseAndCustomResult.custom(Color.WHITE.getRGB());
+                    }
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // 小透明：杀手无法看到
+        RoleInstinctEvents.TARGET_HIGHLIGHT_EVENT.register(ModRoles.GHOST_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    if (SREClient.gameComponent != null && isKillerTeam(SREClient.gameComponent.getRole(viewer))
+                            && SREClient.isPlayerAliveAndInSurvival())
+                        return TrueFalseAndCustomResult.disallow();
+                    return TrueFalseAndCustomResult.pass();
+                });
+        // 秉烛人：杀手无法透视
+        RoleInstinctEvents.TARGET_HIGHLIGHT_EVENT.register(ModRoles.CANDLE_BEARER_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    if (SREClient.gameComponent != null && isKillerTeam(SREClient.gameComponent.getRole(viewer))
+                            && SREClient.isPlayerAliveAndInSurvival())
+                        return TrueFalseAndCustomResult.disallow();
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // 怀旧者（里世界）：杀手无法透视
+        RoleInstinctEvents.TARGET_HIGHLIGHT_EVENT.register(ModRoles.NOSTALGIST_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    if (target instanceof Player targetPlayer && targetPlayer.hasEffect(ModEffects.NOSTALGIST_BACKWORLD)
+                            && SREClient.gameComponent != null && isKillerTeam(SREClient.gameComponent.getRole(viewer))
+                            && SREClient.isPlayerAliveAndInSurvival())
+                        return TrueFalseAndCustomResult.disallow();
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // 黑白熊（熊形态）：对所有人隐藏
+        RoleInstinctEvents.TARGET_HIGHLIGHT_EVENT.register(ModRoles.MONOKUMA_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    if (target instanceof Player targetPlayer && MonokumaEventHandler.isMonokumaBearForm(targetPlayer)
+                            && SREClient.isPlayerAliveAndInSurvival())
+                        return TrueFalseAndCustomResult.disallow();
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // 咸鱼：隐身时无法被看
+        RoleInstinctEvents.TARGET_HIGHLIGHT_EVENT.register(ModRoles.SALTED_FISH_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    if (target instanceof Player targetPlayer && targetPlayer.isInvisible())
+                        return TrueFalseAndCustomResult.disallow();
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // 特码头（西红柿形态）：杀手无法透视
+        RoleInstinctEvents.TARGET_HIGHLIGHT_EVENT.register(ModRoles.TOMATO_HEAD_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    if (!(target instanceof Player targetPlayer))
+                        return TrueFalseAndCustomResult.pass();
+                    if (TomatoHeadRoleData.isTomatoForm(targetPlayer)
+                            && SREClient.gameComponent != null
+                            && isKillerTeam(SREClient.gameComponent.getRole(viewer))
+                            && SREClient.isPlayerAliveAndInSurvival())
+                        return TrueFalseAndCustomResult.disallow();
+                    return TrueFalseAndCustomResult.pass();
+                });
+
+        // 幻灵：杀手无法透视未骑乘的幻灵，可以透视骑在别人头上的幻灵
+        RoleInstinctEvents.TARGET_HIGHLIGHT_EVENT.register(ModRoles.PHANTOM_SPIRIT_ID,
+                (client, viewer, target, isInstinctEnabled) -> {
+                    if (!(target instanceof Player targetPlayer))
+                        return TrueFalseAndCustomResult.pass();
+                    if (SREClient.gameComponent != null && isKillerTeam(SREClient.gameComponent.getRole(viewer))
+                            && SREClient.isPlayerAliveAndInSurvival()
+                            && !PhantomSpiritRoleData.isRidingPlayer(targetPlayer))
+                        return TrueFalseAndCustomResult.disallow();
+                    return TrueFalseAndCustomResult.pass();
+                });
+    }
+
+    // ---------- 通用兜底逻辑 ----------
+    public static void registerNormalLogic() {
+        CommonInstinctEvents.ALIVE_COMMON_BEFORE_EVENT.register((self, target, hasInstinct) -> {
+            if (target == null)
+                return TrueFalseAndCustomResult.pass();
+            if (target instanceof SaltedFishBodyEntity)
+                return TrueFalseAndCustomResult.disallow();
+            // 幻灵附身灵视：幻灵与宿主都能透视周围玩家
+            if (target instanceof Player revealTarget && revealTarget != self
+                    && PhantomSpiritRoleData.isRevealActiveFor(self)
+                    && revealTarget.distanceToSqr(self) <= PhantomSpiritRoleData.REVEAL_RANGE
+                            * PhantomSpiritRoleData.REVEAL_RANGE) {
+                return TrueFalseAndCustomResult.custom(ModRoles.PHANTOM_SPIRIT.color());
+            }
+            // 通用隐身与不可透视保护
+            if (target instanceof Player targetPlayer && isTargetInvisibleToInstinct(targetPlayer))
+                return TrueFalseAndCustomResult.disallow();
+            if (target instanceof Player tomatoTarget && TomatoHeadRoleData.isTomatoForm(tomatoTarget)
+                    && isKillerTeam(SREClient.gameComponent != null ? SREClient.gameComponent.getRole(self) : null))
+                return TrueFalseAndCustomResult.disallow();
+            // 低 SAN 非杀手玩家看到冤魂高亮（全局效果）
+            if (target instanceof Player targetPlayer && targetPlayer != self) {
+                if (SREClient.gameComponent.isRole(targetPlayer, ModRoles.WRAITH_ASSASSIN)) {
+                    SRERole selfRole = SREClient.gameComponent != null ? SREClient.gameComponent.getRole(self) : null;
+                    if (selfRole != null && !selfRole.isKiller()) {
+                        int viewerSan = Math.round(SREPlayerMoodComponent.KEY.get(self).getMood() * 100.0f);
+                        if (viewerSan < 40) {
+                            return TrueFalseAndCustomResult.custom(0xAA66FF);
+                        }
+                    }
+                }
+            }
+
+            // 殡仪员：透视物品实体
+            if (SREClient.gameComponent != null && SREClient.gameComponent.isRole(self, ModRoles.MORTICIAN)) {
+                if (target instanceof ItemEntity itemEntity) {
+                    double dx = self.getX() - itemEntity.getX();
+                    double dz = self.getZ() - itemEntity.getZ();
+                    double dy = self.getY() - itemEntity.getY();
+                    if (Math.sqrt(dx * dx + dz * dz) <= 10.0 && Math.abs(dy) <= 3.0)
+                        return TrueFalseAndCustomResult.custom(getGradientColor(itemEntity.getId()));
+                }
+            }
+
+            // 记者便签
+            if (SREClient.gameComponent != null && SREClient.gameComponent.isRole(self, ModRoles.AWESOME_BINGLUS)) {
+                if (target instanceof io.wifi.starrailexpress.content.entity.NoteEntity note)
+                    return TrueFalseAndCustomResult.custom(getGradientColor(note.getId()));
+            }
+
+            return TrueFalseAndCustomResult.pass();
+        });
+
+        // 保留旁观通用事件
+        CommonInstinctEvents.SPECTATOR_COMMON_EVENT.register((self, target, hasInstinct) -> {
+            if (!hasInstinct)
+                return TrueFalseAndCustomResult.pass();
+            if (target instanceof Player player
+                    && RoleUtils.isPlayerTheModifier(player, SpecialGameModeModifiers.TNT_TAGGED))
+                return TrueFalseAndCustomResult.custom(Color.RED.getRGB());
+            return TrueFalseAndCustomResult.pass();
+        });
+    }
+
+    // 特殊逻辑中保留不直接属于职业的全局事件
+    public static void registerSpecialLogic() {
+        // ── 本能隐匿（INSTINCT_CONCEAL）：目标持有该效果 → 任何人都没有本能框 ──
+        // 与「小透明」「秉烛人」「怀旧者」同样在<b>被看侧</b>返回 disallow()，区别是那三个绑职业、
+        // 本效果绑药水，所以走通用事件（ALIVE_COMMON_BEFORE_EVENT 在 TARGET_HIGHLIGHT_EVENT 之前触发，
+        // 且不需要 targetRole非空，能拦住所有职业的本能框）。
+        // 必须排在同级透视之前：隐匿优先，否则喝了隐匿还会被同级透视白框看见。
+        CommonInstinctEvents.ALIVE_COMMON_BEFORE_EVENT.register((self, target, hasInstinct) -> {
+            if (target instanceof Player targetPlayer && targetPlayer.hasEffect(ModEffects.INSTINCT_CONCEAL)) {
+                return TrueFalseAndCustomResult.disallow();
+            }
+            return TrueFalseAndCustomResult.pass();
+        });
+        // 观察者自己死亡 / 旁观时同样生效
+        CommonInstinctEvents.SPECTATOR_COMMON_EVENT.register((self, target, hasInstinct) -> {
+            if (target instanceof Player targetPlayer && targetPlayer.hasEffect(ModEffects.INSTINCT_CONCEAL)) {
+                return TrueFalseAndCustomResult.disallow();
+            }
+            return TrueFalseAndCustomResult.pass();
+        });
+
+        // ── 同级透视（PEER_XRAY）：双方都持有该药水且等级相同 → 互相白色描边（可穿墙） ──
+        // 与红海军（better_vigilante）的蓝框走同一条直觉高亮通道，只是这里返回纯白色。
+        // 通道：getCachedInstinctHighlight → MinecraftClientMixin#shouldEntityAppearGlowing
+        //       → WorldRendererMixin 拦getTeamColor 上色 → 原版 outline 后处理（关闭深度测试，故穿墙）。
+        // 注册在所有其它 ALIVE_COMMON_BEFORE_EVENT 监听器之前：事件是「首个非pass 生效」。
+        CommonInstinctEvents.ALIVE_COMMON_BEFORE_EVENT.register((self, target, hasInstinct) -> {
+            if (!(target instanceof Player targetPlayer) || targetPlayer == self) {
+                return TrueFalseAndCustomResult.pass();
+            }
+            return peerXrayHighlight(self, targetPlayer);
+        });
+        // 观察者自己死亡 / 旁观时同样生效（否则人一死白框就消失）
+        CommonInstinctEvents.SPECTATOR_COMMON_EVENT.register((self, target, hasInstinct) -> {
+            if (!(target instanceof Player targetPlayer) || targetPlayer == self) {
+                return TrueFalseAndCustomResult.pass();
+            }
+            return peerXrayHighlight(self, targetPlayer);
+        });
+
+        TouhouInstincts.registerEvents();
+
+        // 鬼祟修饰符
+        CommonInstinctEvents.ALIVE_COMMON_BEFORE_EVENT.register((self, target, hasInstinct) -> {
+            if (!(target instanceof Player targetPlayer) || SREClient.gameComponent == null)
+                return TrueFalseAndCustomResult.pass();
+            WorldModifierComponent mods = WorldModifierComponent.KEY.get(targetPlayer.level());
+            if (mods != null && mods.isModifier(targetPlayer.getUUID(), TraitorAndModifiers.SNEAKY)) {
+                if (self.distanceTo(targetPlayer) <= 8.0)
+                    return TrueFalseAndCustomResult.disallow();
+            }
+            return TrueFalseAndCustomResult.pass();
+        });
+
+        // 逐日者：只有处于其 20 格范围内时才能透视他（超出距离一律不显示高亮）
+        // 与鬼祟修饰符同为「被看侧」距离判定，放在 ALIVE_COMMON_BEFORE_EVENT 最早批次。
+        CommonInstinctEvents.ALIVE_COMMON_BEFORE_EVENT.register((self, target, hasInstinct) -> {
+            if (!(target instanceof Player targetPlayer) || SREClient.gameComponent == null)
+                return TrueFalseAndCustomResult.pass();
+            if (SREClient.gameComponent.isRole(targetPlayer, ModRoles.DAYWALKER)) {
+                if (self.distanceTo(targetPlayer) > DaywalkerRoleData.XRAY_RANGE)
+                    return TrueFalseAndCustomResult.disallow();
+            }
+            return TrueFalseAndCustomResult.pass();
+        });
+
+        // 游戏模式特殊处理
+        CommonInstinctEvents.ALIVE_COMMON_BEFORE_EVENT.register((self, target, hasInstinct) -> {
+            if (!(target instanceof Player targetPlayer) || !SREClient.gameComponent.isRunning())
+                return TrueFalseAndCustomResult.pass();
+            if (SREClient.gameComponent.gameMode.identifier.equals(SREGameModes.HIDE_AND_SEEK_MODE.identifier)) {
+                if (SREClient.gameComponent.isKillerTeam(self)) {
+                    if (SREClient.gameComponent.isKillerTeam(targetPlayer))
+                        return TrueFalseAndCustomResult.custom(TMMRoles.KILLER.color());
+                } else if (self.hasEffect(ModEffects.SAFE_TIME) && SREClient.gameComponent.isKillerTeam(targetPlayer)) {
+                    return TrueFalseAndCustomResult.custom(TMMRoles.KILLER.color());
+                }
+                if (self.hasEffect(MobEffects.GLOWING))
+                    return TrueFalseAndCustomResult.custom(TMMRoles.VIGILANTE.color());
+                return TrueFalseAndCustomResult.disallow();
+            }
+            if (SREClient.gameComponent.gameMode.identifier.equals(SREGameModes.TNT_TAG_MODE.identifier)) {
+                if (SREClient.modifierComponent.isModifier(targetPlayer, SpecialGameModeModifiers.TNT_TAGGED))
+                    return TrueFalseAndCustomResult.custom(SpecialGameModeModifiers.TNT_TAGGED.color());
+                return TrueFalseAndCustomResult.custom(TMMRoles.CIVILIAN.color());
+            }
+            return TrueFalseAndCustomResult.pass();
+        });
+
+        // 恋人
+        CommonInstinctEvents.ALIVE_COMMON_MIDDLE_EVENT.register((self, target, hasInstinct) -> {
+            if (!(target instanceof Player)
+                    || !WorldModifierComponent.KEY.get(self.level()).isModifier(self, SEModifiers.LOVERS))
+                return TrueFalseAndCustomResult.pass();
+            var lc = LoversComponent.KEY.get(self);
+            if (lc.getLover() != null && lc.getLover().equals(target.getUUID()))
+                return TrueFalseAndCustomResult.custom(SEModifiers.LOVERS.color());
+            return TrueFalseAndCustomResult.pass();
+        });
+    }
+
+    /**
+     * 同级透视（{@link ModEffects#PEER_XRAY}）的白框判定。
+     *
+     * <p>与观察者自身持有该药水、且药水等级<b>完全相同</b>的玩家互相显示纯白描边；
+     * 等级不同（I / II / III …）或只有一方有该药水时返回 {@link TrueFalseAndCustomResult#pass()}，
+     * 把结果交还给后续的职业高亮逻辑。
+     *
+     * <p>注意这里<b>不判断</b> {@code hasInstinct}：事件链在 {@code getCommonAliveInstinct}
+     * 里拿到 custom 结果后会直接返回，早于 {@code if (!instinctEnabled) return empty()}，
+     * 所以药水生效与直觉开关无关。
+     */
+    private static TrueFalseAndCustomResult<Integer> peerXrayHighlight(Player self, Player target) {
+        var selfEffect = self.getEffect(ModEffects.PEER_XRAY);
+        if (selfEffect == null) {
+            return TrueFalseAndCustomResult.pass();
+        }
+        // 对方的等级来自 PeerXrayEffectSync 的广播（原版不会把别人的药水下发给客户端）。
+        var targetEffect = target.getEffect(ModEffects.PEER_XRAY);
+        if (targetEffect == null || selfEffect.getAmplifier() != targetEffect.getAmplifier()) {
+            return TrueFalseAndCustomResult.pass();
+        }
+        return TrueFalseAndCustomResult.custom(Color.WHITE.getRGB());
+    }
+
+    // ---------- 工具方法 ----------
+    private static boolean isKillerTeam(SRERole role) {
+        return SREClient.gameComponent != null && SREClient.gameComponent.isKillerTeamRole(role);
+    }
+
+    private static boolean isGhostEyeRole(Player self) {
+        if (self == null || SREClient.gameComponent == null)
+            return false;
+        SRERole role = SREClient.gameComponent.getRole(self);
+        return role != null && role.identifier().equals(ModRoles.GHOST_EYE_ID);
+    }
+
+    private static boolean isGhostEyeScanActive(Player self) {
+        if (self == null || self.level() == null)
+            return false;
+        GhostEyeRoleData comp = RoleData.getNullable(GhostEyeRoleData.class, self);
+        if (comp != null && comp.revealTicks > 0)
+            return true;
+        int intervalTicks = GameConstants.getInTicks(0, NoellesRolesConfig.HANDLER.instance().ghostEyeScanInterval);
+        if (intervalTicks <= 0)
+            return false;
+        return self.level().getGameTime() % intervalTicks < GhostEyeRoleData.REVEAL_TICKS;
+    }
+
+    public static boolean isTargetInvisibleToInstinct(Player target) {
+        if (SREClient.gameComponent == null || target == null)
+            return false;
+        return SREClient.gameComponent.isRole(target, ModRoles.GHOST)
+                || SREClient.gameComponent.isRole(target, ModRoles.CANDLE_BEARER)
+                || SREClient.gameComponent.isRole(target, ModRoles.PRANKSTER)
+                || SREClient.gameComponent.isRole(target, ModRoles.GAMBLER);
+    }
+
+    // 渐变颜色相关（同原文件）
+    private static final int[] GRADIENT_COLORS = {
+            new Color(255, 0, 0).getRGB(),
+            new Color(255, 85, 0).getRGB(),
+            new Color(255, 170, 0).getRGB(),
+            new Color(255, 255, 0).getRGB(),
+            new Color(255, 170, 0).getRGB(),
+            new Color(255, 85, 0).getRGB(),
+    };
+    private static final int GRADIENT_CYCLE = 60;
+
+    public static int getGradientColor(int tickOffset) {
+        Minecraft client = Minecraft.getInstance();
+        if (client.level == null)
+            return GRADIENT_COLORS[0];
+        long worldTime = client.level.getGameTime();
+        int cyclePosition = (int) ((worldTime + tickOffset) % GRADIENT_CYCLE);
+        float progress = (float) cyclePosition / GRADIENT_CYCLE * GRADIENT_COLORS.length;
+        int colorIndex = (int) progress;
+        float blend = progress - colorIndex;
+        int currentColor = GRADIENT_COLORS[colorIndex % GRADIENT_COLORS.length];
+        int nextColor = GRADIENT_COLORS[(colorIndex + 1) % GRADIENT_COLORS.length];
+        return blendColors(currentColor, nextColor, blend);
+    }
+
+    public static int blendColors(int color1, int color2, float blend) {
+        int r1 = (color1 >> 16) & 0xFF, g1 = (color1 >> 8) & 0xFF, b1 = color1 & 0xFF;
+        int r2 = (color2 >> 16) & 0xFF, g2 = (color2 >> 8) & 0xFF, b2 = color2 & 0xFF;
+        int r = (int) (r1 + (r2 - r1) * blend);
+        int g = (int) (g1 + (g2 - g1) * blend);
+        int b = (int) (b1 + (b2 - b1) * blend);
+        return (r << 16) | (g << 8) | b;
+    }
+}

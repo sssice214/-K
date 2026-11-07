@@ -1,0 +1,192 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package pro.fazeclan.river.stupid_express.role.avaricious;
+
+import io.wifi.starrailexpress.cca.SREGameWorldComponent;
+import io.wifi.starrailexpress.cca.SREPlayerShopComponent;
+import io.wifi.starrailexpress.event.OnGameStarted;
+import io.wifi.starrailexpress.event.OnGameTrueStarted;
+import io.wifi.starrailexpress.game.GameConstants;
+import io.wifi.starrailexpress.game.GameUtils;
+import io.wifi.starrailexpress.index.TMMSounds;
+import net.minecraft.ChatFormatting;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundSource;
+import org.agmas.noellesroles.init.ModEffects;
+
+public class AvariciousGoldHandler {
+
+    public static long gameStartTime = -1; // 添加游戏开始时间字段
+    public static int TIMER_TICKS = GameConstants.getInTicks(0, 60); // 改为45秒一次，频率加倍
+    public static double MAX_DISTANCE = 8.0; // 扩大距离范围
+    public static int BASE_PAYOUT_PER_PLAYER = 25; // 基础金币提高
+    public static double DISTANCE_MULTIPLIER = 1.5; // 距离奖励系数
+
+    public static int calculatePayout(int totalPlayerCount, int nearbyPlayers, double avgDistance) {
+        double originalResult = 0;
+        if (totalPlayerCount <= 6) {
+            originalResult = (50 * (1 + (nearbyPlayers * 0.1))); // 基础值提高，且根据附近玩家数加成
+        } else if (totalPlayerCount >= 20) {
+            originalResult = (20 * (1 + (nearbyPlayers * 0.15))); // 提高下限和加成系数
+        } else {
+            // 优化后的公式：提高基础值和衰减系数，增加附近玩家加成
+            double base = 120.0 * Math.exp(-0.09 * totalPlayerCount) + 15; // 提高基础值和降低衰减
+            double nearbyBonus = 1 + (nearbyPlayers * 0.12); // 附近玩家加成
+            double distanceBonus = 1 + ((MAX_DISTANCE - avgDistance) / MAX_DISTANCE) * 0.3; // 距离奖励
+
+            originalResult = (base * nearbyBonus * distanceBonus);
+        }
+        return (int) Math.round((originalResult) * 0.75);
+    }
+
+    public static void registerEvents() {
+        OnGameStarted.EVENT.register((ServerLevel) -> {
+            AvariciousGoldHandler.gameStartTime = -1;
+        });
+        OnGameTrueStarted.EVENT.register((ServerLevel) -> {
+            AvariciousGoldHandler.gameStartTime = -1;
+        });
+    }
+
+    public static void playerServerTick(ServerPlayer player, SREGameWorldComponent gameWorldComponent) {
+        // 旁观者模式（含死亡后的玩家）：不再扒窃周围玩家的金币，同时隐藏偷取倒计时 HUD
+        if (player.isSpectator())
+            return;
+        var serverWorld = player.serverLevel();
+        long time = serverWorld.getGameTime();
+        if (player.hasEffect(ModEffects.SAFE_TIME))
+            return;
+        if (AvariciousGoldHandler.gameStartTime == -1) {
+            AvariciousGoldHandler.gameStartTime = time;
+            return;
+        }
+
+        long elapsed = time - AvariciousGoldHandler.gameStartTime;
+        long timeinterval = elapsed % AvariciousGoldHandler.TIMER_TICKS;
+
+        if (elapsed % AvariciousGoldHandler.TIMER_TICKS != 0) {
+            if (elapsed % 20 == 0) {
+                player.sendSystemMessage(
+                        Component.translatable(
+                                "hud.stupid_express.avaricious.payout_timer",
+                                ((AvariciousGoldHandler.TIMER_TICKS - timeinterval) / 20))
+                                .withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD),
+                        true);
+            }
+            return;
+        }
+
+        int nearbyPlayers = 0;
+        for (ServerPlayer other : serverWorld.players()) {
+            if (GameUtils.isPlayerEliminated(other))
+                continue;
+            if (other == player)
+                continue;
+            if (other.distanceTo(player) <= AvariciousGoldHandler.MAX_DISTANCE)
+                nearbyPlayers++;
+        }
+
+        if (nearbyPlayers > 0) {
+            int totalPlayers = serverWorld.players().size();
+            // 计算平均距离
+            double totalDistance = 0.0;
+            for (ServerPlayer other : serverWorld.players()) {
+                if (GameUtils.isPlayerEliminated(other))
+                    continue;
+                if (other == player)
+                    continue;
+                if (other.distanceTo(player) <= AvariciousGoldHandler.MAX_DISTANCE) {
+                    totalDistance += other.distanceTo(player);
+                }
+            }
+            double avgDistance = totalDistance / nearbyPlayers;
+
+            int payoutPerPlayer = AvariciousGoldHandler.calculatePayout(totalPlayers, nearbyPlayers, avgDistance);
+            int totalPayout = nearbyPlayers * payoutPerPlayer;
+            // 确保不超过150金币上限
+            totalPayout = Math.min(totalPayout, 150);
+            // 金币账本：扒手扒窃记「扒窃收入」（必须在改余额之前登记，供 addToBalance 兜底认领）
+            org.agmas.noellesroles.game.economy.MoneyFlow.recordIncome(player,
+                    org.agmas.noellesroles.game.economy.MoneyFlow.IncomeType.PICKPOCKET, totalPayout);
+            SREPlayerShopComponent.KEY.get(player).addToBalance(totalPayout);
+            player.playNotifySound(TMMSounds.UI_SHOP_BUY, SoundSource.PLAYERS, 10.0f, 0.5f);
+        }
+    }
+
+    // public static void payout() {
+    // ModdedRoleAssigned.EVENT.register(((player, role) -> {
+    // if (role.equals(SERoles.AVARICIOUS)) {
+    // GameTimeComponent timeComponent = GameTimeComponent.KEY.get(player.level());
+    // boolean payoutTime = timeComponent.time % TIMER_TICKS == 0;
+
+    // PlayerShopComponent shop = PlayerShopComponent.KEY.get(player);
+
+    // if (payoutTime) {
+    // int nearbyPlayerCount = 0;
+    // double totalDistance = 0.0;
+
+    // for (Player playerInWorld : player.level().players()) {
+    // if (playerInWorld != player) {
+    // double distance = playerInWorld.distanceTo(player);
+    // if (distance <= MAX_DISTANCE) {
+    // nearbyPlayerCount++;
+    // totalDistance += distance;
+    // }
+    // }
+    // }
+
+    // if (nearbyPlayerCount > 0) {
+    // double avgDistance = totalDistance / nearbyPlayerCount;
+    // int totalPlayers = player.level().players().size();
+    // int basePayout = calculatePayout(totalPlayers, nearbyPlayerCount,
+    // avgDistance);
+
+    // // 应用距离奖励（越近奖励越高）
+    // double distanceMultiplier = 1 + (MAX_DISTANCE - avgDistance) / MAX_DISTANCE *
+    // (DISTANCE_MULTIPLIER - 1);
+    // int distanceAdjustedPayout = (int)(basePayout * distanceMultiplier);
+
+    // // 连续触发奖励
+    // int consecutiveCount = playerBonusMap.getOrDefault(player.getUUID(), 0) + 1;
+    // int finalPayout = distanceAdjustedPayout;
+
+    // if (consecutiveCount >= BONUS_THRESHOLD) {
+    // finalPayout *= BONUS_MULTIPLIER;
+    // consecutiveCount = 0; // 重置计数
+    // }
+
+    // playerBonusMap.put(player.getUUID(), consecutiveCount);
+
+    // // 额外奖励：当附近玩家达到一定数量时
+    // if (nearbyPlayerCount >= 5) {
+    // finalPayout += (int)(BASE_PAYOUT_PER_PLAYER * nearbyPlayerCount * 0.5);
+    // }
+
+    // // 确保不超过150金币上限
+    // finalPayout = Math.min(finalPayout, 150);
+    // shop.addToBalance(finalPayout);
+
+    // // 调试信息（可移除）
+    // System.out.println("[Avaricious] Payout: " + finalPayout +
+    // " | Nearby: " + nearbyPlayerCount +
+    // " | AvgDist: " + String.format("%.1f", avgDistance));
+    // }
+    // }
+    // }
+    // }));
+    // }
+}

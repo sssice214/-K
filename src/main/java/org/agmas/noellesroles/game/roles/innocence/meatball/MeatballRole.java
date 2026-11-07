@@ -1,0 +1,101 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.game.roles.innocence.meatball;
+
+import io.wifi.starrailexpress.api.ExtraEffectRole;
+import io.wifi.starrailexpress.api.SRERole;
+import io.wifi.starrailexpress.api.data.RoleData;
+import io.wifi.starrailexpress.cca.SREGameWorldComponent;
+import io.wifi.starrailexpress.cca.SREPlayerShopComponent;
+import net.minecraft.ChatFormatting;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.player.Player;
+import org.agmas.noellesroles.role.ModRoles;
+import org.agmas.noellesroles.role_data.innocence.MeatballRoleData;
+
+/**
+ * 肉汁角色类
+ * 继承 ExtraEffectRole 以支持药水效果
+ * 重写 onFinishQuest 方法以实现赏金增加
+ */
+public class MeatballRole extends ExtraEffectRole {
+
+    public MeatballRole(ResourceLocation identifier, int color, boolean isInnocent, boolean canUseKiller,
+                        SRERole.MoodType moodType, int maxSprintTime, boolean hideOnScoreboard) {
+        super(identifier, color, isInnocent, canUseKiller, moodType, maxSprintTime, hideOnScoreboard);
+    }
+
+    @Override
+    public void onFinishQuest(Player player, String quest) {
+        SREGameWorldComponent gameWorld = SREGameWorldComponent.KEY.get(player.level());
+        
+        // 检查是否是肉汁角色
+        if (!gameWorld.isRole(player, ModRoles.MEATBALL)) {
+            return;
+        }
+        
+        // 增加赏金
+        RoleData.getOptional(MeatballRoleData.class, player).ifPresent(component -> {
+            component.addBounty();
+
+            // 发送消息提示
+            if (player instanceof ServerPlayer sp) {
+                sp.displayClientMessage(
+                    Component.translatable("message.noellesroles.meatball.bounty_increased", component.getBounty())
+                        .withStyle(ChatFormatting.GOLD),
+                    true
+                );
+            }
+        });
+    }
+
+    @Override
+    public void onKill(Player victim, boolean spawnBody, Player killer, ResourceLocation deathReason) {
+        SREGameWorldComponent gameWorld = SREGameWorldComponent.KEY.get(victim.level());
+        
+        // 检查是否是肉汁被击杀
+        if (!gameWorld.isRole(victim, ModRoles.MEATBALL)) {
+            return;
+        }
+        
+        // 收集赏金（无论谁击杀都要清空）
+        var meatballData = RoleData.getOptional(MeatballRoleData.class, victim);
+        if (meatballData.isEmpty()) {
+            return;
+        }
+
+        int bounty = meatballData.get().collectBounty();
+        
+        // 只有非乘客阵营的击杀者才能获得赏金
+        if (killer != null && !gameWorld.isInnocent(killer) && bounty > 0) {
+            SREPlayerShopComponent shopComponent = SREPlayerShopComponent.KEY.get(killer);
+            if (shopComponent != null) {
+                shopComponent.addToBalance(bounty);
+                
+                // 发送消息提示
+                if (killer instanceof ServerPlayer sp) {
+                    sp.displayClientMessage(
+                        Component.translatable("message.noellesroles.meatball.killer_reward", bounty)
+                            .withStyle(ChatFormatting.GOLD),
+                        true
+                    );
+                }
+            }
+        }
+    }
+}

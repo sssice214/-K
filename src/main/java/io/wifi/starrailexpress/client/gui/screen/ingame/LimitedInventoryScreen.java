@@ -1,0 +1,901 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.client.gui.screen.ingame;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import org.agmas.noellesroles.client.hud.CommonClientHudRenderer;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+import io.wifi.starrailexpress.SRE;
+import io.wifi.starrailexpress.SREClientConfig;
+import io.wifi.starrailexpress.api.SRERole;
+import io.wifi.starrailexpress.cca.DynamicShopComponent;
+import io.wifi.starrailexpress.cca.ParticipationComponent;
+import io.wifi.starrailexpress.client.SREClient;
+import io.wifi.starrailexpress.client.gui.StoreRenderer;
+import io.wifi.starrailexpress.client.util.ClientSkinCache;
+import io.wifi.starrailexpress.event.client.LimitedInventoryScreenEvents;
+import io.wifi.starrailexpress.game.ShopContent;
+import io.wifi.starrailexpress.network.original.StoreBuyPayload;
+import io.wifi.starrailexpress.util.ShopEntry;
+import io.wifi.utils.client.betterrender.FakeGuiGraphics;
+import net.fabricmc.api.EnvType;
+import net.fabricmc.api.Environment;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+import net.minecraft.client.DeltaTracker;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.client.gui.components.PlayerFaceRenderer;
+import net.minecraft.client.gui.components.Renderable;
+import net.minecraft.client.gui.components.Tooltip;
+import net.minecraft.client.gui.components.events.GuiEventListener;
+import net.minecraft.client.gui.narration.NarratableEntry;
+import net.minecraft.client.multiplayer.PlayerInfo;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.client.renderer.RenderType;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.util.FastColor.ARGB32;
+import net.minecraft.util.FormattedCharSequence;
+import net.minecraft.util.Mth;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.inventory.InventoryMenu;
+import net.minecraft.world.inventory.Slot;
+import net.minecraft.world.item.ItemStack;
+
+@Environment(EnvType.CLIENT)
+public class LimitedInventoryScreen extends LimitedHandledScreen<InventoryMenu> {
+
+    public static final ResourceLocation BACKGROUND_TEXTURE = SRE
+            .watheId("textures/gui/container/limited_inventory.png");
+
+    public static final ResourceLocation WAITED_INVENTORY_2_TEXTURE = SRE
+            .id("textures/gui/waiting_inventory_2.png");
+
+    private static final int SHOP_ITEM_SPACING_X = 38;
+    private static final int SHOP_ITEM_SPACING_Y = 52;
+    private int SHOP_MAX_ROWS_PER_PAGE = 1;
+    private static final int SHOP_TOP_SAFE_Y = 20;
+
+    public final LocalPlayer player;
+
+    /** 本次打开背包时创建的职业扩展实例（每次打开新建；resize/reinit 复用同一实例）。 */
+    private RoleInventoryScreenExtension roleExtension = null;
+    /** 回声模式直接使用本屏幕，不再通过按钮打开第二份背包。 */
+    private org.agmas.noellesroles.game.modes.echo.client.EchoInventoryPanel echoPanel;
+
+    public LimitedInventoryScreen(@NotNull LocalPlayer player) {
+        super(player.inventoryMenu, player.getInventory(), Component.empty());
+        this.player = player;
+    }
+
+    public Button menuButton = null;
+    public static final int menuButtonHeight = 20;
+    public static final int menuButtonWidth = 100;
+    public ArrayList<Button> menuSelections = new ArrayList<>();
+    public boolean isMenuOpen = false;
+
+    private final ArrayList<StoreItemWidget> shopWidgets = new ArrayList<>();
+    private int shopCurrentPage = 0;
+    private int shopTotalPages = 1;
+    private int shopColumns = 1;
+    private int shopRowsOnCurrentPage = 1;
+
+    private int shopGridStartY = 0;
+    private int shopNavY = 0;
+
+    private Button shopPrevPageButton = null;
+    private Button shopNextPageButton = null;
+
+    // ===== 等待面板（waiting_inventory_2.png）布局 =====
+    // 面板尺寸（贴图绘制区域）；内容实际约 174x165，锚定在屏幕中央。
+    private static final float PANEL_SCALE = 1.25F;
+    private static final int PANEL_W = 176;
+    private static final int PANEL_H = 176;
+    // 顶部左侧方格（头像）中心
+    private static final int HEAD_CX = 33, HEAD_CY = 38, HEAD_SIZE = 32;
+    // 顶部右侧宽格（名字 + 状态）文字起点
+    private static final int INFO_X = 66, INFO_NAME_Y = 24, INFO_STATUS_Y = 42;
+    // 中部 4 个菜单格子的中心 X 与公共中心 Y
+    private static final int[] MENU_CELL_CX = { 27, 67, 108, 148 };
+    private static final int MENU_CELL_CY = 110;
+    private static final int MENU_BTN_W = 38, MENU_BTN_H = 46;
+    private static final int MENU_PER_PAGE = MENU_CELL_CX.length;
+    private static final String FOUR_CJK_CHARACTERS = "中中中中";
+    // 底部 9 个快捷栏槽位
+    private static final int HOTBAR_FIRST_X = 7, HOTBAR_Y = 141, HOTBAR_STEP = 18;
+    // 翻页栏（中部分隔条）
+    private static final int NAV_Y = 70;
+
+    private final ArrayList<WaitingMenuCellButton> waitingMenuButtons = new ArrayList<>();
+    private Button waitingPrevPageButton = null;
+    private Button waitingNextPageButton = null;
+    private int waitingMenuPage = 0;
+    private int waitingMenuPages = 1;
+
+    /**
+     * 复用同一个包装实例绘制信息行；界面渲染时不在 Gui.render 帧内，FakeGuiGraphics 会直接透传给真实 GuiGraphics。
+     */
+    private FakeGuiGraphics fakeGraphics = null;
+
+    // 右上角：参与 / 不参与本局游戏切换按钮
+    private Button participationButton = null;
+    private static final int PARTICIPATION_BTN_W = 40;
+    private static final int PARTICIPATION_BTN_H = 20;
+
+    private static int scaled(int value) {
+        return Math.round(value * PANEL_SCALE);
+    }
+
+    private int panelLeft() {
+        return (this.width - scaled(PANEL_W)) / 2;
+    }
+
+    private int panelTop() {
+        return (this.height - scaled(PANEL_H)) / 2;
+    }
+
+    /**
+     * 判断游戏是否已开始（gameComponent存在且玩家存活在生存模式）
+     */
+    private boolean isGameActive() {
+        return SREClient.gameComponent != null && SREClient.gameComponent.isRunning();
+    }
+
+    /** 当前玩家在本局中的职业（客户端缓存；游戏未开始时为 null）。 */
+    private SRERole getCurrentRole() {
+        if (SREClient.gameComponent == null) {
+            return null;
+        }
+        return SREClient.gameComponent.getRole(this.player);
+    }
+
+    /** 当前玩家是否参与下一局游戏（默认参与）。 */
+    private boolean isParticipating() {
+        if (this.player == null) {
+            return true;
+        }
+        return ParticipationComponent.KEY.get(this.player.level()).isParticipating(this.player);
+    }
+
+    /** 切换按钮文案：参与中 -> 显示“不参与”，未参与 -> 显示“参与”。 */
+    private Component participationButtonLabel() {
+        return Component.translatable("screen.limited_inventory.button.participate.status",
+                Component.translatable(!isParticipating()
+                        ? "screen.limited_inventory.button.participate.leave"
+                        : "screen.limited_inventory.button.participate.join"));
+    }
+
+    public void toggleViewMenu(boolean flag) {
+        this.isMenuOpen = flag;
+        if (menuButton != null) {
+            menuButton.setMessage(
+                    Component.translatable("screen.limited_inventory.button.menu." + (!isMenuOpen ? "show" : "hide")));
+        }
+        boolean gameActive = isGameActive();
+        for (var ms : menuSelections) {
+            ms.visible = this.isMenuOpen && gameActive;
+            ms.active = this.isMenuOpen && gameActive;
+        }
+    }
+
+    // ===== 背包界面扩展"轮椅"方法（供事件监听器 / SRERole 钩子使用） =====
+
+    /** 向本屏幕添加一个控件（等价于原版 {@link #addRenderableWidget}，公开给扩展使用）。 */
+    public <T extends GuiEventListener & Renderable & NarratableEntry> T addRoleWidget(T widget) {
+        return this.addRenderableWidget(widget);
+    }
+
+    /** 移除由扩展添加的控件。 */
+    public void removeRoleWidget(GuiEventListener widget) {
+        this.removeWidget(widget);
+    }
+
+    /** 清空本屏幕的全部控件（等价于原版 {@link #clearWidgets}，慎用）。 */
+    public void clearRoleWidgets() {
+        this.clearWidgets();
+    }
+
+    /** 清空控件并重新执行 {@link #init()}，供两阶段选择等需要重建界面的扩展使用。 */
+    public void reinit() {
+        this.clearWidgets();
+        this.init();
+    }
+
+    public static List<ShopEntry> getRoleShopEntries(SRERole role, @Nullable Player player) {
+        if (role == null)
+            return List.of();
+        final var shopEntries = ShopContent.getShopEntries(role.getIdentifier(), player);
+        if (shopEntries != null)
+            return shopEntries;
+        return List.of();
+    }
+
+    public List<ShopEntry> getShopEntries() {
+        final var player = Minecraft.getInstance().player;
+        var gameWorldComponent = SREClient.gameComponent;
+        if (gameWorldComponent == null)
+            return List.of();
+        if (SREClient.gameComponent != null && SREClient.isPlayerAliveAndInSurvival()) {
+            final var role = gameWorldComponent.getRole(player);
+            if (role == null)
+                return List.of();
+            return getRoleShopEntries(role, player);
+        }
+        return List.of();
+    }
+
+    public static class ShopEntryDisplayItem extends ShopEntry {
+        public ShopEntryDisplayItem(ItemStack stack, int price, Type type) {
+            super(stack, price, type);
+        }
+
+        public ShopEntryDisplayItem(ShopEntry shopEntry, int index) {
+            this(shopEntry.stack(), shopEntry.price(), shopEntry.type());
+            this.index = index;
+        }
+
+        public static ArrayList<ShopEntryDisplayItem> transferArrayList(List<ShopEntry> shopEntries, Player player) {
+            ArrayList<ShopEntryDisplayItem> displayAbleEntries = new ArrayList<>();
+            int idx = 0;
+            for (var entry : shopEntries) {
+                if (entry.canDisplay(player)) {
+                    displayAbleEntries.add(new ShopEntryDisplayItem(entry, idx));
+                }
+                idx++;
+            }
+            return displayAbleEntries;
+        }
+
+        public int index = 0;
+    }
+
+    @Override
+    protected void init() {
+        if (org.agmas.noellesroles.game.modes.echo.client.EchoHotbar.active()) {
+            super.init();
+            clearWidgets();
+            if (echoPanel == null) echoPanel = new org.agmas.noellesroles.game.modes.echo.client.EchoInventoryPanel(this);
+            echoPanel.init();
+            return;
+        }
+        echoPanel = null;
+        LimitedInventoryScreenEvents.INIT.invoker().onInit(this);
+        var initRole = getCurrentRole();
+        if (roleExtension == null && initRole != null) {
+            roleExtension = initRole.createInventoryScreenExtension();
+        }
+        if (roleExtension != null) {
+            roleExtension.onInventoryScreenInit(this);
+        }
+        super.init();
+        initMenuSelections();
+
+        shopWidgets.clear();
+        shopCurrentPage = 0;
+
+        List<ShopEntry> entries = getShopEntries();
+        List<ShopEntryDisplayItem> displayAbleEntries = ShopEntryDisplayItem.transferArrayList(entries, player);
+
+        if (!displayAbleEntries.isEmpty()) {
+            final var gameComponent = SREClient.gameComponent;
+            if (gameComponent != null) {
+                final var role = gameComponent.getRole(player);
+                if (role != null && role.getAddChild() != null) {
+                    role.getAddChild().accept(this);
+                }
+            }
+
+            for (var t : displayAbleEntries) {
+                var widget = new StoreItemWidget(this, 0, 0, t, t.index);
+                shopWidgets.add(widget);
+                this.addRenderableWidget(widget);
+            }
+        }
+
+        shopPrevPageButton = this.addRenderableWidget(
+                Button.builder(Component.literal("<"), (btn) -> changeShopPage(-1))
+                        .bounds(0, -8, 20, 20)
+                        .build());
+        shopNextPageButton = this.addRenderableWidget(
+                Button.builder(Component.literal(">"), (btn) -> changeShopPage(1))
+                        .bounds(0, -8, 20, 20)
+                        .build());
+
+        // 参与切换按钮：占据等待面板右上角“参与状态”原文字的位置，实际坐标在 layoutWaitingMenu 中设置
+        participationButton = this.addRenderableWidget(
+                Button.builder(participationButtonLabel(), b -> {
+                    if (minecraft != null && minecraft.player != null) {
+                        minecraft.player.connection.sendCommand("tmm:participate");
+                    }
+                }).tooltip(Tooltip
+                        .create(Component.translatable("screen.limited_inventory.button.participate.hover_text")))
+                        .bounds(0, 0, PARTICIPATION_BTN_W, PARTICIPATION_BTN_H).build());
+        refreshShopLayout();
+        initWaitingMenu();
+
+        updateWaitingMenuVisibility();
+        if (roleExtension != null) {
+            roleExtension.onInventoryScreenInitTail(this);
+        }
+        LimitedInventoryScreenEvents.INIT_TAIL.invoker().onInit(this);
+    }
+
+    /** 创建等待面板中的便捷菜单格子按钮与翻页按钮（复用 GameMenuEntries 的同一组动作）。 */
+    private void initWaitingMenu() {
+        waitingMenuButtons.clear();
+        waitingMenuPage = 0;
+        for (var entry : GameMenuEntries.entries_hub(minecraft, this, this::toggleViewMenu)) {
+            var btn = new WaitingMenuCellButton(entry.label(), entry.action());
+            waitingMenuButtons.add(btn);
+            this.addRenderableWidget(btn);
+        }
+        waitingPrevPageButton = this.addRenderableWidget(
+                new WaitingNavButton(Component.literal("<"), (b) -> changeWaitingMenuPage(-1)));
+        waitingNextPageButton = this.addRenderableWidget(
+                new WaitingNavButton(Component.literal(">"), (b) -> changeWaitingMenuPage(1)));
+        layoutWaitingMenu();
+    }
+
+    private void changeWaitingMenuPage(int delta) {
+        int next = Math.max(0, Math.min(waitingMenuPages - 1, waitingMenuPage + delta));
+        if (next != waitingMenuPage) {
+            waitingMenuPage = next;
+            layoutWaitingMenu();
+        }
+    }
+
+    /** 重新计算等待菜单按钮位置（依赖屏幕尺寸），并刷新可见性。 */
+    private void layoutWaitingMenu() {
+        int px = panelLeft();
+        int py = panelTop();
+        int count = waitingMenuButtons.size();
+        waitingMenuPages = Math.max(1, (count + MENU_PER_PAGE - 1) / MENU_PER_PAGE);
+        waitingMenuPage = Math.max(0, Math.min(waitingMenuPage, waitingMenuPages - 1));
+        int start = waitingMenuPage * MENU_PER_PAGE;
+        for (int i = 0; i < count; i++) {
+            int slot = i - start;
+            var btn = waitingMenuButtons.get(i);
+            if (slot >= 0 && slot < MENU_PER_PAGE) {
+                int cx = px + scaled(MENU_CELL_CX[slot]);
+                btn.setPosition(cx - scaled(MENU_BTN_W) / 2,
+                        py + scaled(MENU_CELL_CY) - scaled(MENU_BTN_H) / 2);
+            }
+        }
+        if (waitingPrevPageButton != null && waitingNextPageButton != null) {
+            // 让“< 页码 >”整体在导航栏上居中、垂直对齐，与面板背景协调
+            int navCenterX = px + scaled(PANEL_W) / 2;
+            int navY = py + scaled(NAV_Y);
+            int btnW = scaled(12);
+            int gap = scaled(4);
+            Component pageText = Component.literal((waitingMenuPage + 1) + " / " + waitingMenuPages);
+            int textW = Math.round(this.font.width(pageText) * PANEL_SCALE);
+            waitingPrevPageButton.setPosition(navCenterX - textW / 2 - gap - btnW, navY);
+            waitingNextPageButton.setPosition(navCenterX + textW / 2 + gap, navY);
+        }
+
+        // 参与切换按钮：放在右上角信息格内（原参与状态文字所在位置）
+        if (participationButton != null) {
+            int bw = scaled(PANEL_W - INFO_X - 20);
+            int bh = scaled(16);
+            participationButton.setWidth(bw);
+            participationButton.setHeight(bh);
+            participationButton.setPosition(px + scaled(INFO_X), py + scaled(INFO_STATUS_Y) - scaled(2));
+        }
+
+        updateWaitingMenuVisibility();
+    }
+
+    /** 根据游戏状态/当前页设置等待菜单控件可见性。 */
+    private void updateWaitingMenuVisibility() {
+        boolean show = !isGameActive();
+        if (menuButton != null) {
+            menuButton.visible = !show;
+            menuButton.active = !show;
+        }
+        for (var ms : menuSelections) {
+            ms.visible = this.isMenuOpen && !show;
+            ms.active = this.isMenuOpen && !show;
+        }
+
+        // 右上角参与切换按钮：仅在等待（游戏未开始）时显示，文案随状态刷新
+        if (participationButton != null) {
+            participationButton.visible = show;
+            participationButton.active = show;
+            participationButton.setMessage(participationButtonLabel());
+        }
+        int start = waitingMenuPage * MENU_PER_PAGE;
+        for (int i = 0; i < waitingMenuButtons.size(); i++) {
+            boolean onPage = show && i >= start && i < start + MENU_PER_PAGE;
+            var btn = waitingMenuButtons.get(i);
+            btn.visible = onPage;
+            btn.active = onPage;
+        }
+        boolean paging = show && waitingMenuPages > 1;
+        if (waitingPrevPageButton != null) {
+            waitingPrevPageButton.visible = paging;
+            waitingPrevPageButton.active = paging && waitingMenuPage > 0;
+        }
+        if (waitingNextPageButton != null) {
+            waitingNextPageButton.visible = paging;
+            waitingNextPageButton.active = paging && waitingMenuPage < waitingMenuPages - 1;
+        }
+    }
+
+    public void initMenuSelections() {
+        menuButton = Button
+                .builder(Component.translatable("screen.limited_inventory.button.menu"), (btn) -> {
+                    toggleViewMenu(!this.isMenuOpen);
+                }).bounds(width - menuButtonWidth, height - menuButtonHeight, menuButtonWidth, menuButtonHeight)
+                .build();
+        this.addRenderableWidget(menuButton);
+        menuSelections.clear();
+        menuSelections.addAll(GameMenuEntries.register(width, height, minecraft, this, this::toggleViewMenu));
+        for (var ms : menuSelections) {
+            this.addRenderableWidget(ms);
+        }
+        toggleViewMenu(false);
+    }
+
+    private void changeShopPage(int delta) {
+        int next = Math.max(0, Math.min(shopTotalPages - 1, shopCurrentPage + delta));
+        if (next != shopCurrentPage) {
+            shopCurrentPage = next;
+            refreshShopLayout();
+        }
+    }
+
+    private void refreshShopLayout() {
+        SHOP_MAX_ROWS_PER_PAGE = Math.max(1, Math.min((this.y - SHOP_TOP_SAFE_Y - 24) / SHOP_ITEM_SPACING_Y, 4));
+        int count = shopWidgets.size();
+        if (count <= 0) {
+            shopTotalPages = 1;
+            shopRowsOnCurrentPage = 1;
+            if (shopPrevPageButton != null) {
+                shopPrevPageButton.visible = false;
+                shopPrevPageButton.active = false;
+            }
+            if (shopNextPageButton != null) {
+                shopNextPageButton.visible = false;
+                shopNextPageButton.active = false;
+            }
+            return;
+        }
+
+        int availableWidth = Math.max(1, (int) (this.width * 0.6f));
+        shopColumns = Math.max(1, availableWidth / SHOP_ITEM_SPACING_X);
+
+        int totalRows = (count + shopColumns - 1) / shopColumns;
+        shopTotalPages = (totalRows + SHOP_MAX_ROWS_PER_PAGE - 1) / SHOP_MAX_ROWS_PER_PAGE;
+        shopCurrentPage = Math.max(0, Math.min(shopCurrentPage, shopTotalPages - 1));
+
+        int startRow = shopCurrentPage * SHOP_MAX_ROWS_PER_PAGE;
+        int remainingRows = Math.max(0, totalRows - startRow);
+        shopRowsOnCurrentPage = Math.max(1, Math.min(SHOP_MAX_ROWS_PER_PAGE, remainingRows));
+
+        int baseY = this.y;
+
+        if (remainingRows <= 0) {
+            baseY += 6;
+        }
+        int offsetUp = (shopRowsOnCurrentPage) * SHOP_ITEM_SPACING_Y;
+        shopGridStartY = Math.max(SHOP_TOP_SAFE_Y, baseY - offsetUp);
+        for (int i = 0; i < count; i++) {
+            var widget = shopWidgets.get(i);
+            int globalRow = i / shopColumns;
+            int col = i % shopColumns;
+
+            boolean visible = globalRow >= startRow && globalRow < startRow + shopRowsOnCurrentPage;
+            widget.visible = visible;
+            widget.active = visible;
+
+            if (!visible)
+                continue;
+
+            int localRow = globalRow - startRow;
+            int itemsInThisRow = Math.min(shopColumns, count - globalRow * shopColumns);
+
+            int rowStartX = this.width / 2 - ((itemsInThisRow) * SHOP_ITEM_SPACING_X) / 2 + 10;
+            int x = rowStartX + col * SHOP_ITEM_SPACING_X;
+            int y = shopGridStartY + localRow * SHOP_ITEM_SPACING_Y;
+
+            widget.setPosition(x, y);
+        }
+
+        shopNavY = Math.min(this.height - 24, shopGridStartY + shopRowsOnCurrentPage * SHOP_ITEM_SPACING_Y - 16) - 8;
+
+        boolean needPaging = shopTotalPages > 1;
+        if (shopPrevPageButton != null && shopNextPageButton != null) {
+            if (needPaging) {
+                Component pageText = Component.literal((shopCurrentPage + 1) + " / " + shopTotalPages);
+                int textW = this.font.width(pageText);
+                int gap = 6;
+                int btnW = 20;
+
+                int centerX = this.width / 2;
+                int prevX = centerX - (textW / 2) - gap - btnW;
+                int nextX = centerX + (textW / 2) + gap;
+
+                shopPrevPageButton.setPosition(prevX, shopNavY);
+                shopNextPageButton.setPosition(nextX, shopNavY);
+            }
+
+            shopPrevPageButton.visible = needPaging;
+            shopNextPageButton.visible = needPaging;
+            shopPrevPageButton.active = needPaging && shopCurrentPage > 0;
+            shopNextPageButton.active = needPaging && shopCurrentPage < shopTotalPages - 1;
+        }
+    }
+
+    @Override
+    protected void drawBackground(@NotNull GuiGraphics context, float delta, int mouseX, int mouseY) {
+        if (echoPanel != null) { echoPanel.renderBackground(context); return; }
+        if (isGameActive()) {
+            context.blit(BACKGROUND_TEXTURE, this.x, this.y, 0, 0, this.backgroundWidth, this.backgroundHeight);
+        } else {
+            renderWaitingPanel(context);
+        }
+    }
+
+    /** 绘制等待面板背景；菜单按钮与真实快捷栏槽位由各自的原生组件绘制。 */
+    private void renderWaitingPanel(GuiGraphics context) {
+        int px = panelLeft();
+        int py = panelTop();
+        context.blit(WAITED_INVENTORY_2_TEXTURE, px, py, scaled(PANEL_W), scaled(PANEL_H),
+                0, 0, PANEL_W, PANEL_H, 256, 256);
+
+        // 顶部左格：玩家头像
+        PlayerInfo info = ClientSkinCache.getCachedPlayerInfo(player.getUUID());
+        if (info != null && info.getSkin().texture() != null) {
+            PlayerFaceRenderer.draw(context, info.getSkin().texture(),
+                    px + scaled(HEAD_CX - HEAD_SIZE / 2), py + scaled(HEAD_CY - HEAD_SIZE / 2), scaled(HEAD_SIZE));
+        }
+
+        // 顶部右格：玩家名（参与状态由覆盖在下方的切换按钮承担，由原生组件绘制）
+        drawPanelString(context, player.getName(), px + scaled(INFO_X), py + scaled(INFO_NAME_Y), 0xFFFFFFFF);
+
+        // 翻页页码：与左右箭头按钮在导航栏上居中、垂直对齐
+        if (waitingMenuPages > 1) {
+            Component pageText = Component.literal((waitingMenuPage + 1) + " / " + waitingMenuPages);
+            int textX = px + scaled(PANEL_W) / 2 - Math.round(this.font.width(pageText) * PANEL_SCALE / 2);
+            int textY = py + scaled(NAV_Y) + (scaled(12) - Math.round(this.font.lineHeight * PANEL_SCALE)) / 2;
+            drawPanelString(context, pageText, textX, textY, 0xFFFFFFFF);
+        }
+    }
+
+    private void drawPanelString(GuiGraphics context, Component text, int x, int y, int color) {
+        context.pose().pushPose();
+        context.pose().translate(x, y, 0);
+        context.pose().scale(PANEL_SCALE, PANEL_SCALE, 1.0F);
+        context.drawString(this.font, text, 0, 0, color, false);
+        context.pose().popPose();
+    }
+
+    @Override
+    protected boolean shouldRenderHotbarSlots() {
+        return echoPanel == null;
+    }
+
+    @Override
+    protected int getSlotRenderX(Slot slot) {
+        if (echoPanel != null) return -10000; // 隐藏槽位也不能通过旧坐标收到点击。
+        if (!isGameActive() && slot.index >= 36 && slot.index <= 44) {
+            return panelLeft() + scaled(HOTBAR_FIRST_X + (slot.index - 36) * HOTBAR_STEP) - this.x;
+        }
+        return super.getSlotRenderX(slot);
+    }
+
+    @Override
+    protected int getSlotRenderY(Slot slot) {
+        if (!isGameActive() && slot.index >= 36 && slot.index <= 44) {
+            int translatedScreenTop = this.y - getYOffset();
+            return panelTop() + scaled(HOTBAR_Y) - translatedScreenTop;
+        }
+        return super.getSlotRenderY(slot);
+    }
+
+    @Override
+    protected float getSlotRenderScale(Slot slot) {
+        if (!isGameActive() && slot.index >= 36 && slot.index <= 44) {
+            return PANEL_SCALE;
+        }
+        return super.getSlotRenderScale(slot);
+    }
+
+    @Override
+    public void resize(@NotNull Minecraft minecraft, int width, int height) {
+        super.resize(minecraft, width, height);
+        if (echoPanel != null) return;
+        refreshShopLayout();
+        layoutWaitingMenu();
+    }
+
+    @Override
+    public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        if (echoPanel != null && echoPanel.keyPressed(keyCode, scanCode)) return true;
+        // 搜索框（EditBox）聚焦时，背包键 E 用于输入字母，不应关闭背包
+        if (this.getFocused() instanceof EditBox && this.minecraft != null
+                && this.minecraft.options.keyInventory.matches(keyCode, scanCode)) {
+            return false;
+        }
+        return super.keyPressed(keyCode, scanCode, modifiers);
+    }
+
+    @Override
+    public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        // 点击搜索框以外的区域（含物品栏物品/热键栏槽位）时取消搜索框焦点
+        if (this.getFocused() instanceof EditBox editBox && !editBox.isMouseOver(mouseX, mouseY)) {
+            editBox.setFocused(false);
+            this.setFocused(null);
+        }
+        return super.mouseClicked(mouseX, mouseY, button);
+    }
+
+    @Override
+    public void render(GuiGraphics context, int mouseX, int mouseY, float delta) {
+        if (echoPanel != null) {
+            super.render(context, mouseX, mouseY, delta);
+            echoPanel.render(context, mouseX, mouseY);
+            return;
+        }
+        LimitedInventoryScreenEvents.RENDER.invoker().onRender(this, context, mouseX, mouseY, delta);
+        if (roleExtension != null) {
+            roleExtension.onInventoryScreenRender(this, context, mouseX, mouseY, delta);
+        }
+        super.render(context, mouseX, mouseY, delta);
+        renderOverlayMessageOnScreen(context, mouseX, mouseY, delta);
+
+        if (shopTotalPages > 1) {
+            Component pageText = Component.literal((shopCurrentPage + 1) + " / " + shopTotalPages);
+            int textX = this.width / 2 - this.font.width(pageText) / 2;
+            int textY = shopNavY + (20 - this.font.lineHeight) / 2; // 与 20x20 按钮垂直居中
+            context.drawString(this.font, pageText, textX, textY, 0xFFFFFF, false);
+        }
+
+        // 面板在背景层绘制，菜单按钮和真实快捷栏槽位在其上层绘制。
+
+        this.drawMouseoverTooltip(context, mouseX, mouseY);
+        StoreRenderer.renderHud(this.font, this.player, context, delta);
+
+        // 金币下方的信息行：开启配置后只在本界面显示（HUD 上不再绘制），位置与 HUD 上一致
+        if (SREClientConfig.instance().showInfoLinesInInventory && this.minecraft != null) {
+            if (fakeGraphics == null || fakeGraphics.getDefaultGuiGraphics() != context) {
+                fakeGraphics = new FakeGuiGraphics(context, true);
+            }
+            CommonClientHudRenderer.renderMessagesBelowMoney(this.minecraft, fakeGraphics, DeltaTracker.ONE, true);
+        }
+
+        LimitedInventoryScreenEvents.RENDER_TAIL.invoker().onRender(this, context, mouseX, mouseY, delta);
+    }
+
+    @Override
+    protected void handledScreenTick() {
+        if (echoPanel != null) echoPanel.tick();
+    }
+
+    @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double horizontal, double vertical) {
+        if (echoPanel != null && echoPanel.mouseScrolled(mouseX, mouseY, vertical)) return true;
+        return super.mouseScrolled(mouseX, mouseY, horizontal, vertical);
+    }
+
+    @Override
+    protected void onMouseClick(Slot slot, int slotId, int button, net.minecraft.world.inventory.ClickType type) {
+        if (echoPanel != null) return;
+        super.onMouseClick(slot, slotId, button, type);
+    }
+
+    @Override
+    public void onClose() {
+        if (echoPanel != null) echoPanel.close();
+        super.onClose();
+    }
+
+    private void renderOverlayMessageOnScreen(GuiGraphics context, int mouseX, int mouseY, float delta) {
+        var message = minecraft.gui.overlayMessageString;
+        int displaytime = minecraft.gui.overlayMessageTime;
+        if (message == null || displaytime <= 0)
+            return;
+        float f = (float) displaytime - delta;
+        int i = (int) (f * 255.0F / 20.0F);
+        if (i > 255) {
+            i = 255;
+        }
+
+        if (i > 8) {
+            int j;
+            if (minecraft.gui.animateOverlayMessageColor) {
+                j = Mth.hsvToArgb(f / 50.0F, 0.7F, 0.6F, i);
+            } else {
+                j = ARGB32.color(i, -1);
+            }
+            int x = width;
+            int y = 10;
+            int twidth = font.width(message);
+            {
+                context.drawStringWithBackdrop(font, message, (x - twidth) / 2, y, twidth, j);
+            }
+        }
+    }
+
+    /** 等待面板翻页箭头：无原版按钮底，仅绘制居中箭头，悬停高亮，与面板背景风格统一。 */
+    public class WaitingNavButton extends Button {
+        public WaitingNavButton(@NotNull Component label, @NotNull OnPress onPress) {
+            super(0, -scaled(12), scaled(12), scaled(12), label, onPress, DEFAULT_NARRATION);
+        }
+
+        @Override
+        protected void renderWidget(GuiGraphics context, int mouseX, int mouseY, float delta) {
+            if (!this.visible)
+                return;
+            Font font = LimitedInventoryScreen.this.font;
+            boolean usable = this.active && this.isHovered();
+            if (usable) {
+                context.fill(getX(), getY(), getX() + this.width, getY() + this.height, 0x40FFFFFF);
+            }
+            int color = !this.active ? 0xFF707070 : (this.isHovered() ? 0xFFFFFFFF : 0xFFE0E0E0);
+            int lineWidth = Math.round(font.width(this.getMessage()) * PANEL_SCALE);
+            int lineHeight = Math.round(font.lineHeight * PANEL_SCALE);
+            int textX = getX() + (this.width - lineWidth) / 2;
+            int textY = getY() + (this.height - lineHeight) / 2;
+            context.pose().pushPose();
+            context.pose().translate(textX, textY, 0);
+            context.pose().scale(PANEL_SCALE, PANEL_SCALE, 1.0F);
+            context.drawString(font, this.getMessage(), 0, 0, color, false);
+            context.pose().popPose();
+        }
+
+        @Override
+        public void renderString(GuiGraphics context, Font textRenderer, int color) {
+        }
+    }
+
+    /** 等待面板中部格子按钮：无默认按钮底，悬停高亮，长标题按四个中文字的宽度折行。 */
+    public class WaitingMenuCellButton extends Button {
+        public WaitingMenuCellButton(@NotNull Component label, @NotNull OnPress onPress) {
+            super(0, -scaled(MENU_BTN_H), scaled(MENU_BTN_W), scaled(MENU_BTN_H), label, onPress,
+                    DEFAULT_NARRATION);
+        }
+
+        @Override
+        protected void renderWidget(GuiGraphics context, int mouseX, int mouseY, float delta) {
+            if (!this.visible)
+                return;
+            Font font = LimitedInventoryScreen.this.font;
+            if (this.isHovered()) {
+                context.fill(getX(), getY(), getX() + this.width, getY() + this.height, 0x40FFFFFF);
+            }
+            int logicalButtonWidth = Math.round((this.width - scaled(4)) / PANEL_SCALE);
+            int maxLineWidth = Math.min(logicalButtonWidth, font.width(FOUR_CJK_CHARACTERS));
+            List<FormattedCharSequence> lines = font.split(this.getMessage(), maxLineWidth);
+            int totalHeight = Math.round(lines.size() * font.lineHeight * PANEL_SCALE);
+            int textY = getY() + (this.height - totalHeight) / 2;
+            int color = this.isHovered() ? 0xFFFFFFFF : 0xFFE0E0E0;
+            for (FormattedCharSequence line : lines) {
+                int lineWidth = Math.round(font.width(line) * PANEL_SCALE);
+                int textX = getX() + (this.width - lineWidth) / 2;
+                context.pose().pushPose();
+                context.pose().translate(textX, textY, 0);
+                context.pose().scale(PANEL_SCALE, PANEL_SCALE, 1.0F);
+                context.drawString(font, line, 0, 0, color, false);
+                context.pose().popPose();
+                textY += Math.round(font.lineHeight * PANEL_SCALE);
+            }
+        }
+
+        @Override
+        public void renderString(GuiGraphics context, Font textRenderer, int color) {
+        }
+    }
+
+    @Override
+    public void tick() {
+        // 未开始时：等待面板内的便捷菜单接管交互
+        updateWaitingMenuVisibility();
+        super.tick();
+    }
+
+    public static class StoreItemWidget extends Button {
+        public final LimitedInventoryScreen screen;
+        public final ShopEntry entry;
+        /** 该条目在商店列表中的下标，用于在渲染时取实时（已同步）条目价格，避免显示价与扣费价不同步。 */
+        public final int index;
+
+        public StoreItemWidget(LimitedInventoryScreen screen, int x, int y, @NotNull ShopEntry entry, int index) {
+            super(x, y, 16, 16, entry.stack().getHoverName(),
+                    (a) -> ClientPlayNetworking.send(new StoreBuyPayload(index)), DEFAULT_NARRATION);
+            this.screen = screen;
+            this.entry = entry;
+            this.index = index;
+        }
+
+        @Override
+        protected void renderWidget(GuiGraphics context, int mouseX, int mouseY, float delta) {
+            super.renderWidget(context, mouseX, mouseY, delta);
+            context.blitSprite(entry.type().getTexture(), this.getX() - 7, this.getY() - 7, 30, 30);
+
+            context.renderItem(this.entry.stack(), this.getX(), this.getY());
+            if (this.isHovered()) {
+                this.screen.renderLimitedInventoryTooltip(context, this.entry.stack());
+                drawShopSlotHighlight(context, this.getX(), this.getY(), 0);
+            }
+            // Show the dynamic price: if discounted by DynamicShopComponent, render the
+            // reduced price in green.
+            // 取实时（已同步）的商店条目，使显示的基础价/折后价与服务端实际扣费价一致；
+            // 开屏后若基础价被调整（如 /sre config reload 重建商店），快照价会过期，这里改读实时条目。
+            ShopEntry liveEntry = this.entry;
+            List<ShopEntry> liveEntries = this.screen.getShopEntries();
+            if (this.index >= 0 && this.index < liveEntries.size()) {
+                liveEntry = liveEntries.get(this.index);
+            }
+            int basePrice = liveEntry.price();
+            // 用服务端同步来的价格覆盖显示用基础价（按下标 + itemId 校验），保证显示价与服务端实际扣费一致。
+            basePrice = io.wifi.starrailexpress.shop.client.ShopPriceClientCache.overrideBasePrice(this.index,
+                    liveEntry.stack(), basePrice);
+            int effectivePrice = basePrice;
+            final var clientPlayer = Minecraft.getInstance().player;
+            if (clientPlayer != null) {
+                // 价格键按物品栈区分（自定义列车物品用其自定义 id），与服务端结算、本地条目一致
+                effectivePrice = DynamicShopComponent.KEY.get(clientPlayer)
+                        .effectivePrice(liveEntry.stack(), basePrice);
+            }
+            // 价格按条目货币类型显示：默认金币（\uE781 图标）；游戏代币用对应翻译键（带代币图标字形）
+            ShopEntry.Currency currency = liveEntry.currency() == null
+                    ? ShopEntry.Currency.MONEY
+                    : liveEntry.currency();
+            MutableComponent price = currency == ShopEntry.Currency.MONEY
+                    ? Component.literal(effectivePrice + "\uE781")
+                    : Component.translatable(currency.priceTranslationKey(), effectivePrice)
+                            .withColor(currency.color());
+            int displayX = this.getX() - 4 - this.screen.font.width(price) / 2;
+            int displayY = this.getY() - 9;
+            List<Component> renders = new ArrayList<>();
+
+            if (effectivePrice < basePrice) {
+                displayY -= 12;
+                renders.add(Component.translatable("gui.starrailexpress.shop.discount",
+                        100 - (int) ((double) effectivePrice / (double) basePrice * 100.0))
+                        .withStyle(net.minecraft.ChatFormatting.GREEN));
+                // price.withStyle(net.minecraft.ChatFormatting.GREEN);
+            } else if (effectivePrice > basePrice) {
+                displayY -= 12;
+                renders.add(Component.translatable("gui.starrailexpress.shop.increase",
+                        (int) ((double) effectivePrice / (double) basePrice * 100.0) - 100)
+                        .withStyle(net.minecraft.ChatFormatting.RED));
+            }
+            renders.add(price);
+            context.renderComponentTooltip(this.screen.font, renders, displayX, displayY);
+        }
+
+        private void drawShopSlotHighlight(GuiGraphics context, int x, int y, int z) {
+            int color = 0x90FFBF49;
+            context.fillGradient(RenderType.guiOverlay(), x, y, x + 16, y + 14, color, color, z);
+            context.fillGradient(RenderType.guiOverlay(), x, y + 14, x + 15, y + 15, color, color, z);
+            context.fillGradient(RenderType.guiOverlay(), x, y + 15, x + 14, y + 16, color, color, z);
+        }
+
+        @Override
+        public void renderString(GuiGraphics context, Font textRenderer, int color) {
+        }
+    }
+}

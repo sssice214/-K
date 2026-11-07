@@ -1,0 +1,182 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.init;
+
+import dev.doctor4t.ratatouille.util.registrar.BlockEntityTypeRegistrar;
+import dev.doctor4t.ratatouille.util.registrar.BlockRegistrar;
+import io.wifi.starrailexpress.index.SREDoorBlocks;
+import net.fabricmc.fabric.api.itemgroup.v1.FabricItemGroup;
+import net.minecraft.core.Registry;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.world.item.CreativeModeTab;
+import net.minecraft.world.item.CreativeModeTabs;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.SoundType;
+import net.minecraft.world.level.block.entity.BlockEntityType;
+import net.minecraft.world.level.block.state.BlockBehaviour;
+
+import org.agmas.noellesroles.Noellesroles;
+import org.agmas.noellesroles.content.block.*;
+import org.agmas.noellesroles.content.block_entity.*;
+
+import static io.wifi.starrailexpress.index.TMMBlocks.DARK_STEEL;
+
+public interface ModBlocks {
+        
+    public static ResourceKey<CreativeModeTab> BLOCK_DOORS_GROUP = ResourceKey.create(
+            Registries.CREATIVE_MODE_TAB,
+            Noellesroles.id("door"));
+    public static ResourceKey<CreativeModeTab> BLOCK_CREATIVE_GROUP = ResourceKey.create(
+            Registries.CREATIVE_MODE_TAB,
+            Noellesroles.id("block"));
+    public static final BlockRegistrar blockRegistrar = new BlockRegistrar(Noellesroles.MOD_ID);
+    public static final BlockEntityTypeRegistrar blockEntityRegistrar = new BlockEntityTypeRegistrar(
+            Noellesroles.MOD_ID);
+
+    Block VENDING_MACHINES_BLOCK = registerBlockMultiTab("vending_machines",
+            new VendingMachinesBlock(BlockBehaviour.Properties.ofFullCopy(DARK_STEEL).noOcclusion()),
+            BLOCK_CREATIVE_GROUP, ModSceneBlocks.SCENE_CREATIVE_GROUP);
+    BlockEntityType<VendingMachinesBlockEntity> VENDING_MACHINES_BLOCK_ENTITY = blockEntityRegistrar.create(
+            "vending_machines",
+            BlockEntityType.Builder.of(VendingMachinesBlockEntity::new,
+                    ModBlocks.VENDING_MACHINES_BLOCK));
+    Block LOTTERY_MACHINE_BLOCK = registerBlockMultiTab("lottery_machine",
+            new LotteryMachineBlock(BlockBehaviour.Properties.ofFullCopy(DARK_STEEL).noOcclusion()),
+            BLOCK_CREATIVE_GROUP, ModSceneBlocks.SCENE_CREATIVE_GROUP);
+    BlockEntityType<LotteryMachineBlockEntity> LOTTERY_MACHINE_BLOCK_ENTITY = blockEntityRegistrar.create(
+            "lottery_machine",
+            BlockEntityType.Builder.of(LotteryMachineBlockEntity::new,
+                    ModBlocks.LOTTERY_MACHINE_BLOCK));
+    // 创建轮盘赌桌方块
+    Block DEVIL_ROULETTE_TABLE = registerBlockMultiTab("devil_roulette_table",
+            new DevilRouletteTable(),
+            BLOCK_CREATIVE_GROUP, ModSceneBlocks.SCENE_CREATIVE_GROUP);
+    Block FLARE_BLOCK = registerBlock("flare_block",
+            new FlareBlock());
+    Block SUPPLY_CRATE_BLOCK = registerBlockMultiTab("supply_crate",
+            new SupplyCrateBlock(BlockBehaviour.Properties.ofFullCopy(DARK_STEEL).noOcclusion()),
+            BLOCK_CREATIVE_GROUP, ModSceneBlocks.SCENE_CREATIVE_GROUP);
+    BlockEntityType<SupplyCrateBlockEntity> SUPPLY_CRATE_BLOCK_ENTITY = blockEntityRegistrar.create(
+            "supply_crate",
+            BlockEntityType.Builder.of(SupplyCrateBlockEntity::new,
+                    ModBlocks.SUPPLY_CRATE_BLOCK));
+
+    // 创建轮盘赌桌方块实体类型
+    BlockEntityType<DevilRouletteTableEntity> DEVIL_ROULETTE_TABLE_ENTITY = blockEntityRegistrar.create(
+            "devil_roulette_table",
+            BlockEntityType.Builder.of(DevilRouletteTableEntity::new,
+                    new Block[] { ModBlocks.DEVIL_ROULETTE_TABLE }));
+
+    // Kill blocks (OP utilities)
+    @SuppressWarnings("unchecked")
+    Block KILL_BLOCK = blockRegistrar.createWithItem("kill_block",
+            new KillBlock(BlockBehaviour.Properties.of().strength(-1.0f, 3600000.0f).noOcclusion()),
+            CreativeModeTabs.OP_BLOCKS, ModSceneBlocks.SCENE_CREATIVE_GROUP);
+    @SuppressWarnings("unchecked")
+    Block KILL_BLOCK_PANEL = blockRegistrar.createWithItem("kill_block_panel",
+            new KillBlockPanel(BlockBehaviour.Properties.of().strength(-1.0f, 3600000.0f).noOcclusion()),
+            CreativeModeTabs.OP_BLOCKS, ModSceneBlocks.SCENE_CREATIVE_GROUP);
+
+    // 厨师的「客户端」食物盘 / 饮料盘。
+    // 只注册方块、不给 BlockItem：它们由服务端发 S2C 包让客户端 setBlock 画出来，
+    // 不该被玩家在创造模式 legit 放置（服务端并不承认它们的存在）。
+    // 放在所有其它字段之后声明，避开接口字段的初始化顺序问题。
+    Block CHEF_FOOD_TRAY = registerBlockOnly("chef_food_tray", new ChefTrayBlock.Food(chefTrayProperties()));
+    Block CHEF_DRINK_TRAY = registerBlockOnly("chef_drink_tray", new ChefTrayBlock.Drink(chefTrayProperties()));
+
+    /**
+     * 厨师盘子的方块实体：承载「盘里装着什么」，由 {@code ChefPlateRenderer} 渲染。
+     *
+     * <p>必须是一个独立类型：{@code BlockEntity} 构造函数会校验 {@code type.isValid(state)}，
+     * 原版的 {@code trainmurdermystery:beverage_plate} 只接受 {@code food_platter} / {@code drink_tray}，
+     * 用厨师的方块状态去 new 它会直接抛异常。
+     *
+     * <p>声明在两个方块字段之后，接口字段按声明顺序初始化，保证 {@code of(...)} 能拿到方块。
+     */
+    BlockEntityType<ChefPlateBlockEntity> CHEF_TRAY_BLOCK_ENTITY = blockEntityRegistrar.create(
+            "chef_tray",
+            BlockEntityType.Builder.of(ChefPlateBlockEntity::new, CHEF_FOOD_TRAY, CHEF_DRINK_TRAY));
+
+    private static BlockBehaviour.Properties chefTrayProperties() {
+        return BlockBehaviour.Properties.of()
+                .noOcclusion()
+                .noCollission()
+                .instabreak()
+                .noLootTable()
+                .strength(-1.0F, 3600000.0F)
+                .sound(SoundType.WOOD);
+    }
+
+    static void initialize() {
+        Registry.register(BuiltInRegistries.CREATIVE_MODE_TAB, BLOCK_CREATIVE_GROUP, FabricItemGroup.builder()
+                .title(Component.translatable("item_group.noellesroles.block")).icon(() -> {
+                    return new ItemStack(VENDING_MACHINES_BLOCK.asItem());
+                })
+                .build());
+                
+        Registry.register(BuiltInRegistries.CREATIVE_MODE_TAB, BLOCK_DOORS_GROUP, FabricItemGroup.builder()
+                .title(Component.translatable("item_group.starrailexpress.doors")).icon(() -> {
+                    return new ItemStack(SREDoorBlocks.UP_GLASS_DOOR.asItem());
+                })
+                .build());
+        blockRegistrar.registerEntries();
+        blockEntityRegistrar.registerEntries();
+    }
+
+    @SuppressWarnings("unchecked")
+    public static <T extends Block> T registerBlock(String id, T block) {
+        return blockRegistrar.createWithItem(id, block, BLOCK_CREATIVE_GROUP);
+    }
+
+    @SuppressWarnings("unchecked")
+    public static <T extends Block> T registerBlock(String id, T block, Item.Properties settings) {
+        return blockRegistrar.createWithItem(id, block, settings, BLOCK_CREATIVE_GROUP);
+    }
+
+    @SafeVarargs
+    @SuppressWarnings("unchecked")
+    public static <T extends Block> T registerBlockMultiTab(String id, T block,
+            ResourceKey<CreativeModeTab> tab, ResourceKey<CreativeModeTab>... extraTabs) {
+        if (extraTabs.length == 0) {
+            return blockRegistrar.createWithItem(id, block, tab);
+        }
+        ResourceKey<CreativeModeTab>[] allTabs = new ResourceKey[extraTabs.length + 1];
+        allTabs[0] = tab;
+        System.arraycopy(extraTabs, 0, allTabs, 1, extraTabs.length);
+        return blockRegistrar.createWithItem(id, block, allTabs);
+    }
+
+    @SuppressWarnings("unchecked")
+    public static <T extends Block> T registerOpBlock(String id, T block) {
+        return blockRegistrar.createWithItem(id, block, CreativeModeTabs.OP_BLOCKS);
+    }
+
+    /**
+     * 只注册方块、不附带 BlockItem，也不进任何创造分页。
+     *
+     * <p>用于「只由客户端画出来、服务端不承认存在」的方块（如厨师的客户端食物盘/饮料盘）。
+     * 这些方块没有物品形态，不能被玩家 legit 放置。
+     */
+    public static <T extends Block> T registerBlockOnly(String id, T block) {
+        return Registry.register(BuiltInRegistries.BLOCK, Noellesroles.id(id), block);
+    }
+}

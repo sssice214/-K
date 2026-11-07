@@ -1,0 +1,106 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.role.touhou.roles;
+
+import java.util.List;
+
+import org.agmas.noellesroles.component.DefibrillatorComponent;
+import org.agmas.noellesroles.component.ModComponents;
+import org.agmas.noellesroles.role.touhou.THLostForestRoles;
+import org.agmas.noellesroles.utils.RoleUtils;
+import org.jetbrains.annotations.Nullable;
+
+import io.wifi.starrailexpress.api.TouhouRole;
+import io.wifi.starrailexpress.cca.SREGameWorldComponent;
+import io.wifi.starrailexpress.cca.SREPlayerShopComponent;
+import io.wifi.starrailexpress.game.GameConstants;
+import io.wifi.starrailexpress.game.GameUtils;
+import io.wifi.starrailexpress.game.ShopContent;
+import io.wifi.starrailexpress.util.ShopEntry;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.player.Player;
+import pro.fazeclan.river.stupid_express.modifier.lovers.cca.LoversComponent;
+
+public class THKaguyaRole extends TouhouRole {
+
+    public static final int NORMAL_DEATH_THRESHOLD = 5;
+
+    public THKaguyaRole(ResourceLocation identifier, int color, boolean isInnocent, boolean canUseKiller,
+            MoodType moodType, int maxSprintTime, boolean canSeeTime) {
+        super(identifier, color, isInnocent, canUseKiller, moodType, maxSprintTime, canSeeTime);
+    }
+
+    @Override
+    public boolean canIncreaseSurvivingKillers() {
+        return true;
+    }
+
+    @Override
+    public boolean winWithKiller() {
+        return false;
+    }
+
+    @Override
+    public boolean winWithInnocent() {
+        return false;
+    }
+
+    @Override
+    public List<ShopEntry> getShopEntries() {
+        return ShopContent.getDefaultKnifeEntries();
+    }
+
+    @Override
+    public void onDeath(Player victim, boolean spawnBody, @Nullable Player killer, ResourceLocation deathReason,
+            boolean forceDeath) {
+        if (!(victim instanceof ServerPlayer serverVictim))
+            return;
+        // 殉情（链子）死亡时场上人数已因伴侣死亡而减少，若仍按人数阈值判定，
+        // 会出现伴侣复活而自己彻底死亡的分裂结果；此时跳过阈值，统一由下方伴侣状态决定去留。
+        if (!deathReason.equals(GameConstants.DeathReasons.BROKEN_HEART)) {
+            int remaningPlayerCount = RoleUtils.getAlivePlayers(serverVictim.serverLevel()).size();
+            if (remaningPlayerCount <= NORMAL_DEATH_THRESHOLD) {
+                THLostForestRoles.recordImmortalPairRealDeath(serverVictim, THLostForestRoles.MOKOU_ID);
+                return;
+            }
+        }
+        if (deathReason.equals(GameConstants.DeathReasons.FELL_OUT_OF_TRAIN)) {
+            THLostForestRoles.recordImmortalPairRealDeath(serverVictim, THLostForestRoles.MOKOU_ID);
+            return;
+        }
+        boolean revived = false;
+        if (deathReason.equals(GameConstants.DeathReasons.BROKEN_HEART)
+                || (killer != null && !SREGameWorldComponent.isKillerTeamStatic(killer) && !forceDeath)) {
+
+            var lover = LoversComponent.KEY.get(victim).getLoverAsPlayer();
+            if (lover != null) {
+                if (!GameUtils.isPlayerAliveAndSurvival(lover)
+                        && DefibrillatorComponent.KEY.get(lover).resurrectionTime <= 0) {
+                    THLostForestRoles.recordImmortalPairRealDeath(serverVictim, THLostForestRoles.MOKOU_ID);
+                    return;
+                }
+            }
+            DefibrillatorComponent component = ModComponents.DEFIBRILLATOR.get(victim);
+            component.triggerDeath(30 * 20, null, victim.position());
+            SREPlayerShopComponent.KEY.get(victim).addToBalance(50);
+            revived = true;
+        }
+        if (!revived) {
+            THLostForestRoles.recordImmortalPairRealDeath(serverVictim, THLostForestRoles.MOKOU_ID);
+        }
+    }
+}

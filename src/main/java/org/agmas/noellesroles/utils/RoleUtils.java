@@ -1,0 +1,1216 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.utils;
+
+import io.wifi.starrailexpress.progression.ProgressionDataManager;
+
+import com.google.common.collect.ArrayListMultimap;
+import com.google.common.collect.Multimap;
+import io.wifi.starrailexpress.SRE;
+import io.wifi.starrailexpress.api.AreasSettings;
+import io.wifi.starrailexpress.api.SREAbstractInfoClass;
+import io.wifi.starrailexpress.api.SRERole;
+import io.wifi.starrailexpress.api.TMMRoles;
+import io.wifi.starrailexpress.cca.SREGameRoundEndComponent;
+import io.wifi.starrailexpress.cca.SREGameWorldComponent;
+import io.wifi.starrailexpress.cca.SRERoleDataPlayerComponent;
+import io.wifi.starrailexpress.cca.SRERoleWorldComponent;
+import io.wifi.starrailexpress.client.SREClient;
+import io.wifi.starrailexpress.customrole.CustomRoleData;
+import io.wifi.starrailexpress.customrole.CustomRoleLoader;
+import io.wifi.starrailexpress.game.GameUtils;
+import io.wifi.starrailexpress.game.GameUtils.WinStatus;
+import io.wifi.starrailexpress.index.IntroMobEffect;
+import io.wifi.starrailexpress.index.TMMItems;
+import io.wifi.starrailexpress.index.TermIntroEntry;
+import io.wifi.starrailexpress.index.tag.TMMItemTags;
+import io.wifi.starrailexpress.network.original.AnnounceWelcomePayload;
+import io.wifi.starrailexpress.stats.PlayerStats;
+import io.wifi.starrailexpress.stats.PlayerStatsManager;
+import net.fabricmc.api.EnvType;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.fabricmc.loader.api.FabricLoader;
+import net.minecraft.ChatFormatting;
+import net.minecraft.core.Holder;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.locale.Language;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.network.protocol.game.ClientboundSoundPacket;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundEvent;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.tags.TagKey;
+import net.minecraft.world.effect.MobEffect;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.ai.attributes.Attribute;
+import net.minecraft.world.entity.ai.attributes.AttributeModifier;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
+import org.agmas.harpymodloader.component.WorldModifierComponent;
+import org.agmas.harpymodloader.events.ModdedRoleAssigned;
+import org.agmas.harpymodloader.events.ModdedRoleRemoved;
+import org.agmas.harpymodloader.events.ModifierAssigned;
+import org.agmas.harpymodloader.events.ModifierRemoved;
+import org.agmas.harpymodloader.modded_murder.PlayerRoleWeightManager;
+import org.agmas.harpymodloader.modifiers.HMLModifiers;
+import org.agmas.harpymodloader.modifiers.SREModifier;
+import org.agmas.noellesroles.role.ModRoles;
+import org.agmas.noellesroles.role_data.innocence.DisabledPatientRoleData;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.OptionalInt;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.function.Predicate;
+import java.util.stream.Collectors;
+
+/**
+ * 角色相关工具
+ */
+public class RoleUtils extends MCItemsUtils {
+    public static void customWinnerWin(ServerLevel serverWorld,
+            @NotNull String winnerId, @NotNull int winnerColor) {
+        customWinnerWin(serverWorld, WinStatus.CUSTOM, winnerId, OptionalInt.of(winnerColor));
+    }
+
+    public static void customWinnerWin(ServerLevel serverWorld, GameUtils.WinStatus WinStatus,
+            @Nullable String winnerId, @Nullable OptionalInt winnerColor) {
+        var roundComponent = SREGameRoundEndComponent.KEY.get(serverWorld);
+        if (winnerId != null) {
+            if (roundComponent != null) {
+                roundComponent.CustomWinnerID = winnerId;
+            }
+        }
+        if (winnerColor != null) {
+            if (!winnerColor.isEmpty()) {
+                if (roundComponent != null) {
+                    roundComponent.CustomWinnerColor = winnerColor.getAsInt();
+                }
+            }
+        }
+        SREGameRoundEndComponent.KEY.get(serverWorld).setRoundEndData(serverWorld.players(),
+                WinStatus);
+        GameUtils.stopGame(serverWorld);
+    }
+
+    public static void playSound(ServerPlayer serverPlayer, SoundEvent soundEvent, SoundSource soundSource,
+            float volume,
+            float pitch) {
+        if (serverPlayer == null)
+            return;
+        double x = serverPlayer.getX();
+        double y = serverPlayer.getY();
+        double z = serverPlayer.getZ();
+        playSound(serverPlayer, soundEvent, soundSource, x, y, z, volume, pitch);
+    }
+
+    public static void playSound(ServerPlayer serverPlayer, SoundEvent soundEvent, SoundSource soundSource, double x,
+            double y, double z, float volume, float pitch) {
+        if (serverPlayer == null)
+            return;
+        serverPlayer.connection.send(new ClientboundSoundPacket(BuiltInRegistries.SOUND_EVENT.wrapAsHolder(soundEvent),
+                soundSource, x, y, z, volume, pitch, serverPlayer.getRandom().nextLong()));
+    }
+
+    public static void removeAllPlayerAttributes(ServerPlayer serverPlayer) {
+        var attris = serverPlayer.getAttributes();
+        if (attris != null) {
+            var allAttris = attris.getSyncableAttributes();
+            if (allAttris != null && !allAttris.isEmpty()) {
+                Multimap<Holder<Attribute>, AttributeModifier> multimap1 = ArrayListMultimap.create();
+                for (var attri : allAttris) {
+                    var amodifiers = attri.getModifiers();
+                    if (amodifiers != null) {
+                        for (var mo : amodifiers) {
+                            multimap1.put(attri.getAttribute(), mo);
+                        }
+                    }
+                }
+                attris.removeAttributeModifiers(multimap1);
+            }
+        }
+    }
+
+    /**
+     * 清除玩家身上的所有药水效果。
+     *
+     * <p>
+     * 不要直接调用 {@code LivingEntity#removeAllEffects()}：原版实现在迭代
+     * {@code activeEffects} 这个 {@link java.util.HashMap} 的 {@code values()} 时回调
+     * {@code onEffectRemoved}，而 {@code ServerPlayerEntityMixin} 会在这里派发
+     * {@code SimpleMobEffect#onEffectEnded}。只要该回调顺带移除了<b>另一个</b>效果
+     * （例如智力下降结束后 {@code StatusAilmentHandler#endIntellectLock} 会移除
+     * {@code USED_BANED}），HashMap 的 modCount 就会变化，下一次 {@code Iterator#remove()}
+     * 直接抛 {@link java.util.ConcurrentModificationException}，并在死亡流程中把服务器线程打崩。
+     *
+     * <p>
+     * 这里改为先对效果列表做快照，再按 {@link LivingEntity#removeEffect(net.minecraft.core.Holder)}
+     * 逐个移除：该重载不会触发 {@code onEffectRemoved}，因此回调期间对效果表的任何增删都不会
+     * 再与迭代器冲突；快照中的效果若已被回调移除，用 {@code getEffect} 跳过即可，语义与原版一致。
+     */
+    public static boolean removeAllEffects(Player entity) {
+        if (entity == null) {
+            return false;
+        }
+        // 快照必须在任何移除之前建立（getActiveEffects 返回的是效果表 values() 的视图）。
+        List<Holder<MobEffect>> effects = entity.getActiveEffects().stream()
+                .map(MobEffectInstance::getEffect)
+                .collect(Collectors.toCollection(ArrayList::new));
+        if (effects.isEmpty()) {
+            return false;
+        }
+        boolean removed = false;
+        for (Holder<MobEffect> effect : effects) {
+            if (entity.getEffect(effect) != null) {
+                entity.removeEffect(effect);
+                removed = true;
+            }
+        }
+        return removed;
+    }
+
+    public static boolean isPlayerHasFreeSlot(@NotNull Player player) {
+        for (int i = 0; i < 9; ++i) {
+            ItemStack stack = player.getInventory().getItem(i);
+            if (stack.isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static void removeStackItem(ServerPlayer player, int slot) {
+        player.getInventory().setItem(slot, net.minecraft.world.item.ItemStack.EMPTY);
+    }
+
+    public static int dropAndClearAllSatisfiedItems(ServerPlayer player, Item item) {
+        int count = 0;
+        for (int i = 0; i < player.getInventory().getContainerSize(); i++) {
+            if (player.getInventory().getItem(i).is(item)) {
+                player.drop(player.getInventory().getItem(i), false);
+                player.getInventory().setItem(i, net.minecraft.world.item.ItemStack.EMPTY);
+                count++;
+            }
+        }
+        return count;
+    }
+
+    public static int dropAndClearAllGuns(ServerPlayer player) {
+        int count = MCItemsUtils.clearItem(player, TMMItemTags.GUNS);
+        for (int i = 0; i < count; i++) {
+            player.drop(TMMItems.REVOLVER.getDefaultInstance(), false);
+        }
+        return count;
+    }
+
+    public static int dropAndClearAllSatisfiedItems(ServerPlayer player, TagKey<Item> tagKey) {
+        int count = 0;
+        for (int i = 0; i < player.getInventory().getContainerSize(); i++) {
+            if (player.getInventory().getItem(i).is(tagKey)) {
+                player.drop(player.getInventory().getItem(i), false);
+                player.getInventory().setItem(i, net.minecraft.world.item.ItemStack.EMPTY);
+                count++;
+            }
+        }
+        return count;
+    }
+
+    public static int clearAllSatisfiedItems(ServerPlayer player, Item item) {
+        int count = 0;
+        for (int i = 0; i < player.getInventory().getContainerSize(); i++) {
+            if (player.getInventory().getItem(i).is(item)) {
+                player.getInventory().setItem(i, net.minecraft.world.item.ItemStack.EMPTY);
+                count++;
+            }
+        }
+        return count;
+    }
+
+    public static int clearAllSatisfiedItems(ServerPlayer player, TagKey<Item> tagKey) {
+        int count = 0;
+        for (int i = 0; i < player.getInventory().getContainerSize(); i++) {
+            if (player.getInventory().getItem(i).is(tagKey)) {
+                player.getInventory().setItem(i, net.minecraft.world.item.ItemStack.EMPTY);
+                count++;
+            }
+        }
+        return count;
+    }
+
+    public static int clearAllKnives(ServerPlayer player) {
+        int count = 0;
+        for (int i = 0; i < player.getInventory().getContainerSize(); i++) {
+            if (player.getInventory().getItem(i).is(TMMItems.KNIFE)) {
+                player.getInventory().setItem(i, net.minecraft.world.item.ItemStack.EMPTY);
+                count++;
+            }
+        }
+        return count;
+    }
+
+    public static int clearAllRevolver(ServerPlayer player) {
+        int count = 0;
+        for (int i = 0; i < player.getInventory().getContainerSize(); i++) {
+            if (player.getInventory().getItem(i).is(TMMItemTags.GUNS)) {
+                player.getInventory().setItem(i, net.minecraft.world.item.ItemStack.EMPTY);
+                count++;
+            }
+        }
+        return count;
+    }
+
+    public static void sendWelcomeAnnouncement(ServerPlayer player, ResourceLocation identifier, final int size) {
+        if (identifier == null)
+            return;
+        ServerPlayNetworking.send(player, new AnnounceWelcomePayload(
+                identifier.toString(), size, 0));
+    }
+
+    public static void sendWelcomeAnnouncement(ServerPlayer player, ResourceLocation identifier) {
+        SREGameWorldComponent gameWorldComponent = (SREGameWorldComponent) SREGameWorldComponent.KEY
+                .get(player.level());
+        final var size = gameWorldComponent.getAllKillerPlayers().size();
+        // 魔术师是伪装成杀手的好人角色，报幕时需要将魔术师计入杀手人数
+        long magicianCount = ((ServerLevel) player.level()).players().stream()
+                .filter(p -> gameWorldComponent.isRole(p, ModRoles.MAGICIAN))
+                .count();
+        final int totalKillers = size + (int) magicianCount;
+        if (identifier == null)
+            return;
+        sendWelcomeAnnouncement(player, identifier, totalKillers);
+    }
+
+    public static void sendWelcomeAnnouncement(ServerPlayer player, SRERole role) {
+        if (role == null) {
+            return;
+        }
+        var identifier = role.getIdentifier();
+        sendWelcomeAnnouncement(player, identifier);
+    }
+
+    public static void sendWelcomeAnnouncement(ServerPlayer player) {
+        SREGameWorldComponent gameWorldComponent = (SREGameWorldComponent) SREGameWorldComponent.KEY
+                .get(player.level());
+        SRERole role = gameWorldComponent.getRole(player);
+        sendWelcomeAnnouncement(player, role);
+    }
+
+    public static void addModifier(Player player, SREModifier modifier) {
+        addModifier(player, modifier, false, true);
+    }
+
+    public static void addModifier(Player player, SREModifier modifier, boolean noEventCall, boolean syncNow) {
+        if (player == null || modifier == null) {
+            return;
+        }
+        final var wmc = WorldModifierComponent.getInstance(player);
+        wmc.addModifier(player, modifier);
+        if (syncNow)
+            wmc.syncNow();
+        if (!noEventCall)
+            ModifierAssigned.EVENT.invoker().assignModifier(player, modifier);
+    }
+
+    public static void removeModifier(Player player, SREModifier modifier) {
+        removeModifier(player, modifier, false, false);
+    }
+
+    public static void removeModifier(Player player, SREModifier modifier, boolean noEventCall, boolean syncNow) {
+        if (player == null || modifier == null) {
+            return;
+        }
+
+        final var wmc = WorldModifierComponent.getInstance(player);
+        wmc.removeModifier(player, modifier);
+        if (syncNow)
+            wmc.syncNow();
+        if (!noEventCall)
+            ModifierRemoved.EVENT.invoker().removeModifier(player, modifier);
+    }
+
+    /**
+     * 通用适配判断：修饰符能否应用在目标职业上。
+     *
+     * <p>同时覆盖原版标记与自定义修饰符的字段：平民专属（{@code civilianOnly}）、
+     * 杀手专属（{@code killerOnly}）、按职业黑/白名单（{@code cannotBeAppliedTo} /
+     * {@code canOnlyBeAppliedTo}）以及按阵营黑/白名单
+     * （{@code cannotBeAppliedToTeams} / {@code canOnlyBeAppliedToTeams}）。</p>
+     *
+     * @param modifier 修饰符，{@code null} 时返回 false
+     * @param role     目标职业，{@code null} 时返回 false
+     */
+    public static boolean isModifierApplicable(SREModifier modifier, SRERole role) {
+        if (modifier == null || role == null) {
+            return false;
+        }
+        if (modifier.civilianOnly && !role.isInnocent()) {
+            return false;
+        }
+        if (modifier.killerOnly && !role.canUseKiller()) {
+            return false;
+        }
+        if (modifier.cannotBeAppliedTo != null && modifier.cannotBeAppliedTo.contains(role)) {
+            return false;
+        }
+        if (modifier.canOnlyBeAppliedTo != null && !modifier.canOnlyBeAppliedTo.isEmpty()
+                && !modifier.canOnlyBeAppliedTo.contains(role)) {
+            return false;
+        }
+        return modifier.isTeamApplicable(role);
+    }
+
+    /**
+     * 一键排除：清掉玩家身上所有不适用于目标职业的修饰符。
+     *
+     * <p>换阵营后调用（例如命令方块事件里平民变成「异常」中立空壳），
+     * 避免只对旧阵营生效的修饰符（平民专属、按职业/阵营限制的自定义修饰符）跟到新职业上。
+     * 判定逻辑见 {@link #isModifierApplicable}，对自定义修饰符同样生效。</p>
+     *
+     * @return 被清除的修饰符数量
+     */
+    public static int removeInapplicableModifiers(Player player, SRERole role) {
+        if (player == null || role == null) {
+            return 0;
+        }
+        final var wmc = WorldModifierComponent.getInstance(player);
+        List<SREModifier> toRemove = new ArrayList<>();
+        for (SREModifier modifier : wmc.getModifiers(player)) {
+            if (modifier == null || isModifierApplicable(modifier, role)) {
+                continue;
+            }
+            toRemove.add(modifier);
+        }
+        for (SREModifier modifier : toRemove) {
+            // 走事件：让各修饰符的移除回调（属性还原、组件清理）正常执行
+            removeModifier(player, modifier, false, true);
+        }
+        return toRemove.size();
+    }
+
+    public static void removeAllModifiers(Player player) {
+        removeAllModifiers(player, false);
+    }
+
+    public static void removeAllModifiers(Player player, boolean noEventCall) {
+        if (player == null) {
+            return;
+        }
+        var wmc = WorldModifierComponent.getInstance(player);
+        Set<SREModifier> modifiers = wmc.getModifiers(player);
+
+        if (!noEventCall) {
+            for (var t : modifiers) {
+                ModifierRemoved.EVENT.invoker().removeModifier(player, t);
+            }
+        }
+        wmc.setModifiers(player, List.of());
+    }
+
+    public static void changeRoleAndSendWelcome(Player player, SRERole role) {
+        if (!(player instanceof ServerPlayer sp))
+            return;
+        changeRole(player, role, true);
+        sendWelcomeAnnouncement(sp);
+    }
+
+    public static void changeRole(Player player, SRERole role) {
+        changeRole(player, role, true);
+    }
+
+    public static void changeRole(Player player, SRERole role, boolean record) {
+        changeRole(player, role, record, record);
+    }
+
+    public static void changeRole(Player player, SRERole role, boolean record, boolean addStats) {
+        changeRole(player, role, record, addStats, false);
+    }
+
+    public static void changeRole(Player player, SRERole role, boolean record, boolean addStats,
+            boolean clearOldItems) {
+        changeRole(player, role, record, addStats, false, false, true);
+    }
+
+    public static void changeRole(Player player, SRERole role, boolean record, boolean addStats,
+            boolean clearOldItems, boolean noEventCall, boolean syncNow) {
+        SREGameWorldComponent gameWorldComponent = SREGameWorldComponent.KEY.get(player.level());
+        // 删除旧职业
+        var oldRole = gameWorldComponent.getRole(player);
+        if (oldRole != null && role != null && player instanceof ServerPlayer sp) {
+            var oldId = oldRole.identifier();
+            var newId = role.identifier();
+            if (oldId != null && newId != null && !oldId.equals(newId)) {
+                ProgressionDataManager.onRoleChanged(sp, newId.toString());
+            }
+        }
+        if (oldRole != null) {
+            if (clearOldItems) {
+                var cacheItems = new ArrayList<ItemStack>();
+                player.getInventory().items.forEach(
+                        itemStack -> {
+                            if (oldRole.getDefaultItems().stream()
+                                    .anyMatch(itemStack1 -> itemStack1.getItem().equals(itemStack.getItem()))) {
+                                cacheItems.add(itemStack);
+                            }
+                        });
+                cacheItems.forEach(
+                        itemStack -> {
+                            player.getInventory().removeItem(itemStack);
+                        });
+            }
+            DisabledPatientRoleData.clearGrantedEffects(player);
+            if (!noEventCall)
+                ((ModdedRoleRemoved) ModdedRoleRemoved.EVENT.invoker()).removeModdedRole(player, oldRole);
+        }
+        if (addStats) {
+            PlayerStats stats = PlayerStatsManager.get(player);
+            stats.getOrCreateRoleStats(role.identifier()).incrementTimesPlayed();
+            // 统计阵营场次
+            if (role.isVigilanteTeam()) {
+                stats.incrementTotalSheriffGames();
+            } else if (role.canUseKiller()) {
+                stats.incrementTotalKillerGames();
+            } else if (role.isNeutrals()) {
+                stats.incrementTotalNeutralGames();
+            } else if (role.isInnocent() && !role.isVigilanteTeam()) {
+                stats.incrementTotalCivilianGames();
+            }
+        }
+        // 给新职业
+        gameWorldComponent.addRole(player, role);
+        if (syncNow)
+            gameWorldComponent.roleWorldComponent.syncNow();
+        if (oldRole != null) {
+            if (record) {
+                SRE.REPLAY_MANAGER.recordPlayerRoleChange(player.getUUID(), oldRole, role);
+            }
+        }
+        // 触发事件
+        if (player instanceof ServerPlayer sp) {
+            if (!noEventCall) {
+                (ModdedRoleAssigned.EVENT.invoker()).assignModdedRole(sp, role);
+            } else {
+                // 还是需要初始化一下RoleData类
+                {
+                    final var cca = SRERoleDataPlayerComponent.KEY.get(player);
+                    cca.init();
+                }
+            }
+            if (GameUtils.shouldGiveSpectatorsDeathPenalty(player)) {
+                GameUtils.pendingReJudgeSpectatorsPenalty();
+            }
+        }
+    }
+
+    public static MutableComponent getRoleName(ResourceLocation roleIdentifier) {
+        if (roleIdentifier == null)
+            return null;
+        SRERole role = TMMRoles.getRole(roleIdentifier);
+        if (role != null) {
+            return role.getName().copy();
+        }
+        // 未注册时（例如客户端还没完成自定义职业注册）先查自定义职业配置，
+        // 否则自定义职业会退成 "announcement.star.role.<englishId>" 这种没人填过的翻译键。
+        CustomRoleData customData = CustomRoleLoader.getCustomRoleData(roleIdentifier.getPath());
+        if (customData != null && customData.displayName != null && !customData.displayName.isBlank()) {
+            return Component.literal(customData.displayName);
+        }
+        return Component.translatable("announcement.star.role." + roleIdentifier.getPath());
+    }
+
+    /**
+     * 获取角色的显示名称
+     */
+    public static MutableComponent getRoleName(SRERole role) {
+        // 尝试获取翻译后的角色名称
+        return role.getName().copy();
+    }
+
+    /**
+     * 判断职业是否相等
+     * 
+     * @return 返回是否相等
+     */
+    public static boolean compareRole(SRERole role_a, SRERole role_b) {
+        if (role_a == null && role_b == null)
+            return true;
+        if (role_a == null || role_b == null)
+            return false;
+        return role_a.equals(role_b);
+    }
+
+    /**
+     * 获取一个职业从他的路径
+     * 
+     * @return 返回Role
+     */
+    public static SRERole getRole(String roleName) {
+        var roles = ResourceLocation.tryParse(roleName);
+        if (roles == null)
+            return null;
+        return TMMRoles.ROLES.get(roles);
+    }
+
+    public static SRERole getRole(ResourceLocation role) {
+        if (role == null)
+            return null;
+        return TMMRoles.ROLES.get(role);
+    }
+
+    public static MutableComponent getModifierDescription(String modifierName) {
+        var res = ResourceLocation.tryParse(modifierName);
+        if (res == null) {
+            return Component.translatable("info.screen.modifier." + modifierName);
+        }
+        var m = HMLModifiers.getModifier(res);
+        if (m == null)
+            return Component.translatable("info.screen.modifier." + res.getPath());
+        return m.getDescription().copy();
+    }
+
+    public static MutableComponent getRoleDescription(String roleName) {
+        var res = ResourceLocation.tryParse(roleName);
+        if (res == null)
+            return Component.literal(roleName);
+        var role = TMMRoles.ROLES.getOrDefault(res, null);
+        if (role == null) {
+            return Component.translatable("info.screen.roleid." + res.getPath());
+        }
+        return role.getDescription().copy();
+    }
+
+    public static MutableComponent getRoleDescription(SRERole role) {
+        if (role == null)
+            return Component.literal("");
+        return role.getDescription().copy();
+    }
+
+    public static MutableComponent getModifierName(ResourceLocation modifier) {
+        var m = HMLModifiers.getModifier(modifier);
+        if (m != null)
+            return m.getName(false);
+        return null;
+    }
+
+    public static MutableComponent getModifierName(SREModifier modifier) {
+        if (modifier == null)
+            return null;
+        return modifier.getName(false);
+    }
+
+    public static MutableComponent getModifierNameWithColor(SREModifier modifier) {
+        if (modifier == null)
+            return null;
+        return modifier.getName(true);
+    }
+
+    public static MutableComponent getModifierDescription(SREModifier modifier) {
+        return modifier.getDescription().copy();
+    }
+
+    public static Component getRoleOrModifierName(Object role) {
+        if (role instanceof SRERole r) {
+            return getRoleName(r);
+        } else if (role instanceof SREModifier m) {
+            return getModifierName(m);
+        } else if (role instanceof IntroMobEffect effect) {
+            return effect.getDisplayName();
+        } else {
+            return Component.translatable("Unknown");
+        }
+    }
+
+    public static MutableComponent getRoleOrModifierNameWithColor(Object role) {
+        if (role == null)
+            return Component.translatable("Unknown");
+        if (role instanceof SRERole r) {
+            return getRoleName(r).withColor(0xff000000 | r.color());
+        } else if (role instanceof SREModifier m) {
+            return m.getName(true);
+        } else if (role instanceof IntroMobEffect effect) {
+            return effect.getDisplayName().copy().withColor(effect.getColor());
+        } else {
+            return Component.translatable("Unknown");
+        }
+    }
+
+    public static MutableComponent getRoleOrModifierSimpleDescription(Object role) {
+        if (role instanceof SRERole r) {
+            return getRoleSimpleDescription(r);
+        } else if (role instanceof SREModifier m) {
+            return getModifierSimpleDescription(m);
+        } else {
+            return Component.translatable("Unknown");
+        }
+    }
+
+    public static MutableComponent getAbstactInfoObjectName(SREAbstractInfoClass obj) {
+        return getAbstactInfoObjectName(obj, false);
+    }
+
+    public static MutableComponent getAbstactInfoObjectName(SREAbstractInfoClass obj, boolean color) {
+        return obj.getDescription().copy();
+    }
+
+    public static MutableComponent getAbstactInfoObjectDescription(SREAbstractInfoClass obj) {
+        return obj.getDescription().copy();
+    }
+
+    public static MutableComponent getAbstactInfoObjectSimpleDescription(SREAbstractInfoClass obj) {
+        return obj.getSimpleDescription().copy();
+    }
+
+    public static MutableComponent getRoleSimpleDescription(SRERole role) {
+        if (role == null)
+            return Component.empty();
+        return role.getSimpleDescription().copy();
+    }
+
+    public static MutableComponent getModifierSimpleDescription(SREModifier modifier) {
+        if (modifier == null)
+            return Component.empty();
+        return modifier.getSimpleDescription().copy();
+    }
+
+    public static MutableComponent getRoleOrModifierDescription(Object role) {
+        if (role instanceof SRERole r) {
+            return getRoleDescription(r);
+        } else if (role instanceof SREModifier m) {
+            return getModifierDescription(m);
+        } else {
+            return Component.translatable("Unknown");
+        }
+    }
+
+    public static int getRoleOrModifierColor(Object role) {
+        if (role instanceof SRERole r) {
+            return 0xff000000 | r.color();
+        } else if (role instanceof SREModifier m) {
+            return 0xff000000 | m.color();
+        } else if (role instanceof IntroMobEffect effect) {
+            return effect.getColor();
+        } else if (role instanceof Item) {
+            return java.awt.Color.CYAN.getRGB();
+        } else if (role instanceof AreasSettings) {
+            return java.awt.Color.WHITE.getRGB();
+        } else if (role instanceof TermIntroEntry) {
+            return TermIntroEntry.CATEGORY_COLOR;
+        }
+        return java.awt.Color.WHITE.getRGB();
+    }
+
+    public static MutableComponent getRoleOrModifierTypeName(Object role) {
+        if (role instanceof SRERole) {
+            return Component.translatable("display.type.role");
+        } else if (role instanceof SREModifier) {
+            return Component.translatable("display.type.modifier");
+        } else {
+            return Component.translatable("display.type.unknown");
+        }
+        //
+    }
+
+    public static ResourceLocation getRoleOrModifierIdentifier(Object role) {
+        if (role instanceof SRERole r) {
+            return r.identifier();
+        } else if (role instanceof SREModifier m) {
+            return m.identifier();
+        } else if (role instanceof IntroMobEffect effect) {
+            return effect.id();
+        } else {
+            return null;
+        }
+    }
+
+    public static MutableComponent getRoleOrModifierOrItemNameWithColor(Object selectedRole) {
+        if (selectedRole instanceof IntroMobEffect effect) {
+            return effect.getDisplayName().copy().withColor(effect.getColor());
+        } else if (selectedRole instanceof Item it) {
+            return it.getDescription().copy().withStyle(ChatFormatting.WHITE);
+        } else if (selectedRole instanceof AreasSettings) {
+            return Component.translatable("screen.roleintroduce.detail.map_areas_settings")
+                    .withStyle(ChatFormatting.GREEN);
+        } else if (selectedRole instanceof TermIntroEntry term) {
+            return term.getNameWithColor();
+        } else {
+            return getRoleOrModifierNameWithColor(selectedRole);
+        }
+    }
+
+    public static int getRoleOrModifierOrItemColor(Object obj) {
+        if (obj instanceof IntroMobEffect effect) {
+            return effect.getColor();
+        } else if (obj instanceof Item) {
+            return (ChatFormatting.WHITE.getColor());
+        } else if (obj instanceof TermIntroEntry) {
+            return TermIntroEntry.CATEGORY_COLOR;
+        } else {
+            return getRoleOrModifierColor(obj);
+        }
+    }
+
+    public static ResourceLocation getRoleOrModifierOrItemIdentifier(Object selectedRole) {
+        if (selectedRole instanceof IntroMobEffect effect) {
+            return effect.id();
+        } else if (selectedRole instanceof Item it) {
+            return BuiltInRegistries.ITEM.getKey(it);
+        } else if (selectedRole instanceof AreasSettings) {
+            if (FabricLoader.getInstance().getEnvironmentType().equals(EnvType.CLIENT)) {
+                String a = SREClient.areaComponent.mapName;
+                if (a == null)
+                    a = "null";
+                return ResourceLocation.fromNamespaceAndPath("areas", a);
+            }
+            return ResourceLocation.fromNamespaceAndPath("areas", "areas_settings");
+        } else if (selectedRole instanceof TermIntroEntry term) {
+            return term.identifier();
+        } else {
+            return getRoleOrModifierIdentifier(selectedRole);
+        }
+    }
+
+    public static Component getRoleOrModifierOrItemName(Object selectedRole) {
+        if (selectedRole instanceof IntroMobEffect effect) {
+            return effect.getDisplayName();
+        } else if (selectedRole instanceof Item it) {
+            return it.getDescription().copy();
+        } else if (selectedRole instanceof AreasSettings) {
+            return Component.translatable("screen.roleintroduce.detail.map_areas_settings");
+        } else if (selectedRole instanceof TermIntroEntry term) {
+            return term.getName();
+        } else {
+            return getRoleOrModifierName(selectedRole);
+        }
+    }
+
+    public static MutableComponent getRoleOrModifierOrItemTypeName(Object role) {
+        if (role instanceof IntroMobEffect) {
+            return Component.translatable("display.type.effect");
+        } else if (role instanceof Item) {
+            return Component.translatable("display.type.item");
+        } else if (role instanceof AreasSettings) {
+            return Component.translatable("screen.roleintroduce.detail.map_areas_settings");
+        } else if (role instanceof TermIntroEntry) {
+            return Component.translatable("term_intro.type");
+        } else {
+            return getRoleOrModifierTypeName(role);
+        }
+    }
+
+    public static MutableComponent getRoleOrModifierOrItemSimpleDescription(Object selectedRole) {
+        if (selectedRole instanceof TermIntroEntry term) {
+            return term.getSimpleDescription();
+        } else if (selectedRole instanceof IntroMobEffect effect) {
+            return getEffectDescription(effect);
+        } else if (selectedRole instanceof Item it) {
+            String key = it.getDescriptionId() + ".desc.simple";
+            if (Language.getInstance().has(key))
+                return Component.translatable(key);
+            else {
+                String key2 = it.getDescriptionId() + ".tooltip";
+                if (Language.getInstance().has(key2))
+                    return Component.translatable(key2);
+                else
+                    return it.getDescription().copy();
+            }
+        } else {
+            return getRoleOrModifierSimpleDescription(selectedRole);
+        }
+    }
+
+    public static MutableComponent getRoleOrModifierOrItemDescription(Object selectedRole) {
+        if (selectedRole instanceof TermIntroEntry term) {
+            return term.getDescription();
+        } else if (selectedRole instanceof IntroMobEffect effect) {
+            return getEffectDescription(effect);
+        } else if (selectedRole instanceof Item it) {
+            String key = it.getDescriptionId() + ".desc";
+            if (Language.getInstance().has(key))
+                return Component.translatable(key);
+            else {
+                String key2 = it.getDescriptionId() + ".tooltip";
+                if (Language.getInstance().has(key2))
+                    return Component.translatable(key2);
+                else
+                    return it.getDescription().copy();
+            }
+        } else {
+            return getRoleOrModifierDescription(selectedRole);
+        }
+    }
+
+    /** Extra long-form item text, e.g. {@code ex.item.desc.noellesroles.bomb}. */
+    public static String getItemExtraDescriptionKey(Item item) {
+        return "ex.item.desc." + BuiltInRegistries.ITEM.getKey(item).toLanguageKey();
+    }
+
+    public static boolean hasItemExtraDescription(Item item) {
+        return item != null && Language.getInstance().has(getItemExtraDescriptionKey(item));
+    }
+
+    public static MutableComponent getItemExtraDescription(Item item) {
+        return Component.translatable(getItemExtraDescriptionKey(item));
+    }
+
+    public static String getEffectDescriptionKey(IntroMobEffect effect) {
+        return effect.getDescriptionId() + ".desc";
+    }
+
+    public static String getEffectExtraDescriptionKey(IntroMobEffect effect) {
+        return effect.getDescriptionId() + ".desc.detail";
+    }
+
+    public static MutableComponent getEffectDescription(IntroMobEffect effect) {
+        String descKey = getEffectDescriptionKey(effect);
+        if (Language.getInstance().has(descKey)) {
+            return Component.translatable(descKey);
+        }
+        String legacyKey = effect.getDescriptionId() + ".description";
+        if (Language.getInstance().has(legacyKey)) {
+            return Component.translatable(legacyKey);
+        }
+        return effect.getDisplayName().copy();
+    }
+
+    public static boolean hasEffectExtraDescription(IntroMobEffect effect) {
+        return effect != null && Language.getInstance().has(getEffectExtraDescriptionKey(effect));
+    }
+
+    public static MutableComponent getEffectExtraDescription(IntroMobEffect effect) {
+        return Component.translatable(getEffectExtraDescriptionKey(effect));
+    }
+
+    public static MutableComponent getEffectCategoryName(IntroMobEffect effect) {
+        return switch (effect.getCategory()) {
+            case BENEFICIAL -> Component.translatable("display.type.effect.beneficial")
+                    .withStyle(ChatFormatting.GREEN);
+            case HARMFUL -> Component.translatable("display.type.effect.harmful")
+                    .withStyle(ChatFormatting.RED);
+            default -> Component.translatable("display.type.effect.neutral")
+                    .withStyle(ChatFormatting.YELLOW);
+        };
+    }
+
+    public static Component getTeamName(int roleType) {
+        Component teamName = Component.translatable("Unknown").withStyle(ChatFormatting.GRAY);
+        if (roleType == 1) {
+            teamName = Component.translatable("display.type.role.innocent").withStyle(ChatFormatting.GREEN);
+        } else if (roleType == 2) {
+            // 仅有 int 阵营号、无法细分时退回「中立阵营」（细分由 getNeutralSubTeamName 处理）
+            teamName = Component.translatable("display.type.role.neutral_all").withStyle(ChatFormatting.YELLOW);
+        } else if (roleType == 3) {
+            teamName = Component.translatable("display.type.role.neutral_for_killer")
+                    .withStyle(ChatFormatting.LIGHT_PURPLE);
+        } else if (roleType == 4) {
+            teamName = Component.translatable("display.type.role.killer").withStyle(ChatFormatting.RED);
+        } else if (roleType == 5) {
+            teamName = Component.translatable("display.type.role.vigilante").withStyle(ChatFormatting.AQUA);
+        }
+        return teamName;
+    }
+
+    public static Component getTeamNameWithoutColor(int roleType) {
+        Component teamName = Component.translatable("Unknown").withStyle(ChatFormatting.GRAY);
+        if (roleType == 1) {
+            teamName = Component.translatable("display.type.role.innocent");
+        } else if (roleType == 2) {
+            teamName = Component.translatable("display.type.role.neutral_all");
+        } else if (roleType == 3) {
+            teamName = Component.translatable("display.type.role.neutral_for_killer");
+        } else if (roleType == 4) {
+            teamName = Component.translatable("display.type.role.killer");
+        } else if (roleType == 5) {
+            teamName = Component.translatable("display.type.role.vigilante");
+        }
+        return teamName;
+    }
+
+    public static int getRoleType(SRERole role) {
+        return PlayerRoleWeightManager.getRoleType(role);
+    }
+
+    public static int getRoleType(SRERole role, int nullRoleNumber) {
+        return PlayerRoleWeightManager.getRoleType(role, nullRoleNumber);
+    }
+
+    public static Component getRoleTypeName(SRERole role) {
+        // 优先按阵营枚举取中立细分名
+        Component sub = getNeutralSubTeamName(role, true);
+        if (sub != null) {
+            return sub;
+        }
+        return switch (PlayerRoleWeightManager.getRoleType(role)) {
+            case 0, 1 -> Component.translatable("display.type.role.innocent").withStyle(ChatFormatting.GREEN);
+            case 2 -> Component.translatable("display.type.role.neutral_all").withStyle(ChatFormatting.YELLOW);
+            case 3 -> Component.translatable("display.type.role.neutral_for_killer")
+                    .withStyle(ChatFormatting.LIGHT_PURPLE);
+            case 4 -> Component.translatable("display.type.role.killer").withStyle(ChatFormatting.RED);
+            case 5 -> Component.translatable("display.type.role.vigilante").withStyle(ChatFormatting.AQUA);
+            default -> Component.literal("UNKNOWN");
+        };
+    }
+
+    /**
+     * 取该职业「最具体的中立细分」阵营名（偏好中立 / 杀手方中立 / 事件中立 / 特殊中立 / 独立胜利中立）。
+     * 不属于任何中立细分时返回 {@code null}，调用方再退回按 roleType 的粗略阵营名。
+     *
+     * @param role      职业
+     * @param withColor 是否附带阵营色调
+     * @return 细分阵营名；非中立细分则为 null
+     */
+    private static Component getNeutralSubTeamName(SRERole role, boolean withColor) {
+        if (role == null) {
+            return null;
+        }
+        // 名称与颜色统一由阵营枚举 RoleTeam 提供（唯一权威来源）
+        io.wifi.starrailexpress.api.RoleTeam sub = io.wifi.starrailexpress.api.RoleTeam.getNeutralSubTeam(role);
+        if (sub == null) {
+            return null;
+        }
+        return withColor ? sub.displayName() : Component.translatable(sub.displayKey());
+    }
+
+    public static Component getTeamNameWithoutColor(ResourceLocation roleId) {
+        SRERole role = getRole(roleId);
+        int roleType = PlayerRoleWeightManager.getRoleType(role);
+        return getTeamNameWithoutColor(roleType);
+    }
+
+    public static Component getTeamName(ResourceLocation roleId) {
+        SRERole role = getRole(roleId);
+        int roleType = PlayerRoleWeightManager.getRoleType(role);
+        return getTeamName(roleType);
+    }
+
+    public static Component getTeamNameWithoutColor(SRERole role) {
+        // 优先按阵营枚举取中立细分名，让轮选 / 志愿海选等界面能区分
+        // 偏好中立、特殊中立、事件中立、独立胜利中立
+        Component sub = getNeutralSubTeamName(role, false);
+        if (sub != null) {
+            return sub;
+        }
+        int roleType = PlayerRoleWeightManager.getRoleType(role);
+        return getTeamNameWithoutColor(roleType);
+    }
+
+    public static Component getTeamName(SRERole role) {
+        Component sub = getNeutralSubTeamName(role, true);
+        if (sub != null) {
+            return sub;
+        }
+        int roleType = PlayerRoleWeightManager.getRoleType(role);
+        return getTeamName(roleType);
+    }
+
+    public static Set<SREModifier> getPlayerModifier(Player player) {
+        if (player == null)
+            return null;
+        return WorldModifierComponent.KEY.get(player.level()).getModifiers(player);
+    }
+
+    public static boolean isPlayerTheModifier(Player player, Set<SREModifier> modifiers) {
+        if (player == null)
+            return false;
+        var cca = WorldModifierComponent.KEY.get(player.level());
+        for (var i : modifiers) {
+            if (!cca.isModifier(player, i))
+                return false;
+        }
+        return true;
+    }
+
+    public static boolean isPlayerTheModifier(Player player, SREModifier... modifier) {
+        if (player == null)
+            return false;
+        var cca = WorldModifierComponent.KEY.get(player.level());
+        for (var i : modifier) {
+            if (!cca.isModifier(player, i))
+                return false;
+        }
+        return true;
+    }
+
+    public static SRERole getPlayerRole(Player player) {
+        if (player == null)
+            return null;
+        return SRERoleWorldComponent.KEY.get(player.level()).getRole(player);
+    }
+
+    public static boolean isPlayerTheJob(Player player, SRERole role) {
+        if (player == null)
+            return false;
+        return SRERoleWorldComponent.KEY.get(player.level()).isRole(player, role);
+    }
+
+    public static MutableComponent getRoleGoal(SRERole role) {
+        return role.getGoal().copy();
+    }
+
+    public static Component getRoleNameWithColor(ResourceLocation id) {
+        if (id == null)
+            return null;
+        SRERole role = TMMRoles.getRole(id);
+        if (role != null) {
+            return role.getName().copy().withColor(role.color());
+        }
+        // 未注册时先查自定义职业配置（连同配置里的边框颜色），避免把翻译键显示给玩家
+        CustomRoleData customData = CustomRoleLoader.getCustomRoleData(id.getPath());
+        if (customData != null && customData.displayName != null && !customData.displayName.isBlank()) {
+            int color = 0xFF000000 | (customData.colorR << 16) | (customData.colorG << 8) | customData.colorB;
+            return Component.literal(customData.displayName).withColor(color);
+        }
+        return Component.translatable("announcement.star.role." + id.getPath());
+    }
+
+    public static ArrayList<ServerPlayer> getAlivePlayers(ServerLevel level) {
+        ArrayList<ServerPlayer> players = new ArrayList<>(level.players());
+        players.removeIf(p -> !GameUtils.isPlayerAliveAndSurvival(p));
+        return players;
+    }
+
+    public static Component getPlayerRoleName(Player victim) {
+        return getPlayerRoleName(victim, false);
+    }
+
+    public static MutableComponent getPlayerRoleName(Player victim, boolean color) {
+        var role = getPlayerRole(victim);
+        if (role == null) {
+            return Component.translatable("Unknown").withStyle(ChatFormatting.GRAY);
+        }
+        return role.getName().copy().withColor(role.color());
+    }
+
+    public static Component getRoleNameWithColor(SRERole targetRole) {
+        return getRoleOrModifierNameWithColor(targetRole);
+    }
+
+    public static List<Player> getNearestPlayers(Player player, int maxCount, double maxDistance) {
+        if (player == null)
+            return List.of();
+        return getNearestPlayers(player, maxCount, (p) -> {
+            if (p.getUUID().equals(player.getUUID())) {
+                return false;
+            }
+            if (!GameUtils.isPlayerAliveAndSurvival(p)) {
+                return false;
+            }
+            if (p.distanceToSqr(player) > maxDistance * maxDistance)
+                return false;
+            return true;
+        });
+    }
+
+    public static List<Player> getNearestPlayers(Player player, int maxCount, @Nullable Predicate<Player> predicate) {
+        if (player == null || maxCount <= 0)
+            return List.of();
+        // 允许 predicate 为 null，此时视为全部通过
+        if (predicate == null)
+            predicate = p -> true;
+        TreeMap<Double, ArrayList<Player>> playersByDistance = new TreeMap<>();
+        for (var p : player.level().players()) {
+            if (predicate.test(p)) {
+                double distance = p.distanceToSqr(player);
+                playersByDistance.putIfAbsent(distance, new ArrayList<>());
+                playersByDistance.get(distance).add(p);
+            }
+        }
+        List<Player> result = new ArrayList<>();
+        for (ArrayList<Player> list : playersByDistance.values()) {
+            if (result.size() + list.size() <= maxCount) {
+                // 整组加入
+                result.addAll(list);
+            } else {
+                // 只取部分，填满剩余名额
+                int remaining = maxCount - result.size();
+                for (int i = 0; i < remaining && i < list.size(); i++) {
+                    result.add(list.get(i));
+                }
+                break; // 已达 maxCount，无需继续
+            }
+            if (result.size() >= maxCount)
+                break;
+        }
+        return result;
+    }
+
+    public static SRERole getRoleByPath(String rolePath) {
+        return TMMRoles.getRoleByPath(rolePath);
+    }
+
+    /**
+     * 把目标玩家放到执行者身前 {@code maxDistance} 格内的合适空位。
+     * <p>
+     * 算法参考绳索拉人（{@code RopeItem#pullPlayer}）：沿执行者的水平视线以 0.2 格为步长由近及远试探，
+     * 取最远的无碰撞位置；一个空位都没有时与执行者重合。
+     *
+     * @param player      落点参考者（视线与位置基准）
+     * @param target      被移动的目标
+     * @param maxDistance 身前的最大搜索距离
+     */
+    public static void placeInFrontOf(Player player, Player target, double maxDistance) {
+        Vec3 spot = findFreeSpotInFrontOf(player, target, maxDistance);
+        if (target instanceof ServerPlayer serverTarget) {
+            serverTarget.teleportTo(spot.x, spot.y, spot.z);
+        } else {
+            target.moveTo(spot.x, spot.y, spot.z);
+        }
+    }
+
+    /**
+     * 只计算落点、不移动实体。找不到空位时返回执行者自身位置（即与执行者重合）。
+     *
+     * @see #placeInFrontOf(Player, Player, double)
+     */
+    public static Vec3 findFreeSpotInFrontOf(Player player, Player target, double maxDistance) {
+        final double step = 0.2;
+        final int steps = (int) Math.ceil(maxDistance / step) + 1;
+        final var level = player.level();
+        final Vec3 viewVector = player.getViewVector(1.0F);
+        Vec3 origin = player.position();
+        Vec3 lastValidPos = origin;
+
+        for (int i = 0; i <= steps; i++) {
+            double currentDistance = Math.min(i * step, maxDistance);
+            Vec3 candidate = origin.add(viewVector.x * currentDistance, 0.0, viewVector.z * currentDistance);
+
+            var dimensions = target.getDimensions(target.getPose());
+            double width = dimensions.width();
+            double height = dimensions.height();
+            AABB candidateBox = new AABB(
+                    candidate.x - width / 2, candidate.y, candidate.z - width / 2,
+                    candidate.x + width / 2, candidate.y + height, candidate.z + width / 2);
+
+            if (!level.noCollision(target, candidateBox)) {
+                // 遇到第一个无效位置：退回上一个有效位置
+                return lastValidPos;
+            }
+            lastValidPos = candidate;
+        }
+
+        // 所有尝试距离均有效：使用最远处
+        return lastValidPos;
+    }
+
+}

@@ -1,0 +1,154 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.register;
+
+import io.wifi.starrailexpress.api.data.RoleData;
+import io.wifi.starrailexpress.cca.SREAbilityPlayerComponent;
+import io.wifi.starrailexpress.cca.SREGameWorldComponent;
+import io.wifi.starrailexpress.content.entity.PlayerBodyEntity;
+import io.wifi.starrailexpress.game.GameUtils;
+import net.fabricmc.fabric.api.event.player.UseEntityCallback;
+import net.minecraft.ChatFormatting;
+import net.minecraft.network.chat.Component;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import org.agmas.noellesroles.component.ModComponents;
+import org.agmas.noellesroles.role_data.neutral.CandleBearerRoleData;
+import org.agmas.noellesroles.game.roles.neutral.puppeteer.PuppeteerPlayerComponent;
+import org.agmas.noellesroles.role.ModRoles;
+import org.agmas.noellesroles.role.touhou.THMiscRoles;
+import org.agmas.noellesroles.role.touhou.roles.THKaenbyouRinRole;
+import org.agmas.noellesroles.role_data.killer.DIORoleData;
+import org.agmas.noellesroles.role_data.innocence.SaltedFishRoleData;
+
+/**
+ * Rice's Role Rhapsody 事件注册，
+ * 从 {@link org.agmas.noellesroles.RicesRoleRhapsody} 中按类别剥离归一化而来。
+ *
+ * <p>
+ * 注册傀儡师尸体收集事件，使用 Fabric API 的 UseEntityCallback 代替 Mixin。
+ */
+public class RiceEventRegister {
+
+    public static void registerPuppeteerBodyCollect() {
+        UseEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
+            // 只在服务端处理
+            if (world.isClientSide())
+                return net.minecraft.world.InteractionResult.PASS;
+
+            // 待复活尸体（如无我/无妄搭档仍存活时）不允许被秉烛、吸食、收走等任何右键交互
+            if (entity instanceof PlayerBodyEntity pendingBody
+                    && org.agmas.noellesroles.utils.AnatmanAsatyaCorpseGuard
+                            .denyInteraction(pendingBody, player)) {
+                return net.minecraft.world.InteractionResult.FAIL;
+            }
+
+            // 检查玩家是否存活
+            if (!GameUtils.isPlayerAliveAndSurvival(player))
+                return net.minecraft.world.InteractionResult.PASS;
+
+            // 检查玩家是否是傀儡师
+            SREGameWorldComponent gameWorld = SREGameWorldComponent.KEY.get(world);
+            if (gameWorld.isRole(player, ModRoles.CANDLE_BEARER)) {
+                ItemStack held = player.getItemInHand(hand);
+                if (held.is(Items.CANDLE)) {
+                    var candleBearer = RoleData.getNullable(CandleBearerRoleData.class, player);
+                    if (candleBearer == null)
+                        return net.minecraft.world.InteractionResult.PASS;
+                    if (entity instanceof Player targetPlayer) {
+                        if (candleBearer.candleLivingPlayer(targetPlayer)) {
+                            return net.minecraft.world.InteractionResult.SUCCESS;
+                        }
+                        return net.minecraft.world.InteractionResult.PASS;
+                    }
+                    if (entity instanceof PlayerBodyEntity targetBody) {
+                        if (candleBearer.candleCorpse(targetBody)) {
+                            return net.minecraft.world.InteractionResult.SUCCESS;
+                        }
+                        return net.minecraft.world.InteractionResult.PASS;
+                    }
+                }
+            }
+
+            // DIO/傀儡师逻辑只处理尸体实体
+            if (!(entity instanceof PlayerBodyEntity body))
+                return net.minecraft.world.InteractionResult.PASS;
+
+            if (org.agmas.noellesroles.content.entity.DoomedSinnerBodyEntity.isDoomedSinnerBody(body))
+                return net.minecraft.world.InteractionResult.PASS;
+
+            // 咸鱼「晒咸鱼」的假尸体不是真实尸体：本体的本体还在场上（且本体每 tick 把假尸体拉回自己身上），
+            // 吃掉它等于凭空刷一次收益/计数，且假尸体被 discard 后下一 tick 还会重新生成。
+            // 与罪人假尸体、灵媒（MediumRoleData）、本能显示（RoleInstinctRegister）保持同一套排除口径。
+            if (SaltedFishRoleData.isSaltedFishFakeBody(body))
+                return net.minecraft.world.InteractionResult.PASS;
+
+            if (gameWorld.isRole(player, ModRoles.DIO)) {
+                RoleData.getOptional(DIORoleData.class, player).ifPresent(dioPlayerComponent -> {
+                    boolean success = dioPlayerComponent.feedOnCorpse(body);
+                    if (success) {
+                        dioPlayerComponent.sync();
+                        if (dioPlayerComponent.isFinalCarnivalActive) {
+                            player.removeEffect(MobEffects.MOVEMENT_SLOWDOWN);
+                            dioPlayerComponent.extendTempLife();
+                        }
+                    }
+                });
+            }
+            if (gameWorld.isRole(player, THMiscRoles.KAENBYOU_RIN)) {
+                if (SREAbilityPlayerComponent.KEY.get(player).hasCooldown()) {
+                    return InteractionResult.FAIL;
+                }
+
+                if (!gameWorld.isSkillAvailable) {
+                    player.displayClientMessage(
+                            Component.translatable("message.tip.skill_disabled").withStyle(ChatFormatting.RED), true);
+                    return net.minecraft.world.InteractionResult.FAIL;
+                }
+
+                THKaenbyouRinRole.collectBody(player, body);
+                // 让尸体消失
+                body.discard();
+                return net.minecraft.world.InteractionResult.SUCCESS;
+            }
+            if (gameWorld.isRole(player, ModRoles.PUPPETEER)) {
+                // 获取傀儡师组件
+                PuppeteerPlayerComponent puppeteerComp = ModComponents.PUPPETEER.get(player);
+
+                // 检查是否可以回收（阶段一且不在冷却中）
+                if (!puppeteerComp.canCollectBody())
+                    return net.minecraft.world.InteractionResult.PASS;
+
+                // 获取尸体对应的玩家UUID
+                java.util.UUID bodyOwnerUuid = body.getPlayerUuid();
+
+                // 获取游戏总人数
+                int totalPlayers = SREGameWorldComponent.getInstance(world).getStartingPlayerCount();
+
+                // 回收尸体
+                puppeteerComp.collectBody(bodyOwnerUuid, totalPlayers);
+
+                // 让尸体消失
+                body.discard();
+                return net.minecraft.world.InteractionResult.SUCCESS;
+            }
+            return net.minecraft.world.InteractionResult.PASS;
+        });
+    }
+}

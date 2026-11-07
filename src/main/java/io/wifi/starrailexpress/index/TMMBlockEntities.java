@@ -1,0 +1,173 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.index;
+
+import dev.doctor4t.ratatouille.util.registrar.BlockEntityTypeRegistrar;
+import io.wifi.starrailexpress.SRE;
+
+import io.wifi.starrailexpress.content.block_entity.*;
+import io.wifi.starrailexpress.content.block.entity.HornBlockEntity;
+import io.wifi.starrailexpress.content.block.entity.RemoteRedstoneBlockEntity;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.entity.BlockEntityType;
+
+public interface TMMBlockEntities {
+  BlockEntityTypeRegistrar registrar = new BlockEntityTypeRegistrar(SRE.TMM_MOD_ID);
+
+  BlockEntityType<SprinklerBlockEntity> SPRINKLER = registrar.create("sprinkler", BlockEntityType.Builder
+      .of(SprinklerBlockEntity::new, TMMBlocks.GOLD_SPRINKLER, TMMBlocks.STAINLESS_STEEL_SPRINKLER));
+  BlockEntityType<SmallDoorBlockEntity> SMALL_GLASS_DOOR = registrar.create("small_glass_door",
+      BlockEntityType.Builder.of(SmallDoorBlockEntity::createGlass, TMMBlocks.SMALL_GLASS_DOOR));
+  BlockEntityType<SmallDoorBlockEntity> SMALL_WOOD_DOOR = registrar.create("small_wood_door",
+      BlockEntityType.Builder.of(SmallDoorBlockEntity::createWood, TMMBlocks.SMALL_WOOD_DOOR));
+  BlockEntityType<SmallDoorBlockEntity> ANTHRACITE_STEEL_DOOR = registrar
+      .create("anthracite_steel_door",
+          BlockEntityType.Builder.of((pos, state) -> new SmallDoorBlockEntity(
+              TMMBlockEntities.ANTHRACITE_STEEL_DOOR, pos, state),
+              TMMBlocks.ANTHRACITE_STEEL_DOOR));
+  BlockEntityType<SmallDoorBlockEntity> KHAKI_STEEL_DOOR = registrar
+      .create("khaki_steel_door",
+          BlockEntityType.Builder.of(
+              (pos, state) -> new SmallDoorBlockEntity(
+                  TMMBlockEntities.KHAKI_STEEL_DOOR, pos, state),
+              TMMBlocks.KHAKI_STEEL_DOOR));
+  BlockEntityType<SmallDoorBlockEntity> MAROON_STEEL_DOOR = registrar
+      .create("maroon_steel_door",
+          BlockEntityType.Builder.of(
+              (pos, state) -> new SmallDoorBlockEntity(
+                  TMMBlockEntities.MAROON_STEEL_DOOR, pos, state),
+              TMMBlocks.MAROON_STEEL_DOOR));
+  BlockEntityType<SmallDoorBlockEntity> MUNTZ_STEEL_DOOR = registrar
+      .create("muntz_steel_door",
+          BlockEntityType.Builder.of(
+              (pos, state) -> new SmallDoorBlockEntity(
+                  TMMBlockEntities.MUNTZ_STEEL_DOOR, pos, state),
+              TMMBlocks.MUNTZ_STEEL_DOOR));
+  BlockEntityType<SmallDoorBlockEntity> NAVY_STEEL_DOOR = registrar
+      .create("navy_steel_door",
+          BlockEntityType.Builder.of(
+              (pos, state) -> new SmallDoorBlockEntity(
+                  TMMBlockEntities.NAVY_STEEL_DOOR, pos, state),
+              TMMBlocks.NAVY_STEEL_DOOR));
+  BlockEntityType<WheelBlockEntity> WHEEL = registrar.create("wheel", BlockEntityType.Builder
+      .of((pos, state) -> new WheelBlockEntity(TMMBlockEntities.WHEEL, pos, state), TMMBlocks.WHEEL));
+  BlockEntityType<WheelBlockEntity> RUSTED_WHEEL = registrar.create("rusted_wheel",
+      BlockEntityType.Builder.of(
+          (pos, state) -> new WheelBlockEntity(TMMBlockEntities.RUSTED_WHEEL, pos, state),
+          TMMBlocks.RUSTED_WHEEL));
+  BlockEntityType<BeveragePlateBlockEntity> BEVERAGE_PLATE = registrar.create("beverage_plate",
+      BlockEntityType.Builder.of(BeveragePlateBlockEntity::new, TMMBlocks.FOOD_PLATTER,
+          TMMBlocks.DRINK_TRAY));
+  BlockEntityType<TrimmedBedBlockEntity> TRIMMED_BED = registrar.create("trimmed_bed", BlockEntityType.Builder
+      .of(TrimmedBedBlockEntity::create, TMMBlocks.RED_TRIMMED_BED, TMMBlocks.WHITE_TRIMMED_BED));
+  BlockEntityType<HornBlockEntity> HORN = registrar.create("horn",
+      BlockEntityType.Builder.of(HornBlockEntity::new, TMMBlocks.HORN));
+  BlockEntityType<ChimneyBlockEntity> CHIMNEY = registrar.create("chimney",
+      BlockEntityType.Builder.of(ChimneyBlockEntity::new, TMMBlocks.CHIMNEY));
+  BlockEntityType<CameraBlockEntity> CAMERA = registrar.create("camera",
+      BlockEntityType.Builder.of(CameraBlockEntity::new, TMMBlocks.CAMERA));
+  BlockEntityType<SecurityMonitorBlockEntity> SECURITY_MONITOR = registrar.create("security_monitor",
+      BlockEntityType.Builder.of(SecurityMonitorBlockEntity::new, TMMBlocks.SECURITY_MONITOR));
+  BlockEntityType<ToiletBlockEntity> TOILET = registrar.create("toilet",
+      BlockEntityType.Builder.of(ToiletBlockEntity::create, TMMBlocks.LIGHT_TOILET,
+          TMMBlocks.DARK_TOILET, TMMBlocks.TOILET_CHAIR));
+
+  BlockEntityType<org.agmas.noellesroles.game.modes.fourthroom.block.FourthRoomTableBlockEntity> FOURTH_ROOM_TABLE = registrar
+      .create("fourth_room_table", BlockEntityType.Builder.of(
+          org.agmas.noellesroles.game.modes.fourthroom.block.FourthRoomTableBlockEntity::new,
+          TMMBlocks.FOURTH_ROOM_TABLE));
+
+  BlockEntityType<EntityInteractionBlockEntity> ENTITY_INTERACTION_BLOCK = registrar
+      .create("entity_interaction_block",
+          BlockEntityType.Builder.of(EntityInteractionBlockEntity::new,
+              TMMBlocks.ENTITY_INTERACTION_BLOCK,
+              TMMBlocks.ENTITY_INTERACTION_PANEL));
+
+  BlockEntityType<MinigameQuestBlockEntity> MINIGAME_QUEST = registrar
+      .create("minigame_quest",
+          BlockEntityType.Builder.of(MinigameQuestBlockEntity::new,
+              TMMBlocks.MINIGAME_QUEST_BLOCK,
+              TMMBlocks.MINIGAME_QUEST_PANEL));
+
+  BlockEntityType<TicketOfficeBlockEntity> TICKET_OFFICE = registrar.create("ticket_office",
+      BlockEntityType.Builder.of(TicketOfficeBlockEntity::new, TMMBlocks.TICKET_OFFICE));
+
+  BlockEntityType<TicketGateBlockEntity> TICKET_GATE = registrar.create("ticket_gate",
+      BlockEntityType.Builder.of(TicketGateBlockEntity::new, TMMBlocks.TICKET_GATE));
+
+  BlockEntityType<EffectGeneratorBlockEntity> EFFECT_GENERATOR = registrar.create("effect_generator",
+      BlockEntityType.Builder.of(EffectGeneratorBlockEntity::new, TMMBlocks.EFFECT_GENERATOR));
+
+  BlockEntityType<RemoteRedstoneBlockEntity> REMOTE_REDSTONE = registrar.create("remote_redstone",
+      BlockEntityType.Builder.of(RemoteRedstoneBlockEntity::new, SREBlocks.REMOTE_REDSTONE));
+
+  BlockEntityType<ZiplineBlockEntity> ZIPLINE = registrar.create("zipline",
+      BlockEntityType.Builder.of((pos, state) -> new ZiplineBlockEntity(TMMBlockEntities.ZIPLINE, pos, state),
+          TMMBlocks.ZIPLINE));
+
+  BlockEntityType<UpSmallDoorBlockEntity> UP_GLASS_DOOR = registrar
+      .create("up_glass_door",
+          BlockEntityType.Builder.of(
+              (pos, state) -> new UpSmallDoorBlockEntity(
+                  TMMBlockEntities.UP_GLASS_DOOR, pos, state),
+              SREDoorBlocks.UP_GLASS_DOOR));
+  BlockEntityType<UpSmallDoorBlockEntity> UP_WOOD_DOOR = registrar.create("up_wood_door", BlockEntityType.Builder
+      .of((pos, state) -> new UpSmallDoorBlockEntity(TMMBlockEntities.UP_WOOD_DOOR, pos, state),
+          SREDoorBlocks.UP_WOOD_DOOR));
+  BlockEntityType<UpSmallDoorBlockEntity> UP_STEEL_DOOR = registrar
+      .create("up_steel_door",
+          BlockEntityType.Builder.of(
+              (pos, state) -> new UpSmallDoorBlockEntity(
+                  TMMBlockEntities.UP_STEEL_DOOR, pos, state),
+              SREDoorBlocks.UP_STEEL_DOOR));
+
+  BlockEntityType<PlaneSmallDoorBlockEntity> PLANE_GLASS_DOOR = registrar
+      .create("plane_glass_door",
+          BlockEntityType.Builder.of(
+              (pos, state) -> new PlaneSmallDoorBlockEntity(
+                  TMMBlockEntities.PLANE_GLASS_DOOR, pos, state),
+              SREDoorBlocks.PLANE_GLASS_DOOR));
+  BlockEntityType<PlaneSmallDoorBlockEntity> PLANE_WOOD_DOOR = registrar
+      .create("plane_wood_door",
+          BlockEntityType.Builder.of(
+              (pos, state) -> new PlaneSmallDoorBlockEntity(
+                  TMMBlockEntities.PLANE_WOOD_DOOR, pos, state),
+              SREDoorBlocks.PLANE_WOOD_DOOR));
+  BlockEntityType<PlaneSmallDoorBlockEntity> PLANE_STEEL_DOOR = registrar
+      .create("plane_steel_door",
+          BlockEntityType.Builder.of(
+              (pos, state) -> new PlaneSmallDoorBlockEntity(
+                  TMMBlockEntities.PLANE_STEEL_DOOR, pos, state),
+              SREDoorBlocks.PLANE_STEEL_DOOR));
+
+  BlockEntityType<LockableButtonBlockEntity> LOCKABLE_BUTTON = registrar.create("lockable_button",
+      BlockEntityType.Builder.of(
+          (pos, state) -> new LockableButtonBlockEntity(TMMBlockEntities.LOCKABLE_BUTTON,
+              pos, state),
+          new Block[] { SREDoorBlocks.LOCKABLE_ELEVATOR_BUTTON,
+              SREDoorBlocks.LOCKABLE_SMALL_BUTTON }));
+
+  BlockEntityType<MirrorBlockEntity> MIRROR = registrar.create("mirror",
+      BlockEntityType.Builder.of(MirrorBlockEntity::new, TMMBlocks.MIRROR));
+
+  /** 假太阳：仅用于客户端生成持久太阳粒子。 */
+  BlockEntityType<FakeSunBlockEntity> FAKE_SUN = registrar.create("fake_sun",
+      BlockEntityType.Builder.of(FakeSunBlockEntity::new, SREDecorationBlocks.FAKE_SUN));
+
+  static void initialize() {
+    registrar.registerEntries();
+  }
+}

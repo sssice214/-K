@@ -1,0 +1,56 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package pro.fazeclan.river.stupid_express.mixin.modifier.split_personality;
+
+// import net.minecraft.server.level.ServerPlayer;
+
+import net.minecraft.world.entity.player.Player;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+// import pro.fazeclan.river.stupid_express.modifier.split_personality.cca.SplitPersonalityComponent;
+
+/**
+ * 服务器端 - 禁止旁观者的移动
+ * 确保旁观者在服务器端无法移动或交互
+ */
+@Mixin(Player.class)
+public abstract class SplitPersonalityServerInputBlockMixin {
+
+    @Inject(method = "aiStep()V", at = @At("HEAD"), cancellable = true)
+    void blockServerSideSplitPersonalityInput(CallbackInfo ci) {
+        // Player player = (Player) (Object) this;
+        // if (player instanceof ServerPlayer serverPlayer) {
+        //     var component = SplitPersonalityComponent.KEY.get(player);
+        //     if (component.getTemporaryRevivalStartTick() > 0) {
+        //         return;
+        //     }
+
+        //     // 如果是旁观者，清除所有移动
+        //     // if (component != null && component.getMainPersonality() != null && !component.isCurrentlyActive()) {
+        //     //     // 禁止移动
+        //     //     if (!serverPlayer.isSpectator())
+        //     //         serverPlayer.setGameMode(GameType.SPECTATOR);
+        //     //     UUID targetPlayerUUID = component.getCurrentActivePerson();
+        //     //     if (!serverPlayer.getCamera().getUUID().equals(targetPlayerUUID)) {
+        //     //         Player targetplayer = serverPlayer.level().getPlayerByUUID(component.getCurrentActivePerson());
+        //     //         serverPlayer.setCamera(targetplayer);
+        //     //     }
+        //     // }
+        // }
+    }
+}

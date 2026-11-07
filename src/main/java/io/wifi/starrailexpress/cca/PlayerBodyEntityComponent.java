@@ -1,0 +1,335 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.cca;
+
+import io.wifi.starrailexpress.SRE;
+import io.wifi.starrailexpress.api.RoleComponent;
+import io.wifi.starrailexpress.api.TMMRoles;
+import io.wifi.starrailexpress.content.entity.PlayerBodyEntity;
+import io.wifi.starrailexpress.content.gui.PlayerBodyEntityContainer;
+import net.minecraft.core.HolderLookup;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
+import org.jetbrains.annotations.NotNull;
+import org.ladysnake.cca.api.v3.component.ComponentKey;
+import org.ladysnake.cca.api.v3.component.ComponentRegistry;
+import org.ladysnake.cca.api.v3.component.tick.ServerTickingComponent;
+
+import java.util.UUID;
+
+public class PlayerBodyEntityComponent implements RoleComponent, ServerTickingComponent {
+    public static final ComponentKey<PlayerBodyEntityComponent> KEY = ComponentRegistry.getOrCreate(
+            SRE.id("body_entity"),
+            PlayerBodyEntityComponent.class);
+
+    public ResourceLocation playerRole = TMMRoles.CIVILIAN.identifier();
+    public boolean vultured = false;
+    public boolean isFakeBody = false; // 葬仪伪造的尸体标记
+    /**
+     * 不可交互标记：尸体主人死亡后存在复活逻辑（即将被复活）时为 true，通常为 false。
+     * 处于该状态的尸体无法被其它职业复活、无法被骸骨之书复活、也无法被打开物品栏（含殡仪员）。
+     */
+    public boolean nonInteractable = false;
+    public PlayerBodyEntity playerBodyEntity;
+
+    private String ownerName;
+    private UUID killer;
+    private UUID conspiratorEvidence;
+    private String deathReason = "";
+    // 容器大小54（6行），支持DAY_NIGHT_FIGHT模式，仅允许0-53槽放置物品
+    private final PlayerBodyEntityContainer corpseInventory = new PlayerBodyEntityContainer(54);
+
+    public UUID skinUuid = null;
+
+    public PlayerBodyEntityComponent(PlayerBodyEntity playerBodyEntity) {
+        this.playerBodyEntity = playerBodyEntity;
+    }
+
+    // ---------- 物品容器访问 ----------
+    public PlayerBodyEntityContainer getCorpseInventory() {
+        return corpseInventory;
+    }
+
+    /**
+     * 设置不可交互标记（主人即将被复活的尸体禁止被他人交互/复活）。
+     */
+    public void setNonInteractable(boolean value) {
+        setNonInteractable(value, true);
+    }
+
+    public void setNonInteractable(boolean value, boolean sync) {
+        this.nonInteractable = value;
+        if (sync && !playerBodyEntity.level().isClientSide) {
+            sync();
+        }
+    }
+
+    public String getOwnerName() {
+        return ownerName;
+    }
+
+    // ---------- Killer / DeathReason 带同步控制的 setter ----------
+    public UUID getKillerUuid() {
+        return killer;
+    }
+
+    public void setKillerUuid(UUID uuid) {
+        setKillerUuid(uuid, true);
+    }
+
+    public void setKillerUuid(UUID uuid, boolean sync) {
+        this.killer = uuid;
+        if (sync && !playerBodyEntity.level().isClientSide) {
+            sync();
+        }
+    }
+
+    public UUID getConspiratorEvidenceUuid() {
+        return conspiratorEvidence;
+    }
+
+    public void setConspiratorEvidenceUuid(UUID uuid) {
+        setConspiratorEvidenceUuid(uuid, true);
+    }
+
+    public void setConspiratorEvidenceUuid(UUID uuid, boolean sync) {
+        this.conspiratorEvidence = uuid;
+        if (sync && !playerBodyEntity.level().isClientSide) {
+            sync();
+        }
+    }
+
+    public String getDeathReason() {
+        return deathReason;
+    }
+
+    public void setDeathReason(String reason) {
+        setDeathReason(reason, true);
+    }
+
+    public void setDeathReason(String reason, boolean sync) {
+        this.deathReason = reason != null ? reason : "";
+        if (sync && !playerBodyEntity.level().isClientSide) {
+            sync();
+        }
+    }
+
+    // ---------- 生命周期 & 同步 ----------
+    @Override
+    public void init() {
+        this.sync();
+    }
+
+    @Override
+    public boolean shouldSyncWith(ServerPlayer sp) {
+        return true;
+    }
+
+    @Override
+    public void clear() {
+        this.playerRole = TMMRoles.CIVILIAN.identifier();
+        this.vultured = false;
+        this.isFakeBody = false;
+        this.nonInteractable = false;
+        this.killer = null;
+        this.conspiratorEvidence = null;
+        this.deathReason = "";
+        for (int i = 0; i < 54; i++) {
+            corpseInventory.setItem(i, ItemStack.EMPTY);
+        }
+        this.sync();
+    }
+
+    @Override
+    public Player getPlayer() {
+        return null;
+    }
+
+    public void sync() {
+        KEY.sync(this.playerBodyEntity);
+    }
+
+    // ---------- 持久化 ----------
+    @Override
+    public void writeToNbt(@NotNull CompoundTag tag, HolderLookup.Provider registryLookup) {
+    }
+
+    public void writeToNbtFromBody(@NotNull CompoundTag tag, HolderLookup.Provider registryLookup) {
+        tag.putString("playerRole", playerRole.toString());
+        tag.putBoolean("vultured", vultured);
+        tag.putBoolean("isFakeBody", isFakeBody);
+        tag.putBoolean("nonInteractable", nonInteractable);
+        if (killer != null) {
+            tag.putUUID("Killer", killer);
+        }
+        if (conspiratorEvidence != null) {
+            tag.putUUID("ConspiratorEvidence", conspiratorEvidence);
+        }
+        tag.putString("DeathReason", deathReason);
+
+        // 同步大头，砍掉
+        // ListTag items = new ListTag();
+        // for (int i = 0; i < 54; i++) {
+        // ItemStack stack = corpseInventory.getItem(i);
+        // if (!stack.isEmpty()) {
+        // // 确保物品数量在有效范围内 (1-99)
+        // if (stack.getCount() <= 0) {
+        // continue; // 跳过无效数量的物品
+        // }
+        // if (stack.getCount() > 99) {
+        // stack.setCount(99); // 限制最大数量为99
+        // }
+
+        // CompoundTag itemTag = new CompoundTag();
+        // Tag itemItemTag = stack.save(registryLookup);
+        // itemTag.put("Item", itemItemTag);
+        // itemTag.putByte("Slot", (byte) i);
+        // items.add(itemTag);
+        // }
+        // }
+        // tag.put("CorpseInventory", items);
+    }
+
+    @Override
+    public void readFromNbt(@NotNull CompoundTag tag, HolderLookup.Provider registryLookup) {
+    }
+
+    public void readFromNbtFromBody(@NotNull CompoundTag tag, HolderLookup.Provider registryLookup) {
+        this.playerRole = ResourceLocation.tryParse(tag.getString("playerRole"));
+        if (this.playerRole == null)
+            this.playerRole = TMMRoles.CIVILIAN.identifier();
+        this.vultured = tag.getBoolean("vultured");
+        this.isFakeBody = tag.getBoolean("isFakeBody");
+        this.nonInteractable = tag.getBoolean("nonInteractable");
+
+        if (tag.hasUUID("Killer")) {
+            killer = tag.getUUID("Killer");
+        } else {
+            killer = null;
+        }
+        if (tag.hasUUID("ConspiratorEvidence")) {
+            conspiratorEvidence = tag.getUUID("ConspiratorEvidence");
+        } else {
+            conspiratorEvidence = null;
+        }
+        deathReason = tag.getString("DeathReason");
+
+        // // 清空并加载物品
+        // for (int i = 0; i < 54; i++) {
+        // corpseInventory.setItem(i, ItemStack.EMPTY);
+        // }
+        // if (tag.contains("CorpseInventory", Tag.TAG_LIST)) {
+        // ListTag items = tag.getList("CorpseInventory", Tag.TAG_COMPOUND);
+        // for (int i = 0; i < items.size(); i++) {
+        // CompoundTag itemTag = items.getCompound(i);
+        // int slot = itemTag.getByte("Slot") & 255;
+        // if (slot >= 0 && slot < 54) {
+        // if (itemTag.contains("Item")) {
+        // ItemStack stack = ItemStack.parse(registryLookup,
+        // itemTag.getCompound("Item"))
+        // .orElse(ItemStack.EMPTY);
+        // // 验证并修正物品数量
+        // if (!stack.isEmpty()) {
+        // if (stack.getCount() <= 0) {
+        // stack = ItemStack.EMPTY; // 无效数量则设为空
+        // } else if (stack.getCount() > 99) {
+        // stack.setCount(99); // 限制最大数量为99
+        // }
+        // }
+        // corpseInventory.setItem(slot, stack);
+        // }
+        // }
+        // }
+        // }
+    }
+
+    @Override
+    public void writeToSyncNbt(CompoundTag tag, HolderLookup.Provider registryLookup) {
+        // 同步基本数据，不包含物品（打开容器时由菜单自动同步物品）
+        if (ownerName != null)
+            tag.putString("oname", ownerName);
+        if (playerRole != null)
+            tag.putString("playerRole", playerRole.toString());
+        tag.putBoolean("vultured", vultured);
+        tag.putBoolean("isFakeBody", isFakeBody);
+        tag.putBoolean("nonInteractable", nonInteractable);
+        if (killer != null) {
+            tag.putUUID("Killer", killer);
+        }
+        if (conspiratorEvidence != null) {
+            tag.putUUID("ConspiratorEvidence", conspiratorEvidence);
+        }
+        if (deathReason != null)
+            tag.putString("DeathReason", deathReason);
+        if (skinUuid != null) {
+            tag.putUUID("skin", skinUuid);
+        }
+    }
+
+    @Override
+    public void readFromSyncNbt(CompoundTag tag, HolderLookup.Provider registryLookup) {
+        this.ownerName = tag.contains("oname") ? tag.getString("oname") : "";
+        if (tag.contains("playerRole"))
+            this.playerRole = ResourceLocation.tryParse(tag.getString("playerRole"));
+        if (this.playerRole == null)
+            this.playerRole = TMMRoles.DISCOVERY_CIVILIAN.identifier();
+        this.vultured = tag.contains("vultured") && tag.getBoolean("vultured");
+        this.isFakeBody = tag.contains("isFakeBody") && tag.getBoolean("isFakeBody");
+        this.nonInteractable = tag.contains("nonInteractable") && tag.getBoolean("nonInteractable");
+        if (tag.hasUUID("Killer")) {
+            killer = tag.getUUID("Killer");
+        } else {
+            killer = null;
+        }
+        if (tag.hasUUID("skin")) {
+            this.skinUuid = tag.getUUID("skin");
+        }
+        if (tag.hasUUID("ConspiratorEvidence")) {
+            conspiratorEvidence = tag.getUUID("ConspiratorEvidence");
+        } else {
+            conspiratorEvidence = null;
+        }
+        if (tag.contains("DeathReason"))
+            deathReason = tag.getString("DeathReason");
+    }
+
+    @Override
+    public void serverTick() {
+        // 可选的定时逻辑
+    }
+
+    public void setOwnerName(String scoreboardName) {
+        setOwnerName(scoreboardName, true);
+    }
+
+    public void setOwnerName(String scoreboardName, boolean sync) {
+        this.ownerName = scoreboardName;
+        if (sync)
+            sync();
+    }
+
+    public void setSkinUuid(UUID player) {
+        this.skinUuid = player;
+        sync();
+    }
+
+    public UUID getSkinUuid() {
+        return this.skinUuid;
+    }
+}

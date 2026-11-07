@@ -1,0 +1,122 @@
+# StarRail Express
+**[English]** [[简体中文]](README.zh.md)
+
+## Translation Tips
+Since the developer's native language **is not English**, the English version of the README will lag behind **the Chinese version** in updates. Please use **AI translation tools** to view **the Chinese version** of the README whenever possible.
+
+We also welcome players and developers who provide translations for us! (Except for Simplified Chinese translations, since that is the developers’ native language.)
+
+## Please Note!
+This Wathe addon is **highly likely** incompatible with any other Wathe addons.
+
+Due to the `Trainmurdermystery` copyright license being ARR, and we have rewritten many Wathe functionalities, publishing it is very difficult. Hence, this companion mod.
+
+We have rewritten the original `TrainMuderMystery` and switched to `Mojang Mappings`. Some code inevitably uses content from the original. Any similarities are purely coincidental.
+
+However, since we still need Wathe's base decorative blocks, this mod requires Wathe as a prerequisite, even though it cannot execute any of its functions.
+
+This mod completely blocks the original Wathe runtime and operates using its own logic.
+
+For convenience, we used the `trainmurdermystery` namespace and our own, instead of `wathe` (changing IDs would complicate map migration).
+
+Some parts still use `TMM`, as renaming files would require many changes, which is cumbersome.
+
+## Disclaimer
+
+This mod is an addon for the Wathe mod and improves many of its features. It incorporates functionalities and content from `Harpymodloader`, `StupidExpress`, `Noellesroles`, and `Harpy Simple Roles`. Some new roles reference those from the `KinsWathe` mod.
+
+This mod is completely open-source, free, and non-commercial. We use the same `GNU General Public License v3.0 only (GPL-3.0-only)` as the upstream `Noellesroles`.
+
+### What You Can Do (Granted Permissions)
+#### Freedom to Use
+
+You may run the program for any purpose, whether personal, academic, or commercial.
+
+#### Freedom to Copy
+
+You may make exact copies (verbatim distribution) of the program's source code or binary versions, with or without a fee.
+
+#### Freedom to Modify
+
+You may modify the program to create your own version. Upon modification, you become the copyright holder of the changes.
+
+#### Freedom to Distribute
+
+You may distribute the software (original or modified) to the public through any medium.
+
+#### Commercial Use
+
+You may use `GPL-3.0-only` software for commercial services (e.g., providing software as a service, selling devices containing the software), provided you comply with the obligations below.
+
+### Your Obligations (Core Conditions)
+#### Must Open Source (Strong Copyleft)
+
+If you distribute (including binary or source code forms) any work containing `GPL-3.0-only` code (including modified versions or programs integrated via static/dynamic linking), you must provide complete, corresponding source code under the same `GPL-3.0-only` license.
+
+**Note**: Internal use without distribution does not require open-sourcing.
+
+#### License Must Persist
+
+Your modified or derivative work must be licensed entirely under `GPL-3.0-only`; no other license may be used (including not changing to `GPL-2.0` or any non-GPL license). This is the meaning of "`only`"—the version is locked to `GPL-3.0`.
+
+#### No Additional Restrictions
+
+You cannot impose any "further restrictions" on top of `GPL-3.0-only`, such as prohibiting commercial use, requiring licensing fees, or restricting users' rights granted by the GPL. Any such additional terms are void.
+
+#### Retain Copyright and Disclaimer Notices
+
+You must not delete or modify copyright notices, license statements, or disclaimers in the source code file headers, regardless of the distribution form.
+
+You must include a complete copy of the `GPL-3.0-only` license with the software.
+
+#### Provide Installation Information (for User Products)
+
+If you install `GPL-3.0-only` software in binary form on a user product (e.g., routers, set-top boxes, or other hardware) for distribution, you must provide installation information to ensure users can install modified versions (no hardware locking allowed).
+
+#### No Linking with Closed Source
+
+You cannot statically or dynamically link `GPL-3.0-only` code with closed-source code for distribution, unless the closed-source portion also complies with `GPL-3.0-only` or qualifies for the license's "system library" exception. Any form of linking that results in distribution constitutes a derivative work and must be fully open-sourced.
+
+## Compatibility
+This mod is theoretically incompatible with any Wathe addons. It disables Wathe's registration and initialization events, so nothing besides Wathe's resources and data will work.
+
+Since it's unclear how to disable the tags in Wathe's `data` folder—which cause errors due to missing Wathe item and block registrations—we have additionally registered Wathe's items and blocks in this mod for compatibility with Wathe-based maps.
+
+Please note, these items and blocks likely lack their original functionality, so try to avoid using them!
+
+## Development
+Before you start, **PLEASE** read [CreateExtention.md](./CreateExtention.md)
+
+## DLC Features
+### Roles
+We have integrated roles and modifiers from `Harpymodloader`, `StupidExpress`, `Noellesroles`, `Harpy Simple Roles`, and `KinsWathe`, while adding many original roles and modifiers. You cannot install the aforementioned mods alongside this one.
+
+### Items, Entities, Blocks
+We have added more items, entities, and blocks to the train. You can view them in the in-game inventory.
+
+### Features
+We have added many new commands to the train, such as:
+- `/tmm:money` Money management
+- `/tmm:switchmap` Switch maps
+- `/tmm:game` Game utility commands
+- ...
+
+We have also added voting and asynchronous copying to the train, optimizing issues in the original train like network packets and data component packets.
+
+Preliminary, albeit non-rigorous, tests show a significant reduction in packet count and network load.
+
+## For development
+
+Full developer API documentation is available at: **[docs/api.md](docs/api.md)**
+
+Topics covered: role registration, event system, skill system, shop system, CCA components, HUD rendering, game modes, replay system, and more.
+
+> **Important:** Do NOT import Wathe libraries — they will cause crashes (uninitialized state).
+
+## Maps
+Stored in `world/train_maps`
+Saved as JSON files.
+
+Use Map Build Tool item or command `/sre:area_manager` to modify the map config.
+
+When using, remove the comments (lines starting with `//`).

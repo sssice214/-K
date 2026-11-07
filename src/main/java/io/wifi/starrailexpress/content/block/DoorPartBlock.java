@@ -1,0 +1,123 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.content.block;
+
+import com.mojang.serialization.MapCodec;
+
+import io.wifi.starrailexpress.content.block_entity.DoorBlockEntity;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.world.item.context.BlockPlaceContext;
+import net.minecraft.world.level.BlockGetter;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.BaseEntityBlock;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.RenderShape;
+import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.entity.BlockEntityTicker;
+import net.minecraft.world.level.block.entity.BlockEntityType;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.StateDefinition;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.minecraft.world.level.block.state.properties.BooleanProperty;
+import net.minecraft.world.level.block.state.properties.DirectionProperty;
+import net.minecraft.world.phys.shapes.CollisionContext;
+import net.minecraft.world.phys.shapes.Shapes;
+import net.minecraft.world.phys.shapes.VoxelShape;
+import org.jetbrains.annotations.Nullable;
+
+public abstract class DoorPartBlock extends BaseEntityBlock {
+
+    public static final DirectionProperty FACING = BlockStateProperties.HORIZONTAL_FACING;
+    public static final BooleanProperty OPEN = BlockStateProperties.OPEN;
+    protected static final VoxelShape X_SHAPE = Block.box(6, 0, 0, 10, 16, 16);
+    protected static final VoxelShape Z_SHAPE = Block.box(0, 0, 6, 16, 16, 10);
+    public static final BooleanProperty POWERED = BlockStateProperties.POWERED;
+
+    public boolean shouldHaveCollisionShapeWhenOpen(BlockState state, BlockGetter world, BlockPos pos,
+            CollisionContext context) {
+        return false;
+    }
+
+    public DoorPartBlock(Properties settings) {
+        super(settings);
+        this.registerDefaultState(super.defaultBlockState()
+                .setValue(FACING, Direction.NORTH)
+                .setValue(POWERED, false)
+                .setValue(OPEN, false));
+    }
+
+    protected boolean isSignalSource(BlockState blockState) {
+        return false;
+    }
+
+    @Override
+    public VoxelShape getCollisionShape(BlockState state, BlockGetter world, BlockPos pos, CollisionContext context) {
+        if (state.getValue(OPEN) && !shouldHaveCollisionShapeWhenOpen(state, world, pos, context)) {
+            return Shapes.empty();
+        }
+        return this.getShape(state, world, pos, context);
+    }
+
+    @Override
+    protected VoxelShape getInteractionShape(BlockState state, BlockGetter world, BlockPos pos) {
+        return this.getShape(state);
+    }
+
+    protected VoxelShape getShape(BlockState state) {
+        return state.getValue(FACING).getAxis() == Direction.Axis.X ? X_SHAPE : Z_SHAPE;
+    }
+
+    @Override
+    @Nullable
+    public BlockState getStateForPlacement(BlockPlaceContext ctx) {
+        return this.defaultBlockState().setValue(FACING, ctx.getHorizontalDirection().getOpposite());
+    }
+
+    @Override
+    protected MapCodec<? extends BaseEntityBlock> codec() {
+        return null;
+    }
+
+    @Override
+    protected RenderShape getRenderShape(BlockState state) {
+        return RenderShape.INVISIBLE;
+    }
+
+    @Override
+    protected void createBlockStateDefinition(StateDefinition.Builder<Block, BlockState> builder) {
+        builder.add(FACING, OPEN, POWERED);
+    }
+
+    @Override
+    public @Nullable <T extends BlockEntity> BlockEntityTicker<T> getTicker(Level world, BlockState state,
+            BlockEntityType<T> type) {
+        return world.isClientSide ? createTickerHelper(type, this.getBlockEntityType(), DoorBlockEntity::clientTick)
+                : createTickerHelper(type, this.getBlockEntityType(), DoorBlockEntity::serverTick);
+    }
+
+    protected abstract BlockEntityType<? extends DoorBlockEntity> getBlockEntityType();
+
+    @Override
+    protected boolean propagatesSkylightDown(BlockState state, BlockGetter world, BlockPos pos) {
+        return state.getFluidState().isEmpty();
+    }
+
+    @Override
+    protected float getShadeBrightness(BlockState state, BlockGetter world, BlockPos pos) {
+        return 1f;
+    }
+}

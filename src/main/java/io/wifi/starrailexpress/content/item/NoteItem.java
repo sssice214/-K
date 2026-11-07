@@ -1,0 +1,108 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.content.item;
+
+import io.wifi.starrailexpress.cca.SREPlayerNoteComponent;
+import io.wifi.starrailexpress.content.entity.NoteEntity;
+import io.wifi.starrailexpress.index.TMMEntities;
+import io.wifi.starrailexpress.util.AdventureUsable;
+import net.minecraft.core.Direction;
+import net.minecraft.network.chat.Component;
+import net.minecraft.util.Mth;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.InteractionResultHolder;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.context.UseOnContext;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.phys.Vec3;
+import org.jetbrains.annotations.NotNull;
+
+public class NoteItem extends SkinableItem implements AdventureUsable {
+    public NoteItem(Properties settings) {
+        super(settings);
+    }
+
+    @Override
+    public String getItemSkinType() {
+        return io.wifi.starrailexpress.util.ItemSkinManager.SkinTypes.NOTE;
+    }
+
+    @Override
+    public InteractionResultHolder<ItemStack> use(@NotNull Level world, Player user, InteractionHand hand) {
+        return super.use(world, user, hand);
+    }
+
+    @Override
+    public InteractionResult useOn(@NotNull UseOnContext context) {
+        Player player = context.getPlayer();
+        if (player == null || player.isShiftKeyDown())
+            return InteractionResult.PASS;
+        SREPlayerNoteComponent component = SREPlayerNoteComponent.KEY.get(player);
+        if (!component.written) {
+            player.displayClientMessage(
+                    Component.translatable("message.note.write_sth").withColor(Mth.hsvToRgb(0F, 1.0F, 0.6F)), true);
+            return InteractionResult.PASS;
+        }
+        String[] texts = component.text;
+        Component[] messages = new Component[texts.length];
+        for (int i = 0; i < texts.length; i++) {
+            messages[i] = Component.nullToEmpty(texts[i]);
+        }
+        return createNote(context, messages);
+    }
+
+    public InteractionResult createNote(@NotNull UseOnContext context, Component[] texts) {
+        Player player = context.getPlayer();
+        Level world = player.level();
+        if (world.isClientSide)
+            return InteractionResult.PASS;
+        NoteEntity note = createNoteEntity(world);
+
+        if (note == null)
+            return InteractionResult.PASS;
+
+        switch (context.getClickedFace()) {
+            case DOWN, UP -> note.setYRot(player.getYHeadRot());
+            case NORTH, SOUTH, WEST, EAST -> note.setYRot(180f + (world.random.nextFloat() - .5f) * 30f);
+        }
+
+        Direction side = context.getClickedFace();
+        note.setDirection(side);
+        note.setLines(texts);
+        // 实体沿用玩家手上这张便签的皮肤
+        note.setSkin(io.wifi.starrailexpress.util.ItemSkinManager.getEquippedSkin(player,
+                player.getItemInHand(context.getHand())));
+        Vec3 hitPos = context.getClickLocation()
+                .add(context.getClickLocation().subtract(player.getEyePosition()).normalize().scale(-.01f))
+                .subtract(0, note.getBbHeight() / 2f, 0);
+        note.setPos(hitPos.x(), hitPos.y(), hitPos.z());
+        world.addFreshEntity(note);
+        if (!player.isCreative()) {
+            // if (SRE.REPLAY_MANAGER != null) {
+            //     // SRE.REPLAY_MANAGER.recordItemUse(player.getUUID(), BuiltInRegistries.ITEM.getKey(this));
+            // }
+            player.getItemInHand(context.getHand()).shrink(1);
+        }
+        return InteractionResult.SUCCESS;
+    }
+
+    protected NoteEntity createNoteEntity(Level world) {
+        return TMMEntities.NOTE.create(world);
+    }
+}

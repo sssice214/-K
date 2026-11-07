@@ -1,0 +1,134 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.register;
+
+import org.agmas.noellesroles.commands.GameUtilsCommand;
+
+import io.wifi.starrailexpress.SRE;
+import io.wifi.starrailexpress.content.command.*;
+import io.wifi.starrailexpress.content.command.argument.GameModeArgumentType;
+import io.wifi.starrailexpress.content.command.argument.MapLoadArgumentType;
+import io.wifi.starrailexpress.content.command.argument.SkinArgumentType;
+import io.wifi.starrailexpress.content.command.argument.TimeOfDayArgumentType;
+import io.wifi.starrailexpress.content.vote.command.SREVoteCommand;
+import io.wifi.starrailexpress.schedule.ScheduleManager;
+import net.fabricmc.fabric.api.command.v2.ArgumentTypeRegistry;
+import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
+import net.minecraft.commands.synchronization.SingletonArgumentInfo;
+
+/**
+ * 命令参数类型与命令注册，从 {@link SRE#onInitialize()} 中按类别剥离归一化而来。
+ */
+public class SRECommandRegister {
+
+    public static void registerCommandArgumentTypes() {
+        ArgumentTypeRegistry.registerArgumentType(SRE.id("timeofday"), TimeOfDayArgumentType.class,
+                SingletonArgumentInfo.contextFree(TimeOfDayArgumentType::timeofday));
+        ArgumentTypeRegistry.registerArgumentType(SRE.id("gamemode"), GameModeArgumentType.class,
+                SingletonArgumentInfo.contextFree(GameModeArgumentType::gameMode));
+        ArgumentTypeRegistry.registerArgumentType(SRE.id("skin"), SkinArgumentType.class,
+                SingletonArgumentInfo.contextFree(SkinArgumentType::string));
+        ArgumentTypeRegistry.registerArgumentType(SRE.id("map_load"), MapLoadArgumentType.class,
+                SingletonArgumentInfo.contextFree(MapLoadArgumentType::string));
+        // 实体类型参数直接用原版的 `minecraft:resource`（/summon 用的那个），无需自建与注册。
+        // 自定义内容 id（/sre:give、/sre:setblock 的 <id>[组件] 参数）
+        io.wifi.starrailexpress.customcontent.CustomContentArgument.register();
+    }
+
+    public static void registerCommands() {
+        StreamingSpectatorCommand.registerEvents();
+        ScheduleManager.registerEvents();
+        CommandRegistrationCallback.EVENT.register(((dispatcher, registryAccess, environment) -> {
+            ServerUtilsCommands.register(dispatcher, registryAccess, environment);
+            SREHelpCommand.register(dispatcher);
+            SREVoteCommand.register(dispatcher, registryAccess);
+            NarratorCommand.register(dispatcher, registryAccess);
+            GiveRoomKeyCommand.register(dispatcher);
+            ListRoleInRoundCommand.register(dispatcher);
+            NonOPKickCommand.register(dispatcher, registryAccess);
+            SetVisualCommand.register(dispatcher);
+            ForceTeamCommand.register(dispatcher);
+            SetTimerCommand.register(dispatcher);
+            SetDeathPenaltyCommand.register(dispatcher);
+            MoneyCommand.register(dispatcher);
+            MiniGameMoneyCommand.register(dispatcher); // tmm:minigame_coin：游戏币（小游戏代币）set/add/get
+            CustomReplayEventCommand.register(dispatcher, registryAccess);
+            ReplayScreenCommand.register(dispatcher);
+            net.exmo.sre.record.MatchRecordCommand.register(dispatcher);
+            SetAutoTrainResetCommand.register(dispatcher);
+            SetBoundCommand.register(dispatcher);
+            SetAbilitiesCommand.register(dispatcher);
+            AutoStartCommand.register(dispatcher);
+            ParticipationCommand.register(dispatcher);
+            AutoShutdownWhenNotRunningCommand.register(dispatcher);
+            ConfigCommand.register(dispatcher);
+            ElevatedBlockCommandPermissionCommand.register(dispatcher);
+            SwitchMapCommand.register(dispatcher);
+            MapManagerCommand.register(dispatcher);
+            ReloadReadyAreaCommand.register(dispatcher);
+            EntityDataCommand.register(dispatcher);
+            MoodChangeCommand.register(dispatcher);
+            io.wifi.starrailexpress.content.command.MapVoteCommand.register(dispatcher);
+            io.wifi.starrailexpress.content.command.CreateWaypointCommand.register(dispatcher);
+            io.wifi.starrailexpress.content.command.DeleteWaypointCommand.register(dispatcher);
+            io.wifi.starrailexpress.content.command.ToggleWaypointsCommand.register(dispatcher);
+            AFKCommand.register(dispatcher);
+            ShowStatsCommand.register(dispatcher);
+            ShowSelectedMapUICommand.register(dispatcher);
+            NetworkStatsCommand.register(dispatcher);
+            FourthRoomCommand.register(dispatcher);
+            ReloadMapConfigCommand.register(dispatcher);
+            SkinsCommand.register(dispatcher);
+            ProgressionCommand.register(dispatcher);
+            BackpackCommand.register(dispatcher);
+            RoleRosterCommand.register(dispatcher);
+            ScheduleCommand.register(dispatcher);
+            PlushCommand.register(dispatcher);
+            BreakingAndFakeBlockCommand.register(dispatcher, registryAccess, environment);
+            PlayerInventoryCommand.register(dispatcher);
+            StreamingSpectatorCommand.register(dispatcher);
+            ShieldCommand.register(dispatcher);
+            PoisonCommand.register(dispatcher);
+            StaminaCommand.register(dispatcher);
+            // 地图状态条数值：/sre:state <状态名|all|now> add|set|get <玩家> [数值]
+            StateCommand.register(dispatcher);
+            SceneCommand.register(dispatcher);
+            SceneEventCommand.register(dispatcher);
+            SceneTaskCommand.register(dispatcher);
+            io.wifi.starrailexpress.content.command.MinigameTaskCommand.register(dispatcher);
+            io.wifi.starrailexpress.cca.network.SkinsNetworkSyncCommand.register(dispatcher);
+            io.wifi.starrailexpress.customrole.CustomRoleReloadCommand.register(dispatcher);
+            io.wifi.starrailexpress.custommodifier.CustomModifierReloadCommand.register(dispatcher);
+            io.wifi.starrailexpress.customitem.CustomItemReloadCommand.register(dispatcher);
+            io.wifi.starrailexpress.customblock.CustomBlockReloadCommand.register(dispatcher);
+            // 自定义内容统一指令：/sre:give、/sre:setblock（参数借原版物品参数解析组件，需要 buildContext）
+            io.wifi.starrailexpress.customcontent.CustomContentCommands.register(dispatcher, registryAccess);
+            // 区域整块复制：/sre:clone
+            io.wifi.starrailexpress.content.command.SRECloneCommand.register(dispatcher);
+            io.wifi.starrailexpress.content.command.EntityDisguiseCommand.register(dispatcher, registryAccess);
+            io.wifi.starrailexpress.content.command.MorphCommand.register(dispatcher);
+            // CoinModifier.register(dispatcher, registryAccess);
+            net.exmo.sre.nametag.NameTagCommand.register(dispatcher, registryAccess);
+            net.exmo.sre.subtitle.SubtitleCommand.register(dispatcher, registryAccess);
+            net.exmo.sre.camera.AdvancedCameraCommand.register(dispatcher);
+            net.exmo.sre.dummy.DummyCommand.register(dispatcher);
+            // io.wifi.starrailexpress.contents.command.UnlockAllRolesCommand.register(dispatcher);
+            StartCommand.register(dispatcher);
+            StopCommand.register(dispatcher);
+            GameUtilsCommand.register(dispatcher, registryAccess);
+        }));
+    }
+}

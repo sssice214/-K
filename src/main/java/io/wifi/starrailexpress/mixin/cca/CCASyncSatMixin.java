@@ -1,0 +1,85 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.mixin.cca;
+
+import io.netty.buffer.Unpooled;
+import net.fabricmc.fabric.api.networking.v1.PacketSender;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.minecraft.network.PacketSendListener;
+import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.network.ServerGamePacketListenerImpl;
+import org.ladysnake.cca.api.v3.component.Component;
+import org.ladysnake.cca.api.v3.component.ComponentKey;
+import org.ladysnake.cca.api.v3.component.ComponentProvider;
+import org.ladysnake.cca.api.v3.component.sync.ComponentPacketWriter;
+import org.ladysnake.cca.api.v3.component.sync.PlayerSyncPredicate;
+import org.ladysnake.cca.internal.base.ComponentsInternals;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+
+import java.util.Objects;
+
+@Mixin(ComponentKey.class)
+public abstract class CCASyncSatMixin<C extends Component>  {
+@Inject(method = "syncWith(Lnet/minecraft/server/level/ServerPlayer;Lorg/ladysnake/cca/api/v3/component/ComponentProvider;Lorg/ladysnake/cca/api/v3/component/sync/ComponentPacketWriter;Lorg/ladysnake/cca/api/v3/component/sync/PlayerSyncPredicate;)V", at = @At("HEAD"), cancellable = true)
+    public void syncWith(ServerPlayer player, ComponentProvider provider, ComponentPacketWriter writer, PlayerSyncPredicate predicate, CallbackInfo ci) {
+    @SuppressWarnings("unchecked")
+    ComponentKey<C> key = (ComponentKey<C>) (Object) this;
+    if (predicate.shouldSyncWith(player)) {
+        RegistryFriendlyByteBuf buf = new RegistryFriendlyByteBuf(Unpooled.buffer(), player.serverLevel().registryAccess());
+        writer.writeSyncPacket(buf, player);
+        CustomPacketPayload payload = provider.toComponentPacket(key, predicate.isRequiredOnClient(), buf);
+        if (payload != null) {
+            if (ServerPlayNetworking.canSend(player, payload.type())) {
+                // CCA 同步的统计要区分是哪个组件在同步（key），而 Connection 层看不到这个信息，
+                // 所以这里自行记账；同时把该包类型标记为外部记账，让 Connection 层跳过这一个类型，
+                // 避免同一个包被统计两次（每个类型只标记一次，不影响热路径）。
+                io.wifi.starrailexpress.network.NetworkStatistics stats =
+                        io.wifi.starrailexpress.network.NetworkStatistics.getInstance();
+                if (stats.isRecording()) {
+                    stats.markExternallyTracked(payload.type());
+                    stats.recordExternal(
+                            "CCA_" + payload.type().id() + key,
+                            buf.readableBytes(),
+                            true,
+                            stats.playerStatsFor(player.getName().getString()));
+                }
+
+                PacketSender var10000 = ServerPlayNetworking.getSender(player);
+                Objects.requireNonNull(buf);
+                var10000.sendPacket(payload, PacketSendListener.thenRun(buf::release));
+            } else {
+                if (predicate.isRequiredOnClient()) {
+                    ServerGamePacketListenerImpl var7 = player.connection;
+                    String var10001 = String.valueOf(payload.type().id());
+                    var7.disconnect(net.minecraft.network.chat.Component.literal("This server requires Cardinal Components API (unhandled packet: " + var10001 + ")" + ComponentsInternals.getClientOptionalModAdvice()));
+                }
+
+                buf.release();
+            }
+        } else {
+            buf.release();
+        }
+    }
+    ci.cancel();
+}
+
+
+}

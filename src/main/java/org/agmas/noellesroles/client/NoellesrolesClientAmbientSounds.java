@@ -1,0 +1,163 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.client;
+
+import dev.doctor4t.ratatouille.client.util.ambience.AmbienceUtil;
+import dev.doctor4t.ratatouille.client.util.ambience.BackgroundAmbience;
+import io.wifi.starrailexpress.cca.SREPlayerPsychoComponent;
+import io.wifi.starrailexpress.client.SREClient;
+import io.wifi.starrailexpress.client.util.MyBackgroundAmbience;
+import io.wifi.starrailexpress.game.GameUtils;
+import net.minecraft.client.Minecraft;
+import net.minecraft.sounds.SoundSource;
+import org.agmas.noellesroles.init.ModEffects;
+import org.agmas.noellesroles.init.NRSounds;
+import org.agmas.noellesroles.role.ModRoles;
+import org.agmas.noellesroles.role.bouns.BounsRoles;
+import org.agmas.noellesroles.role.touhou.THRedHouseRoles;
+import org.agmas.noellesroles.role_data.innocence.GhostRoleData;
+
+public class NoellesrolesClientAmbientSounds {
+
+  public static void register() {
+    // 伪人终局沿用亡命徒的环境音乐。场景状态来自服务端，故所有玩家同步听到。
+    // AmbienceUtil.registerBackgroundAmbience(
+    //     new BackgroundAmbience(NRSounds.MUSIC_UNWELCOME_SCHOOL,
+    //         player -> ClientFakeSteveHuntState.isActive(),
+    //         1));
+    // 阿蒙终幕「阿蒙时刻」：使用 A_MENG 音乐，于终幕全程循环播放。
+    AmbienceUtil.registerBackgroundAmbience(
+        new BackgroundAmbience(NRSounds.A_MENG,
+            player -> SREClient.gameComponent != null && org.agmas.noellesroles.client.ClientAmonState.finaleActive,
+            1));
+    AmbienceUtil.registerBackgroundAmbience(
+        new BackgroundAmbience(NRSounds.JESTER_AMBIENT,
+            player -> {
+              if (SREClient.gameComponent == null)
+                return false;
+              if (SREClient.gameComponent.isPsychoActive()) {
+                var level = Minecraft.getInstance().level;
+                if (level == null)
+                  return false;
+                return (level.players().stream().anyMatch((p) -> {
+                  if (SREClient.gameComponent.isRole(p, ModRoles.JESTER)) {
+                    if (SREPlayerPsychoComponent.KEY.get(p).getPsychoTicks() > 0) {
+                      return true;
+                    }
+                  }
+                  return false;
+                }));
+              }
+              return false;
+            },
+            1));
+    AmbienceUtil.registerBackgroundAmbience(
+        new BackgroundAmbience(NRSounds.NYAN_CAT,
+            player -> {
+              if (SREClient.gameComponent == null)
+                return false;
+              if (SREClient.gameComponent.isPsychoActive()) {
+                var level = Minecraft.getInstance().level;
+                if (level == null)
+                  return false;
+                return (level.players().stream().anyMatch((p) -> {
+                  if (SREClient.gameComponent.isRole(p, BounsRoles.CAT_KILLER)) {
+                    if (SREPlayerPsychoComponent.KEY.get(p).getPsychoTicks() > 0) {
+                      return true;
+                    }
+                  }
+                  return false;
+                }));
+              }
+              return false;
+            },
+            1));
+
+    // 芙兰朵露时刻（快进倒计时后）：芙兰朵露存活期间循环播放专属 BGM。
+    // 用 MASTER 声道全场播放（与 Dream 追杀音乐一致）：默认 BackgroundAmbience 的
+    // MUSIC 声道会被玩家音乐音量滑块静音，导致很多玩家听不到。
+    AmbienceUtil.registerBackgroundAmbience(
+        new MyBackgroundAmbience(NRSounds.ROLES_FURANDORU_FINAL, SoundSource.MASTER,
+            player -> {
+              if (SREClient.gameComponent == null || SREClient.timeComponent == null)
+                return false;
+              if (!SREClient.gameComponent.isRunning()) {
+                return false;
+              }
+              if (SREClient.timeComponent.getTime() <= GhostRoleData.FURAN_LAST_STAND_TIME) {
+                var level = Minecraft.getInstance().level;
+                if (level == null)
+                  return false;
+                return (level.players().stream().anyMatch((p) -> {
+                  if (!GameUtils.isPlayerAliveAndSurvival(p))
+                    return false;
+                  if (SREClient.gameComponent.isRole(p, THRedHouseRoles.FURANDORU)) {
+                    {
+                      return true;
+                    }
+                  }
+                  return false;
+                }));
+              }
+              return false;
+            },
+            1.0f, 10, 20));
+    AmbienceUtil.registerBackgroundAmbience(
+        new BackgroundAmbience(NRSounds.ROLES_REMILIA,
+            player -> {
+              if (SREClient.gameComponent == null)
+                return false;
+              if (SREClient.gameComponent.isPsychoActive()) {
+                var level = Minecraft.getInstance().level;
+                if (level == null)
+                  return false;
+                return (level.players().stream().anyMatch((p) -> {
+                  if (SREClient.gameComponent.isRole(p, THRedHouseRoles.REMILIA)) {
+                    if (SREPlayerPsychoComponent.KEY.get(p).getPsychoTicks() > 0) {
+                      return true;
+                    }
+                  }
+                  return false;
+                }));
+              }
+              return false;
+            },
+            1));
+    AmbienceUtil.registerBackgroundAmbience(
+        new MyBackgroundAmbience(NRSounds.MUSIC_CLOCK, SoundSource.MASTER,
+            player -> {
+              var client = Minecraft.getInstance();
+              if (client == null || client.player == null)
+                return false;
+              if (client.player.hasEffect(ModEffects.OTHERWORLD_AURA))
+                return true;
+              return false;
+            },
+            0.8f, 10, 10));
+    // Dream（Dream）狂暴：MANHUNT_CHASE 追杀音乐，狂暴期间全程循环
+    // 用 MASTER 声道（与小丑/猫娘/阿蒙等所有职业狂暴音乐一致）：MUSIC 声道会被玩家
+    // 音乐音量滑块静音（很多玩家关掉音乐），导致开狂暴时听不到追杀音乐。
+    AmbienceUtil.registerBackgroundAmbience(
+        new MyBackgroundAmbience(NRSounds.MANHUNT_CHASE, SoundSource.MASTER,
+            player -> {
+              if (SREClient.gameComponent == null || !SREClient.gameComponent.isRunning())
+                return false;
+              return org.agmas.noellesroles.game.roles.killer.dream.client.DreamClientHandler
+                  .isAnyDreamBerserk();
+            },
+            0.9f, 10, 20));
+  }
+}

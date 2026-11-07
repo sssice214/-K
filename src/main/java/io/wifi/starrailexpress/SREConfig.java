@@ -1,0 +1,635 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress;
+
+import io.wifi.ConfigCompact.ConfigClassHandler;
+import io.wifi.ConfigCompact.annotation.ConfigSync;
+import me.shedaniel.autoconfig.ConfigData;
+import me.shedaniel.autoconfig.annotation.Config;
+import me.shedaniel.autoconfig.annotation.ConfigEntry;
+import me.shedaniel.autoconfig.annotation.ConfigEntry.Gui.Tooltip;
+import me.shedaniel.autoconfig.AutoConfig;
+import me.shedaniel.autoconfig.serializer.GsonConfigSerializer;
+import net.fabricmc.loader.api.FabricLoader;
+import org.agmas.noellesroles.game.halloween.online.OnlineConfig;
+import org.agmas.noellesroles.game.halloween.online.OnlineConfigMigration;
+
+import java.io.IOException;
+import java.nio.file.Files;
+
+import java.util.ArrayList;
+
+/**
+ * 写翻译键 at config_translations/lang/zh_cn.json
+ * key为text.autoconfig.(Config.name).option.项
+ * 如text.autoconfig.starrailexpress.option.enableNoLimitLoversInLoverMode
+ */
+@Config(name = "starrailexpress")
+public class SREConfig implements ConfigData {
+    private static boolean halloweenConfigReady = true;
+    // 必须在 AutoConfig 首次 load/save 补全默认字段前检查旧主文件。
+    public static ConfigClassHandler<SREConfig> HANDLER = createHandler();
+
+    private static ConfigClassHandler<SREConfig> createHandler() {
+        var directory = FabricLoader.getInstance().getConfigDir();
+        var main = directory.resolve("starrailexpress.json");
+        try {
+            OnlineConfigMigration.migrate(main, directory.resolve("halloween-online.json"));
+        } catch (IOException ex) {
+            halloweenConfigReady = false;
+            org.slf4j.LoggerFactory.getLogger(SREConfig.class).error(
+                    "[HalloweenOnline] 南瓜币配置迁移失败；保留原文件并禁止本次运行写回主配置，请修复后重启。同步失败关闭。");
+        }
+        // 仅为 SRE 主配置跳过构造时的自动 save，避免丢失未知字段或覆盖迁移失败的原文件。
+        // 不改变通用 ConfigClassHandler；正常的后续手动保存仍沿用原 API。
+        return new ConfigClassHandler<>(SREConfig.class) {
+            @Override
+            public void register() {
+                AutoConfig.register(SREConfig.class, (definition, type) -> new GsonConfigSerializer<>(definition, type) {
+                    private boolean initialSave = true;
+
+                    @Override
+                    public void serialize(SREConfig config) throws SerializationException {
+                        if (!halloweenConfigReady) return;
+                        if (initialSave) {
+                            initialSave = false;
+                            if (Files.exists(main)) return;
+                        }
+                        super.serialize(config);
+                    }
+
+                    @Override
+                    public SREConfig deserialize() throws SerializationException {
+                        try {
+                            SREConfig config = super.deserialize();
+                            if (config == null) throw new IllegalArgumentException();
+                            return config;
+                        } catch (SerializationException | RuntimeException ex) {
+                            halloweenConfigReady = false;
+                            // AutoConfig 会记录异常链；不要传入含密码/旧密钥的原异常。
+                            throw new SerializationException(new IOException("Invalid SRE configuration; contents omitted"));
+                        }
+                    }
+                });
+            }
+        };
+    }
+
+    /** 服务端启动时取六项快照，之后修改配置需重启；迁移失败时不能启用队列。 */
+    public OnlineConfig halloweenOnlineConfig() {
+        if (!halloweenConfigReady) throw new IllegalStateException("Halloween configuration unavailable");
+        return OnlineConfig.fromSettings(mysqlHalloweenSyncEnabled, mysqlHalloweenEarningsTable,
+                mysqlHalloweenCreateTableIfMissing, mysqlHalloweenFlushIntervalSeconds,
+                mysqlHalloweenBatchSize, mysqlHalloweenStatementTimeoutSeconds);
+    }
+            
+    // 服务端：加载模组本地翻译文件id（输入auto自动检测环境，留空不加载）
+    public String loadServerLanguageId = "";
+    // 服务端：为上面的语言从Mojang官方下载原版(vanilla)翻译文件(assets/minecraft/lang/<id>.json)，缓存到游戏根目录sre_lang_cache
+    public boolean downloadVanillaLanguageFile = false;
+    // 游戏模式设置
+    @ConfigEntry.Category(value = "gamemodes")
+    public int defaultStartTimeForMurder = 10;
+
+    @ConfigEntry.Category(value = "gamemodes")
+    public boolean enableNoLimitLoversInLoverMode = false;
+    @ConfigEntry.Category(value = "gamemodes")
+    @Tooltip
+    public int mobRiotTokenPerPlayer = 7;
+    @ConfigEntry.Category(value = "gamemodes")
+    public int volunteerModeVolunteerCount = 3;
+    @ConfigEntry.Category(value = "gamemodes")
+    public int volunteerModeSelectionTime = 20;
+    @ConfigEntry.Category(value = "gamemodes")
+    public float loverModeLoversPercent = 1f;
+    @ConfigEntry.Category(value = "gamemodes")
+    public float refugeeModeRefugeePercent = 0.5f;
+    @ConfigEntry.Category(value = "gamemodes")
+    public float gamblerModeGamblerPercent = 0.9f;
+    @ConfigEntry.Category(value = "gamemodes")
+    public int gamblerModeGamblerKillTime = 90;
+    @ConfigEntry.Category(value = "gamemodes")
+    public int customRoleModeForceSelectTime = 20;
+
+    @ConfigEntry.Category(value = "gamemodes")
+    public double antWarPlayerScale = -0.5;
+    @ConfigEntry.Category(value = "gamemodes")
+    public int antWarPlayerSpeedLvl = 1;
+    @ConfigEntry.Category(value = "gamemodes")
+    public int antWarClockStopTick = 40;
+    @ConfigEntry.Category(value = "gamemodes")
+    public int antWarClockCooldownTick = 140;
+    @ConfigEntry.Category(value = "gamemodes")
+    public int evilWarKillGroupNumber = 7;
+    @ConfigEntry.Category(value = "gamemodes")
+    @Tooltip
+    public int hideAndSeekGameTime = 240;
+    @ConfigEntry.Category(value = "gamemodes")
+    public double hideAndSeekHiderScale = -0.25;
+    @ConfigEntry.Category(value = "gamemodes")
+    @Tooltip
+    public boolean hideRandomRoleInRoleRotation = true;
+    @ConfigEntry.Category(value = "gamemodes")
+    public float roleRotationPerPlayerPerRoleTime = 3;
+
+    @ConfigEntry.Category(value = "gamemodes")
+    public boolean roleRotationPreparingConfirmRequire = false;
+    @ConfigEntry.Category(value = "gamemodes")
+    public int roleRotationPreparingConfirmTimeout = 30;
+    @ConfigEntry.Category(value = "gamemodes")
+    public boolean roleRotationForceRoleSettings = false;
+
+    // 破镜重圆结束特效（服务端）：游戏结束进入黑幕收尾时是否播放破镜崩裂/还原。
+    // 可由命令 /sre:mirror_end_egg on|off 修改并保存到本配置。
+    @Tooltip
+    public boolean enableMirrorReunionEndEgg = false;
+    // 时长（tick）。实际结局还会再多 1.5 秒。
+    public int mirrorReunionEndEggTime = 5 * 20;
+
+    // 结算舞台专用区域：地板中心。内部 33×31×15 会程序化重建，请勿指向建筑。
+    public boolean enableSettlementStage = true;
+    public int settlementStageX = -100000;
+    public int settlementStageY = 0;
+    public int settlementStageZ = 0;
+
+    // 随机地图设置
+
+    @ConfigEntry.Category(value = "commands")
+    public int rosterCommandPermission = 3;
+    @ConfigEntry.Category(value = "commands")
+    public int scheduleCommandPermission = 3;
+    @ConfigEntry.Category(value = "commands")
+    public int customRolePermission = 2;
+    @ConfigEntry.Category(value = "commands")
+    public int customModifierPermission = 2;
+    @ConfigEntry.Category(value = "commands")
+    public int entityInteractionBlockEntityPlayerPermission = 2;
+    @ConfigEntry.Category(value = "commands")
+    public int entityInteractionBlockEntityPermission = 2;
+    // 开启后：原版命令方块（含命令方块矿车）与实体交互方块执行指令的权限提升为 3。
+    // 可由 /sre:block_cmd_perm on|off 修改并保存到本配置。
+    @ConfigEntry.Category(value = "commands")
+    @Tooltip
+    public boolean elevateBlockCommandPermission = false;
+    @ConfigEntry.Category(value = "commands")
+    public int timeRewindPermission = 2;
+    @ConfigEntry.Category(value = "commands")
+    public int startGameRequiredPermission = 1;
+    @ConfigEntry.Category(value = "commands")
+    public int stopGameRequiredPermission = 2;
+    @ConfigEntry.Category(value = "commands")
+    public int switchMapRequiredPermission = 1;
+    @ConfigEntry.Category(value = "commands")
+    public int meetingVoteProcessorFunctionPermission = 2;
+    @ConfigEntry.Category(value = "commands")
+    public int modifyEnableStatusRequiredPermission = 1;
+    @ConfigEntry.Category(value = "commands")
+    public int changeRoleRequiredPermission = 2;
+    @ConfigEntry.Category(value = "commands")
+    public int changeModifierRequiredPermission = 2;
+    @ConfigEntry.Category(value = "commands")
+    public int forceRoleRequiredPermission = 2;
+    @ConfigEntry.Category(value = "commands")
+    public int forceModifierRequiredPermission = 2;
+    @ConfigEntry.Category(value = "commands")
+    public int forceTeamRequiredPermission = 2;
+    @ConfigEntry.Category(value = "commands")
+    public int spawnInfoConfigRequiredPermission = 1;
+    @ConfigEntry.Category(value = "commands")
+    public int killRequiredPermission = 2;
+    @ConfigEntry.Category(value = "commands")
+    public int gameKillRequiredPermission = 2;
+    @ConfigEntry.Category(value = "commands")
+    public int gameKickRequiredPermission = 2;
+    @ConfigEntry.Category(value = "commands")
+    public int gameUtilsRequiredPermission = 2;
+    @ConfigEntry.Category(value = "commands")
+    public int gameAbilitiesRequiredPermission = 2;
+    @ConfigEntry.Category(value = "commands")
+    public int forceResetRequiredPermission = 2;
+    @ConfigEntry.Category(value = "commands")
+    public int cooldownCommandsRequiredPermission = 2;
+
+    @ConfigEntry.Category(value = "map")
+    @Tooltip
+    public int mapRandomCount = -1;
+
+    @ConfigEntry.Category(value = "map")
+    public boolean allowRandomChooseMapNotInMapConfig = false;
+    @ConfigEntry.Category(value = "map")
+    @Tooltip(count = 3)
+    public boolean isLobby = false;
+
+    @ConfigEntry.Category(value = "map")
+    @Tooltip(count = 2)
+    @ConfigSync(shouldSync = true)
+    public boolean shouldOpenDoorHaveCollision = true;
+
+    @ConfigEntry.Category(value = "shop")
+    @ConfigSync(shouldSync = true)
+    public int knifePrice = 130;
+    // 杀手刀「有限耐久」模式：开启后 murder（及继承 murder）模式下，商店购买的刀仅 3 点耐久，
+    // 耗尽后不消失但无法使用，需重新购买替换。关闭则恢复为无耐久的普通刀。
+    @ConfigEntry.Category(value = "shop")
+    @ConfigSync(shouldSync = true)
+    @Tooltip(count = 2)
+    public boolean knifeDurabilityMode = true;
+    @ConfigEntry.Category(value = "shop")
+    public boolean knifeBrokenWhenNotAvailable = true;
+    @ConfigSync(shouldSync = true)
+    @ConfigEntry.Category(value = "shop")
+    public int revolverPrice = 285;
+    @ConfigSync(shouldSync = true)
+    @ConfigEntry.Category(value = "shop")
+    public int grenadePrice = 330;
+    @ConfigSync(shouldSync = true)
+    @ConfigEntry.Category(value = "shop")
+    public int stickyGrenadePrice = 300;
+    @ConfigSync(shouldSync = true)
+    @ConfigEntry.Category(value = "shop")
+    public int timedGrenadePrice = 350;
+    @ConfigSync(shouldSync = true)
+    @ConfigEntry.Category(value = "shop")
+    public int psychoModePrice = 400;
+    @ConfigSync(shouldSync = true)
+    @ConfigEntry.Category(value = "shop")
+    public int poisonVialPrice = 80;
+    @ConfigSync(shouldSync = true)
+    @ConfigEntry.Category(value = "shop")
+    public int scorpionPrice = 40;
+    @ConfigSync(shouldSync = true)
+    @ConfigEntry.Category(value = "shop")
+    public int firecrackerPrice = 10;
+    @ConfigSync(shouldSync = true)
+    @ConfigEntry.Category(value = "shop")
+    public int lockpickPrice = 80;
+    @ConfigSync(shouldSync = true)
+    @ConfigEntry.Category(value = "shop")
+    public int crowbarPrice = 35;
+    @ConfigSync(shouldSync = true)
+    @ConfigEntry.Category(value = "shop")
+    public int bodyBagPrice = 100;
+    @ConfigSync(shouldSync = true)
+    @ConfigEntry.Category(value = "shop")
+    public int blackoutPrice = 120;
+    @ConfigSync(shouldSync = true)
+    @ConfigEntry.Category(value = "shop")
+    public int monitorBrokenPrice = 60;
+    @ConfigSync(shouldSync = true)
+    @ConfigEntry.Category(value = "shop")
+    public int shortShotgunPrice = 300;
+    @ConfigSync(shouldSync = true)
+    @ConfigEntry.Category(value = "shop")
+    public int notePrice = 10;
+    @ConfigSync(shouldSync = true)
+    @ConfigEntry.Category(value = "shop")
+    public int sheriffBulletPrice = 55;
+    @ConfigSync(shouldSync = true)
+    @ConfigEntry.Category(value = "shop")
+    public int sheriffBulletMaxCarry = 4;
+
+    // 物品冷却时间配置（秒）- 服务端只读
+
+    @ConfigEntry.Category(value = "cooldowns")
+    public int knifeCooldown = 30;
+    @ConfigEntry.Category(value = "cooldowns")
+    public int revolverCooldown = 15;
+    @ConfigEntry.Category(value = "cooldowns")
+    public int derringerCooldown = 1;
+    @ConfigEntry.Category(value = "cooldowns")
+    public int grenadeCooldown = 300;
+    @ConfigEntry.Category(value = "cooldowns")
+    public int grenadePurchaseCooldown = 30;
+    @ConfigEntry.Category(value = "cooldowns")
+    public int lockpickCooldown = 180;
+    @ConfigEntry.Category(value = "cooldowns")
+    public int crowbarCooldown = 45;
+    @ConfigEntry.Category(value = "cooldowns")
+    public int bodyBagCooldown = 300;
+    @ConfigEntry.Category(value = "cooldowns")
+    public int psychoModeCooldown = 275;
+    @ConfigEntry.Category(value = "cooldowns")
+    public int blackoutCooldown = 180;
+    @ConfigEntry.Category(value = "cooldowns")
+    public int blackoutGlobalCooldown = 40;
+    @ConfigEntry.Category(value = "cooldowns")
+    public int monitorBrokenCooldown = 180;
+    @ConfigEntry.Category(value = "cooldowns")
+    public int monitorBrokenCooldownGlobal = 40;
+    @ConfigEntry.Category(value = "cooldowns")
+    public int psychoGlobalCooldown = 20;
+    @ConfigEntry.Category(value = "cooldowns")
+    public int sheriffRevolverReloadCooldown = 12;
+    // 游戏配置
+    // 记录工程师事件
+    public boolean recordEngineerEvents = true;
+
+    // 双重人格配置
+    @ConfigEntry.Category(value = "modifiers")
+    @Tooltip(count = 2)
+    public int splitPersonalityMax = 0;
+
+    // Bartender - Glow duration in seconds
+
+    @ConfigSync(shouldSync = true)
+    public int bartenderGlowDuration = 40;
+
+    @ConfigSync(shouldSync = true)
+    public int furandoruSafeTime = 6 * 60;// 6分钟外安全
+
+    public int safeTimeCooldown = 30;
+    public int startingMoney = 100;
+    // 杀手保底被动（降到 3/15秒，主要收入改由任务驱动，见 killerTaskIncome）
+    public int passiveMoneyAmount = 5;
+    public int passiveMoneyInterval = 15;
+    // 任意平民/中立完成一个任务时，每个杀手获得的金币（任务驱动收入）
+    public int killerTaskIncome = 5;
+    // 平民/中立完成一个任务本人获得的金币（不含连击奖励）
+    public int civilianTaskReward = 50;
+    // 同一小游戏任务点被该玩家使用后的复用冷却（秒），各玩家独立；冷却期间不可再次使用且不显示透视
+    public int minigameBlockCooldownSeconds = 200;
+    // 小游戏任务独立刷新间隔（秒），与 Mood 任务解耦
+    public int minigameTaskIntervalSeconds = 75;
+    // 小游戏任务轮换模式：开启后小游戏任务并入 Mood 任务轮换（刷 2~3 个普通任务后替换刷新一个
+    // 小游戏任务，不重复刷新），小游戏任务完成额外获得 minigameRotationCoinBonus 金币，
+    // 全局任务刷新速率减缓 15%；关闭后恢复独立计时刷新逻辑
+    @Tooltip
+    public boolean minigameTaskRotationMode = true;
+    // 小游戏任务并列模式：在轮换模式启用时不影响普通任务刷新
+    public boolean minigameTaskParallelMode = true;
+    // 轮换模式下小游戏任务完成时的额外金币奖励
+    public int minigameRotationCoinBonus = 0;
+    public int moneyPerKill = 100;
+    public int grenadeMoneyPerKill = 80;
+    public int grenadeMaxMoneyReward = 375;
+    public int grenadeMaxHurtPlayers = 8;
+    public int psychoModeArmor = 1;
+    public int psychoModeDuration = 30;
+    public int firecrackerDuration = 15;
+    public int blackoutMaxDuration = 25;
+    public int monitorBrokenDuration = 30;
+    public float blackoutRandomRangePercent = 0.32f;
+    public boolean enableAutoTrainReset = false;
+    public boolean verboseTrainResetLogs = true;
+    public boolean logGameEvent = true;
+    public boolean savePlayerBodyItems = true;
+    public boolean vehicleEntityNoItemDrops = true;
+
+    @ConfigEntry.Category(value = "items")
+    public boolean enableBrokenGunDropWhenKillerKillsGunHolder = false;
+    @ConfigEntry.Category(value = "items")
+    public int brokenGunDropChanceWhenKillerKillsGunHolder = 60;
+    @ConfigEntry.Category(value = "items")
+    public boolean enableBrokenGunDropWhenKillerShootsPlayer = false;
+    @ConfigEntry.Category(value = "items")
+    public int brokenGunDropChanceWhenKillerShootsPlayer = 60;
+
+    @ConfigSync(shouldSync = true)
+    public boolean disablePlayerMountain = true;
+
+    // ===== 通用物证系统（尸检线索下放给所有人）=====
+    @ConfigEntry.Category(value = "forensic")
+    @ConfigSync(shouldSync = true)
+    public boolean enableForensicEvidence = true;
+    @ConfigEntry.Category(value = "forensic")
+    @ConfigSync(shouldSync = true)
+    public boolean forensicShowWeaponCategory = false;
+    @ConfigEntry.Category(value = "forensic")
+    @ConfigSync(shouldSync = true)
+    public boolean forensicShowCorpseFacing = false;
+    @ConfigEntry.Category(value = "forensic")
+    public boolean forensicBloodTrail = true;
+    @ConfigEntry.Category(value = "forensic")
+    public int bloodTrackWetDistance = 8;
+    @ConfigEntry.Category(value = "forensic")
+    public int forensicBloodTrailSeconds = 5;
+    @ConfigEntry.Category(value = "forensic")
+    @ConfigSync(shouldSync = true)
+    public boolean forensicShowDeathOrder = false;
+    @ConfigEntry.Category(value = "forensic")
+    @ConfigSync(shouldSync = true)
+    public boolean forensicShowDragMark = true;
+    @ConfigEntry.Category(value = "forensic")
+    public boolean forensicDoorMark = false;
+
+    // // 自动切换预设配置 - 游戏开始前自动应用指定预设，留空则不自动切换
+    // @Tooltip(count = 3)
+    // public String autoPresetName = "";
+
+    public static class AutoPresetInfo {
+        public int advanceCount = 0;
+        public String presetName = "";
+
+        public AutoPresetInfo() {
+        }
+
+        public AutoPresetInfo(String present, int advanceCount) {
+            this.advanceCount = advanceCount;
+            this.presetName = present;
+        }
+    }
+
+    @ConfigEntry.Category(value = "presents")
+    @Tooltip(count = 2)
+    public boolean enableRoundBasedAutoPreset = false;
+
+    // 按游戏轮数自动切换预设配置
+    @ConfigEntry.Category(value = "presents")
+    @Tooltip
+    public ArrayList<AutoPresetInfo> roundBasedPreset = getDefaultAutoPresetInfos();
+    @ConfigEntry.Category(value = "presents")
+    @Tooltip(count = 3)
+    public String roundBasedPresetAllRoles = "";
+    // 当前已进行的游戏轮数（自动维护，勿手动修改）
+    @ConfigEntry.Category(value = "presents")
+    public int roundBasedCurrentRound = 0;
+    // 当前正在使用的预设名称（自动维护，反映当前阶段）
+    @ConfigEntry.Category(value = "presents")
+    public String roundBasedCurrentPreset = "";
+
+    // 玩家数据设置
+    @ConfigEntry.Category(value = "stats")
+    public boolean isStatsEnabled = true;
+    @ConfigEntry.Category(value = "stats")
+    public boolean isStatsSyncEnabled = true;
+    @ConfigEntry.Category(value = "stats")
+    public boolean isTeammedStatsSyncEnabled = true;
+    @ConfigEntry.Category(value = "sync")
+    public boolean mysqlPlayerSyncEnabled = false;
+    @ConfigEntry.Category(value = "sync")
+    public boolean ignoreMysqlRosterConfig = false;
+    @ConfigEntry.Category(value = "sync")
+    public String mysqlSyncHost = "127.0.0.1";
+    @ConfigEntry.Category(value = "sync")
+    public int mysqlSyncPort = 3306;
+    @ConfigEntry.Category(value = "sync")
+    public String mysqlSyncDatabase = "starrailexpress";
+    @ConfigEntry.Category(value = "sync")
+    public String mysqlSyncUsername = "root";
+    @ConfigEntry.Category(value = "sync")
+    public String mysqlSyncPassword = "";
+    @ConfigEntry.Category(value = "sync")
+    public String mysqlSyncTablePrefix = "sre_";
+    @ConfigEntry.Category(value = "sync")
+    public boolean mysqlSyncUseSsl = false;
+    @ConfigEntry.Category(value = "sync")
+    public int mysqlSyncPoolSize = 4;
+    @ConfigEntry.Category(value = "sync")
+    public int mysqlSyncConnectTimeoutMs = 5000;
+
+    // 南瓜币队列复用上述连接；服务器本地配置，不添加 @ConfigSync。
+    @ConfigEntry.Category(value = "sync")
+    @Tooltip
+    public boolean mysqlHalloweenSyncEnabled = false;
+    @ConfigEntry.Category(value = "sync")
+    @Tooltip
+    public String mysqlHalloweenEarningsTable = "";
+    @ConfigEntry.Category(value = "sync")
+    @Tooltip
+    public boolean mysqlHalloweenCreateTableIfMissing = true;
+    @ConfigEntry.Category(value = "sync")
+    @Tooltip
+    @ConfigEntry.BoundedDiscrete(min = 1, max = 86400)
+    public int mysqlHalloweenFlushIntervalSeconds = 30;
+    @ConfigEntry.Category(value = "sync")
+    @Tooltip
+    @ConfigEntry.BoundedDiscrete(min = 1, max = 128)
+    public int mysqlHalloweenBatchSize = 128;
+    @ConfigEntry.Category(value = "sync")
+    @Tooltip
+    @ConfigEntry.BoundedDiscrete(min = 1, max = 60)
+    public int mysqlHalloweenStatementTimeoutSeconds = 10;
+
+    @ConfigEntry.Category(value = "sponsor")
+    @Tooltip(count = 2)
+    public String sponsorListUrl = "";
+
+    @ConfigEntry.Category(value = "progression")
+    public boolean enableProgressionSystem = false;
+    @ConfigEntry.Category(value = "progression")
+    public boolean progressionSyncServerEnabled = false;
+    @ConfigEntry.Category(value = "progression")
+    public boolean enableWeeklyTasks = true;
+    @ConfigEntry.Category(value = "progression")
+    public int dailyTaskCount = 6;
+    @ConfigEntry.Category(value = "progression")
+    public int weeklyTaskCount = 6;
+    /** 同种类阵营卡使用间隔开关。默认开启。 */
+    @ConfigEntry.Category(value = "progression")
+    @ConfigSync(shouldSync = true)
+    @Tooltip
+    public boolean enableFactionCardTypeCooldown = true;
+    /** 同种类阵营卡再次使用所需间隔（分钟）。默认 45。 */
+    @ConfigEntry.Category(value = "progression")
+    @ConfigSync(shouldSync = true)
+    @Tooltip
+    public int factionCardTypeCooldownMinutes = 45;
+    // 皮肤设置
+    @ConfigEntry.Category(value = "skin")
+    public boolean isItemSkinEnabled = true;
+    @ConfigEntry.Category(value = "skin")
+    public boolean isItemSkinManagementEnabled = false;
+
+    @ConfigEntry.Category(value = "skin")
+    public boolean itemSkinSyncServerEnabled = false;
+    // AFK设置
+
+    @ConfigEntry.Category(value = "anticheat")
+    @Tooltip
+    public boolean enableClickAc = true; // 点击频率反作弊
+
+    @ConfigEntry.Category(value = "afk")
+    public boolean afkKickEnabled = true; // 是否启用挂机踢出功能
+    @ConfigEntry.Category(value = "afk")
+    public boolean afkDeathEnabled = true; // 是否启用挂机死亡功能
+    @ConfigEntry.Category(value = "afk") // 3秒到20分钟
+    public int afkThresholdSeconds = (int) (4.5 * 60); // 5分钟
+    @ConfigEntry.Category(value = "afk") // 3秒到10分钟
+    public int afkDeathSeconds = (int) (5 * 60); // 5分钟
+    @ConfigEntry.Category(value = "afk") // 1.5秒到120秒
+    public int afkWarningSeconds = 4 * 60; // 4分钟时开始警告
+    @ConfigEntry.Category(value = "afk") // 1秒到30秒
+    public int afkSleepySeconds = 3 * 60; // 3分钟时开始困倦效果
+
+    // 队友击杀违规检测配置
+    @ConfigEntry.Category(value = "friendly_teammate_kill")
+    public boolean teamKillViolationEnabled = false;
+    @ConfigEntry.Category(value = "friendly_teammate_kill")
+    public int teamKillViolationThreshold = 2; // 窗口内队友击杀次数阈值
+    @ConfigEntry.Category(value = "friendly_teammate_kill")
+    public int teamKillViolationWindowSeconds = 120; // 检测时间窗口（秒）
+    @ConfigEntry.Category(value = "friendly_teammate_kill")
+    public String teamKillViolationMcFunction = "starrailexpress:teamkill_violation"; // 触发后执行的 mcfunction
+    @ConfigEntry.Category(value = "friendly_teammate_kill")
+    public int teamKillViolationMcFunctionPermission = 3;
+
+    public boolean enableRoster = true;
+
+    // 技能释放通告 HUD（服务端控制，默认关闭）
+    @ConfigEntry.Category(value = "hud")
+    @ConfigSync(shouldSync = true)
+    @Tooltip
+    public boolean enableSkillCastAnnounceHud = false;
+
+    @ConfigEntry.Category(value = "hud")
+    @ConfigSync(shouldSync = true)
+    @Tooltip(count = 2)
+    public ArrayList<String> skillCastAnnounceWhitelist = new ArrayList<>();
+
+    @ConfigEntry.Category(value = "hud")
+    @ConfigSync(shouldSync = true)
+    @Tooltip(count = 2)
+    public ArrayList<String> skillCastAnnounceBlacklist = new ArrayList<>();
+
+    public static boolean isUltraPerfMode() {
+        return SREClientConfig.instance().ultraPerfMode;
+    }
+
+    /**
+     * 重新加载配置文件
+     * 服务端：只从文件读取，不修改
+     * 客户端：可以通过UI修改
+     */
+    public void reload() {
+        HANDLER.load();
+    }
+
+    /**
+     * 重置配置为默认值
+     * 通过精确修改配置文件内容来实现，不删除文件
+     */
+    public void reset() {
+        HANDLER.reset();
+    }
+
+    /**
+     * 接口不需要了
+     */
+    public void init() {
+    }
+
+    public static SREConfig instance() {
+        return HANDLER.instance();
+    }
+
+    public ArrayList<AutoPresetInfo> getDefaultAutoPresetInfos() {
+        ArrayList<AutoPresetInfo> arr = new ArrayList<>();
+        arr.add(new AutoPresetInfo("low_level", 3));
+        arr.add(new AutoPresetInfo("medium_level", 5));
+        arr.add(new AutoPresetInfo("high_level", 5));
+        return arr;
+    }
+}

@@ -1,0 +1,509 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.client.gui;
+
+import io.wifi.starrailexpress.client.SREClient;
+import io.wifi.starrailexpress.game.GameConstants;
+import io.wifi.starrailexpress.game.data.MapConfig;
+import io.wifi.utils.client.betterrender.FakeGuiGraphics;
+import net.minecraft.client.gui.Font;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.locale.Language;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.Style;
+import net.minecraft.util.FormattedCharSequence;
+import org.jetbrains.annotations.NotNull;
+
+import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
+
+public class MapDetailsRenderer {
+    public static String mapId = "";
+    public static String mapDescription = "";
+    public static String mapAuthor = "";
+    private static long displayStartTime = 0L;
+    private static final long DISPLAY_DURATION = 10000L; // 10秒显示时间
+    private static final long FADE_DURATION = 1000L; // 1秒淡入淡出时间
+
+    // 文字颜色 - 电影风格黑白
+    private static final int TITLE_COLOR = 0xFFFFFFFF; // 纯白标题
+    private static final int AUTHOR_COLOR = 0xFFCCCCCC; // 浅灰作者
+    private static final int DESC_COLOR = 0xFFAAAAAA; // 中灰描述
+
+    // 字体大小
+    private static final float TITLE_SCALE = 2.0f; // 标题放大100%
+    private static final float AUTHOR_SCALE = 1.2f; // 作者放大20%
+    private static final float DESC_SCALE = 0.9f; // 描述缩小10%
+
+    // 布局位置 - 左上角
+    private static final int LEFT_MARGIN = 30;
+    private static final int TOP_MARGIN = 30;
+    private static final int LINE_SPACING = 5;
+
+    // 全屏效果参数
+    private static final float VIGNETTE_INTENSITY = 0.3f; // 暗角强度
+    private static final int VIGNETTE_COLOR = 0x80000000; // 黑色暗角
+
+    // 上下黑框参数
+    private static final float MAX_BLACK_BAR_HEIGHT = 0.25f; // 最大覆盖1/4屏幕
+    private static float currentBarHeightRatio = 0f; // 当前黑框高度比例
+
+    // 动画效果
+    private static float titleOffsetX = 0f; // 标题偏移动画（胶片抖动）
+    private static float titlePulse = 0f; // 标题脉动动画
+    private static float titleSlideX = 0f; // 标题滑入偏移
+    private static float authorSlideX = 0f; // 作者/描述滑入偏移
+
+    public static void renderHud(Font font, @NotNull LocalPlayer player, FakeGuiGraphics context, float delta) {
+        if (mapId.isEmpty() || System.currentTimeMillis() - displayStartTime > DISPLAY_DURATION) {
+            // 重置动画状态
+            if (!mapId.isEmpty()) {
+                clearMapDetails();
+            }
+            return;
+        }
+
+        int screenWidth = context.guiWidth();
+        int screenHeight = context.guiHeight();
+
+        // 计算透明度和动画进度
+        long elapsed = System.currentTimeMillis() - displayStartTime;
+        float alpha = 1.0f;
+
+        // 计算淡入淡出透明度
+        if (elapsed < FADE_DURATION) {
+            alpha = (float) elapsed / FADE_DURATION; // 淡入
+        } else if (elapsed > DISPLAY_DURATION - FADE_DURATION) {
+            alpha = (float) (DISPLAY_DURATION - elapsed) / FADE_DURATION; // 淡出
+        }
+
+        int alphaInt = (int) (alpha * 255);
+        if (alphaInt <= 0)
+            return;
+
+        // 更新动画
+        updateAnimations(delta, elapsed);
+
+        // 更新黑框动画
+        updateBlackBarAnimation(elapsed);
+
+        // 保存当前矩阵状态
+        context.pose().pushPose();
+
+        // 渲染上下黑框
+        renderBlackBars(context, screenWidth, screenHeight, alphaInt);
+
+        // 渲染全屏电影效果
+        renderFullscreenEffects(context, screenWidth, screenHeight, alphaInt);
+
+        // 获取地图信息
+        AtomicReference<String> mapNameKey = new AtomicReference<>("map." + mapId + ".name");
+        AtomicReference<String> mapDescKey = new AtomicReference<>("map." + mapId + ".desc");
+
+        MapConfig.getInstance().getMaps().stream()
+                .filter(map -> map.id.equals(mapId))
+                .findFirst()
+                .ifPresent(map -> {
+                    mapNameKey.set(map.displayName);
+                    mapDescKey.set(map.description);
+                });
+
+        String mapName = Language.getInstance().getOrDefault(mapNameKey.get());
+        if (mapName.equals(mapNameKey.get())) {
+            mapName = mapId;
+        }
+
+        String mapDesc = Language.getInstance().getOrDefault(mapDescKey.get());
+
+        // 渲染左上角地图信息
+        renderTopLeftContent(context, font, mapName, mapDesc, alphaInt);
+
+        // 恢复矩阵状态
+        context.pose().popPose();
+    }
+
+    /**
+     * 更新动画效果
+     */
+    private static void updateAnimations(float delta, long elapsed) {
+        // 标题轻微偏移动画（模拟胶片抖动）
+        titleOffsetX = (float) Math.sin(elapsed * 0.001f) * 0.5f;
+
+        // 标题脉动动画
+        titlePulse = (float) Math.sin(elapsed * 0.002f) * 0.05f + 1.0f;
+
+        // 滑入动画：淡入阶段内从左侧滑入（缓动）
+        if (elapsed < FADE_DURATION) {
+            float t = (float) elapsed / FADE_DURATION;
+            // ease-out quad: 1-(1-t)^2
+            float eased = 1f - (1f - t) * (1f - t);
+            titleSlideX = -40f * (1f - eased);
+            // 作者/描述稍晚 200ms 开始滑入
+            long authorDelay = 200;
+            float authorT = (FADE_DURATION > authorDelay)
+                    ? Math.max(0f, (float) (elapsed - authorDelay) / (FADE_DURATION - authorDelay))
+                    : 1f;
+            float authorEased = 1f - (1f - authorT) * (1f - authorT);
+            authorSlideX = -20f * (1f - authorEased);
+        } else {
+            titleSlideX = 0f;
+            authorSlideX = 0f;
+        }
+    }
+
+    /**
+     * 更新黑框动画
+     */
+    private static void updateBlackBarAnimation(long elapsed) {
+        if (elapsed > DISPLAY_DURATION) {
+            currentBarHeightRatio = 0f;
+            return;
+        }
+
+        // 淡入阶段：黑边从 0 缓动展开到最大（ease-out quad）
+        if (elapsed < FADE_DURATION) {
+            float t = (float) elapsed / FADE_DURATION;
+            float eased = 1f - (1f - t) * (1f - t);
+            currentBarHeightRatio = MAX_BLACK_BAR_HEIGHT * eased;
+        } else {
+            // 之后保持最大高度，透明度由全局 alpha 控制淡出
+            currentBarHeightRatio = MAX_BLACK_BAR_HEIGHT;
+        }
+    }
+
+    /**
+     * 渲染上下黑框（透明度随全局 alpha 淡入淡出）
+     */
+    private static void renderBlackBars(FakeGuiGraphics context, int screenWidth, int screenHeight, int alphaInt) {
+        if (currentBarHeightRatio <= 0f || alphaInt <= 0)
+            return;
+
+        int barHeight = (int) (screenHeight * currentBarHeightRatio);
+        // 黑框颜色携带全局 alpha，实现淡入淡出而非突然出现/消失
+        int barColor = alphaInt << 24;
+
+        // 上黑框
+        context.fill(0, 0, screenWidth, barHeight, barColor);
+
+        // 下黑框
+        int bottomBarY = screenHeight - barHeight;
+        context.fill(0, bottomBarY, screenWidth, screenHeight, barColor);
+    }
+
+    /**
+     * 渲染全屏电影效果
+     */
+    private static void renderFullscreenEffects(FakeGuiGraphics context, int screenWidth, int screenHeight, int alpha) {
+        // 渲染暗角效果（模拟电影镜头）
+        renderVignette(context, screenWidth, screenHeight, alpha);
+
+        // 渲染胶片颗粒效果（可选，增强电影感）
+        renderFilmGrain(context, screenWidth, screenHeight, alpha);
+
+        // 渲染扫描线效果（模拟CRT显示器）
+        renderScanlines(context, screenWidth, screenHeight, alpha);
+
+        // 添加老电影噪点效果
+        renderVintageNoise(context, screenWidth, screenHeight, alpha);
+    }
+
+    /**
+     * 渲染暗角效果（优化版本）
+     */
+    private static void renderVignette(FakeGuiGraphics context, int screenWidth, int screenHeight, int alpha) {
+        // 使用径向渐变实现更自然的暗角效果
+        int centerX = screenWidth / 2;
+        int centerY = screenHeight / 2;
+        int maxDistance = (int) Math.sqrt(centerX * centerX + centerY * centerY);
+
+        int vignetteAlpha = (int) (VIGNETTE_INTENSITY * alpha * 0.7f); // 降低整体强度
+
+        // 在屏幕边缘绘制多个同心圆实现渐变
+        for (int radius = maxDistance; radius > maxDistance * 0.7; radius--) {
+            float distanceRatio = (float) (maxDistance - radius) / (maxDistance * 0.3f);
+            int circleAlpha = (int) (vignetteAlpha * distanceRatio * 0.3f);
+            int circleColor = (circleAlpha << 24) | 0x000000;
+
+            // 绘制圆形边缘（简化为矩形近似）
+            int left = centerX - radius;
+            int top = centerY - radius;
+            int right = centerX + radius;
+            int bottom = centerY + radius;
+
+            if (left < 0)
+                left = 0;
+            if (top < 0)
+                top = 0;
+            if (right > screenWidth)
+                right = screenWidth;
+            if (bottom > screenHeight)
+                bottom = screenHeight;
+
+            // 绘制四条边
+            context.fill(left, top, right, top + 1, circleColor); // 上边
+            context.fill(left, bottom - 1, right, bottom, circleColor); // 下边
+            context.fill(left, top, left + 1, bottom, circleColor); // 左边
+            context.fill(right - 1, top, right, bottom, circleColor); // 右边
+        }
+    }
+
+    /**
+     * 渲染胶片颗粒效果
+     */
+    private static void renderFilmGrain(FakeGuiGraphics context, int screenWidth, int screenHeight, int alpha) {
+        // 随机颗粒效果（简化实现）
+        long time = System.currentTimeMillis();
+        int grainAlpha = (int) (alpha * 0.1f); // 非常淡的颗粒
+
+        for (int i = 0; i < 50; i++) {
+            float x = (float) ((time * 0.5 + i * 100) % screenWidth);
+            float y = (float) ((Math.sin(time * 0.001 + i) * 100 + i * 20) % screenHeight);
+            int grainColor = (grainAlpha << 24) | 0xFFFFFF;
+            context.fill((int) x, (int) y, (int) x + 1, (int) y + 1, grainColor);
+        }
+    }
+
+    /**
+     * 渲染扫描线效果
+     */
+    private static void renderScanlines(FakeGuiGraphics context, int screenWidth, int screenHeight, int alpha) {
+        // 每隔2像素绘制一条细线
+        int lineAlpha = (int) (alpha * 0.05f); // 非常淡的扫描线
+
+        for (int y = 0; y < screenHeight; y += 2) {
+            context.fill(0, y, screenWidth, y + 1, (lineAlpha << 24) | 0x000000);
+        }
+    }
+
+    /**
+     * 渲染老电影噪点效果
+     */
+    private static void renderVintageNoise(FakeGuiGraphics context, int screenWidth, int screenHeight, int alpha) {
+        // 模拟老电影的随机噪点
+        long time = System.currentTimeMillis();
+        java.util.Random random = new java.util.Random(time / 100);
+
+        int noiseCount = 30; // 噪点数量
+        int noiseAlpha = (int) (alpha * 0.04f); // 很淡的噪点
+
+        for (int i = 0; i < noiseCount; i++) {
+            int x = random.nextInt(screenWidth);
+            int y = random.nextInt(screenHeight);
+
+            // 噪点大小随机
+            int size = random.nextInt(2) + 1;
+            int noiseColor = (noiseAlpha << 24) | (random.nextBoolean() ? 0xFFFFFF : 0x000000);
+
+            context.fill(x, y, x + size, y + size, noiseColor);
+        }
+    }
+
+    /**
+     * 渲染左上角内容
+     */
+    private static void renderTopLeftContent(FakeGuiGraphics context, Font font,
+            String mapName, String mapDesc, int alpha) {
+        int currentY = TOP_MARGIN;
+
+        // 1. 渲染地图标题（大字体，带动画效果）
+        renderTitle(context, font, mapName, currentY, alpha);
+        currentY += (int) (font.lineHeight * TITLE_SCALE) + LINE_SPACING;
+
+        // 2. 渲染作者信息
+        renderAuthor(context, font, currentY, alpha);
+        currentY += (int) (font.lineHeight * AUTHOR_SCALE) + LINE_SPACING;
+
+        // 3. 渲染地图描述
+        if (!mapDesc.isEmpty() && !mapDesc.equals("map." + mapId + ".desc")) {
+            renderDescription(context, font, SREClient.gameComponent.gameMode.getName().getString() + "\n" + mapDesc,
+                    currentY, alpha);
+        } else {
+            renderDescription(context, font, SREClient.gameComponent.gameMode.getName().getString(), currentY, alpha);
+        }
+
+        // 4. 渲染地图ID（最小号）
+        renderMapId(context, font, alpha);
+    }
+
+    /**
+     * 渲染地图标题
+     */
+    private static void renderTitle(FakeGuiGraphics context, Font font, String title, int y, int alpha) {
+        context.pose().pushPose();
+
+        // 应用位置和动画效果（含滑入偏移）
+        int titleX = LEFT_MARGIN + (int) titleOffsetX + (int) titleSlideX;
+        context.pose().translate(titleX, y, 0);
+
+        // 应用脉动缩放
+        float finalScale = TITLE_SCALE * titlePulse;
+        context.pose().scale(finalScale, finalScale, 1.0f);
+
+        // 标题阴影（轻微偏移）
+        int shadowColor = (alpha << 24) | 0x000000;
+        context.drawString(font, title, 1, 1, shadowColor, false);
+
+        // 标题主体（纯白）
+        int titleColor = (alpha << 24) | TITLE_COLOR;
+        context.drawString(font, title, 0, 0, titleColor, false);
+
+        context.pose().popPose();
+    }
+
+    /**
+     * 渲染作者信息
+     */
+    private static void renderAuthor(FakeGuiGraphics context, Font font, int y, int alpha) {
+        context.pose().pushPose();
+
+        int authorX = LEFT_MARGIN + (int) authorSlideX;
+        context.pose().translate(authorX, y, 0);
+        context.pose().scale(AUTHOR_SCALE, AUTHOR_SCALE, 1.0f);
+
+        String author = "allinTOKYO canyuesama haiman wifi_left guanzheqwq biantwin";
+
+        // 作者阴影
+        int shadowColor = (alpha << 24) | 0x000000;
+        context.drawString(font, author, 1, 1, shadowColor, false);
+
+        // 作者主体（浅灰）
+        int authorColor = (alpha << 24) | AUTHOR_COLOR;
+        context.drawString(font, author, 0, 0, authorColor, false);
+
+        context.pose().popPose();
+    }
+
+    /**
+     * 渲染地图描述
+     */
+    private static void renderDescription(FakeGuiGraphics context, Font font, String description, int y, int alpha) {
+        // 计算描述的最大宽度（屏幕宽度减去左边距）
+        int maxDescWidth = context.guiWidth() - LEFT_MARGIN - 20;
+
+        // 分割描述为多行
+        List<FormattedCharSequence> lines = font.split(Component.literal(description), maxDescWidth);
+
+        // 限制显示行数（最多2行）
+        int linesToShow = Math.min(2, lines.size());
+
+        context.pose().pushPose();
+        int descX = LEFT_MARGIN + (int) authorSlideX;
+        context.pose().translate(descX, y, 0);
+        context.pose().scale(DESC_SCALE, DESC_SCALE, 1.0f);
+
+        // 渲染每一行描述
+        for (int i = 0; i < linesToShow; i++) {
+            FormattedCharSequence line = lines.get(i);
+
+            // 如果是最后一行且有多行，添加省略号
+            if (i == linesToShow - 1 && lines.size() > linesToShow) {
+                String text = line.toString();
+                if (text.length() > 3) {
+                    text = text.substring(0, text.length() - 3) + "...";
+                    line = FormattedCharSequence.forward(text, Style.EMPTY);
+                }
+            }
+
+            // 行阴影
+            int shadowColor = (alpha << 24) | 0x000000;
+            context.drawString(font, line, 1, 1 + i * (font.lineHeight + LINE_SPACING), shadowColor, false);
+
+            // 行主体（中灰色）
+            int lineColor = (alpha << 24) | DESC_COLOR;
+            context.drawString(font, line, 0, 0 + i * (font.lineHeight + LINE_SPACING), lineColor, false);
+        }
+
+        context.pose().popPose();
+    }
+
+    /**
+     * 渲染地图ID
+     */
+    private static void renderMapId(FakeGuiGraphics context, Font font, int alpha) {
+        int screenWidth = context.guiWidth();
+        int screenHeight = context.guiHeight();
+
+        // 地图ID显示在右下角（小字）
+        String mapIdDisplay = "MAP: " + mapId;
+        int mapIdWidth = font.width(mapIdDisplay);
+        int mapIdX = screenWidth - mapIdWidth - 20;
+        int mapIdY = screenHeight - 30;
+
+        // ID阴影
+        int shadowColor = (alpha << 24) | 0x000000;
+        context.drawString(font, mapIdDisplay, mapIdX + 1, mapIdY + 1, shadowColor, false);
+
+        // ID主体（浅灰色）
+        int idColor = (alpha << 24) | 0x888888;
+        context.drawString(font, mapIdDisplay, mapIdX, mapIdY, idColor, false);
+    }
+
+    /**
+     * 设置要显示的地图详情
+     */
+    public static void setMapDetails(String mapId, String mapDescription, String mapAuthor) {
+        MapDetailsRenderer.mapId = mapId;
+        MapDetailsRenderer.mapDescription = mapDescription;
+        MapDetailsRenderer.mapAuthor = mapAuthor != null ? mapAuthor : "";
+        displayStartTime = System.currentTimeMillis() + GameConstants.FADE_TIME / 20 * 1000;
+
+        // 重置动画状态
+        titleOffsetX = 0f;
+        titlePulse = 1.0f;
+        titleSlideX = 0f;
+        authorSlideX = 0f;
+        currentBarHeightRatio = 0f;
+    }
+
+    /**
+     * 设置要显示的地图详情（兼容旧版本）
+     */
+    public static void setMapDetails(String mapId, String mapDescription) {
+        setMapDetails(mapId, mapDescription, "");
+    }
+
+    /**
+     * 清除当前显示的地图详情
+     */
+    public static void clearMapDetails() {
+        mapId = "";
+        mapDescription = "";
+        mapAuthor = "";
+        currentBarHeightRatio = 0f;
+        titleSlideX = 0f;
+        authorSlideX = 0f;
+    }
+
+    /**
+     * 触发显示当前地图详情
+     */
+    public static void triggerMapDetails(String mapId) {
+        AtomicReference<String> displayName = new AtomicReference<>(mapId);
+        AtomicReference<String> description = new AtomicReference<>("");
+        AtomicReference<String> author = new AtomicReference<>("");
+
+        MapConfig.getInstance().getMaps().stream()
+                .filter(map -> map.id.equals(mapId))
+                .findFirst()
+                .ifPresent(map -> {
+                    displayName.set(map.displayName);
+                    description.set(map.description);
+                    author.set("allinTOKYO canyuesama haiman wifi_left guanzheqwq biantwin Luo_Ye_Ruo_Shui");
+                });
+
+        setMapDetails(mapId, description.get(), author.get());
+    }
+}

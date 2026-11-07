@@ -1,0 +1,819 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.api;
+
+import io.wifi.starrailexpress.api.RoleSkill.AnnounceInfo.AnnounceContext;
+import io.wifi.starrailexpress.api.RoleSkill.AnnounceInfo.AnnounceType;
+import io.wifi.starrailexpress.SRE;
+import io.wifi.starrailexpress.cca.SREAbilityPlayerComponent;
+import io.wifi.starrailexpress.cca.SRERoleWorldComponent;
+import io.wifi.starrailexpress.cca.SREAbilityPlayerComponent.SkillState;
+import io.wifi.starrailexpress.event.OnRoleSkillUse;
+import io.wifi.starrailexpress.game.SkillCastAnnounce;
+import net.minecraft.ChatFormatting;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.player.Player;
+
+import org.agmas.noellesroles.AbilityHandler;
+import org.agmas.noellesroles.init.ModEffects;
+import org.jetbrains.annotations.Nullable;
+
+import java.util.*;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.Predicate;
+
+/**
+ * Unified role skill registry.
+ *
+ * Legacy one-handler registration remains supported. New code should register
+ * one or more {@link Definition}s so cooldowns, charges, input phases and HUD
+ * state all use the same path.
+ */
+public final class RoleSkill {
+    public enum Phase {
+        PRESS,
+        HOLD,
+        RELEASE
+    }
+
+    public record RoleSkillContext(
+            ServerPlayer player,
+            @Nullable UUID target,
+            ResourceLocation skillId,
+            Phase phase,
+            boolean skillReady, Definition definition, SREAbilityPlayerComponent abilityCCA) {
+        public RoleSkillContext(ServerPlayer player, @Nullable UUID target) {
+            this(player, target, ResourceLocation.withDefaultNamespace("legacy"), Phase.PRESS, true, null,
+                    SREAbilityPlayerComponent.KEY.get(player));
+        }
+
+        public void setSkillCooldown(int ticks) {
+            if (definition == null)
+                return;
+            abilityCCA.setSkillCooldown(definition.id(), ticks);
+        }
+
+        public void addCharges(int charges) {
+            if (definition == null)
+                return;
+            abilityCCA.addSkillCharges(definition, charges);
+        }
+
+        /**
+         * 技能的冷却、charges、使用次数等信息
+         * 
+         * @return
+         */
+        public SkillState skillState() {
+            if (definition == null)
+                return null;
+            return abilityCCA.getSkillState(definition.id());
+        }
+
+        @Nullable
+        public ServerPlayer getTargetAsPlayer() {
+            if (target() == null)
+                return null;
+            return player.serverLevel().getPlayerByUUID(target()) instanceof ServerPlayer sp ? sp : null;
+        }
+
+        @Nullable
+        public <T extends Entity> T getTargetAs(Class<T> clazz) {
+            final var level = player.serverLevel();
+            if (target() == null)
+                return null;
+            var entity = level.getEntity(target());
+            if (entity == null)
+                return null;
+            if (clazz.isInstance(entity)) {
+                return clazz.cast(entity);
+            }
+            return null;
+        }
+
+        public void displayNoTargetMessage() {
+            player.displayClientMessage(
+                    Component.translatable("tip.noellesroles.no_target").withStyle(ChatFormatting.RED), true);
+        }
+    }
+
+    @FunctionalInterface
+    public interface Handler {
+        boolean use(RoleSkillContext context);
+    }
+
+    public static class AnnounceInfo {
+        public AnnounceType type;
+        public Function<AnnounceContext, Component> suppilier = (ctx) -> {
+            MutableComponent stateLabel;
+            if (ctx.definition.toggleable() && !ctx.skillReady) {
+                stateLabel = Component.translatable("message.sre.skill.toggled_off",
+                        Component.translatable(ctx.definition.nameKey()));
+            } else {
+                if (ctx.target() != null && ctx.definition().withTarget()) {
+                    stateLabel = Component.translatable("message.sre.skill.cast_with_target",
+                            ctx.target().getName(),
+                            Component.translatable(ctx.definition.nameKey()),
+                            ctx.skillState.castCount);
+                } else {
+                    stateLabel = Component.translatable("message.sre.skill.cast",
+                            Component.translatable(ctx.definition.nameKey()),
+                            ctx.skillState.castCount);
+                }
+            }
+            return stateLabel.withStyle(ChatFormatting.AQUA);
+        };
+        public Consumer<AnnounceContext> consumer;
+
+        public static enum AnnounceType {
+            ANNOUNCE_TO_SELF,
+            CUSTOM_CONSUMER,
+            NONE
+        }
+
+        public static record AnnounceContext(ServerPlayer player, Definition definition, SkillState skillState,
+                boolean skillReady, @Nullable ServerPlayer target) {
+        }
+
+        public Component getMessage(AnnounceContext context) {
+            return suppilier.apply(context);
+        }
+
+        public static AnnounceInfo none() {
+            return new AnnounceInfo(AnnounceType.NONE);
+        }
+
+        public static AnnounceInfo announceToSelf() {
+            return new AnnounceInfo(AnnounceType.ANNOUNCE_TO_SELF);
+        }
+
+        public AnnounceInfo(AnnounceType type) {
+            this.type = type;
+        }
+
+        public AnnounceInfo(AnnounceType type, Function<AnnounceContext, Component> suppilier) {
+            this.type = type;
+            this.suppilier = suppilier;
+        }
+
+        public void doAnnounce(ServerPlayer player, Definition definition, SkillState skillState, boolean skillReady,
+                UUID targetUid) {
+            if (type == AnnounceType.NONE)
+                return;
+            final var level = player.serverLevel();
+            final var target = targetUid != null ? level.getServer().getPlayerList().getPlayer(targetUid) : null;
+            final var ctx = new AnnounceContext(player, definition, skillState, skillReady, target);
+            if (type == AnnounceType.CUSTOM_CONSUMER) {
+                if (this.consumer != null) {
+                    this.consumer.accept(ctx);
+                } else {
+                    throw new IllegalArgumentException("No announcement consumer provided!");
+                }
+            } else {
+                if (suppilier == null) {
+                    throw new IllegalArgumentException("No announcement suppilier provided!");
+                }
+                if (type == AnnounceType.ANNOUNCE_TO_SELF) {
+                    player.displayClientMessage(getMessage(ctx), true);
+                }
+            }
+        }
+    }
+
+    public record Definition(
+            ResourceLocation id,
+            String nameKey,
+            int cooldownTicks,
+            int maxCharges,
+            boolean continuous,
+            int holdIntervalTicks,
+            boolean noCastCCA,
+            AnnounceInfo announceInfo,
+            boolean toggleable,
+            boolean shifted,
+            boolean modeSwitch,
+            boolean showOnHud,
+            boolean withTarget,
+            Predicate<Entity> targetType,
+            boolean haveRecord,
+            boolean widgetSkill,
+            Handler handler,
+            Component recordName) {
+        public Definition {
+            if (id == null || nameKey == null || handler == null) {
+                throw new IllegalArgumentException("Skill id, name key and handler are required");
+            }
+            cooldownTicks = Math.max(0, cooldownTicks);
+            holdIntervalTicks = Math.max(1, holdIntervalTicks);
+            if (maxCharges == 0 || maxCharges < -1) {
+                throw new IllegalArgumentException("maxCharges must be -1 or greater than 0");
+            }
+        }
+
+        public static Builder builder(ResourceLocation id, String nameKey, Handler handler) {
+            return new Builder(id, nameKey, handler);
+        }
+    }
+
+    public static final class Builder {
+        private final ResourceLocation id;
+        private final String nameKey;
+        private final Handler handler;
+        private int cooldownTicks;
+        private boolean noCastCCA = false;
+        private boolean haveRecord = false;
+        private boolean withTarget = false;
+        private int maxCharges = -1;
+        private boolean continuous;
+        private int holdIntervalTicks = 1;
+        private AnnounceInfo announceInfo = AnnounceInfo.none();
+        private boolean toggleable;
+        private boolean shifted;
+        private boolean modeSwitch;
+        private boolean showOnHud = false;
+        private Component recordName;
+        private boolean widgetSkill = false;
+        private Predicate<Entity> targetType = (entity) -> entity instanceof Player;
+
+        private Builder(ResourceLocation id, String nameKey, Handler handler) {
+            this.id = id;
+            this.nameKey = nameKey;
+            this.handler = handler;
+        }
+
+        public Builder recordReplay() {
+            return recordReplay(true);
+        }
+
+        public Builder recordReplay(boolean flag) {
+            haveRecord = flag;
+            return this;
+        }
+
+        public Builder withTarget(boolean flag) {
+            withTarget = flag;
+            return this;
+        }
+
+        public Builder targetType(Predicate<Entity> test) {
+            targetType = test;
+            return this;
+        }
+
+        /** 背包物品栏中触发技能（或自定义技能处理） */
+        public Builder widgetSkill() {
+            widgetSkill = true;
+            return this;
+        }
+
+        public Builder withTarget() {
+            withTarget = true;
+            return this;
+        }
+
+        public Builder cooldownTicks(int ticks) {
+            this.cooldownTicks = ticks;
+            return this;
+        }
+
+        public Builder noCastCCA(boolean flag) {
+            noCastCCA = flag;
+            return this;
+        }
+
+        public Builder cooldownSeconds(int seconds) {
+            return cooldownTicks(seconds * 20);
+        }
+
+        public Builder charges(int charges) {
+            this.maxCharges = charges;
+            return this;
+        }
+
+        /**
+         * 这个API很怪。想使用请尽量不要在Builder 设置 cd，否则无法使用。
+         */
+        public Builder continuous(int intervalTicks) {
+            this.continuous = true;
+            this.holdIntervalTicks = intervalTicks;
+            return this;
+        }
+
+        public Builder customAnnounce(Function<AnnounceContext, Component> suppilier) {
+            this.announceInfo.suppilier = suppilier;
+            this.announceInfo.type = AnnounceType.ANNOUNCE_TO_SELF;
+            return this;
+        }
+
+        public Builder customAnnounce(Consumer<AnnounceContext> consumer) {
+            this.announceInfo.consumer = consumer;
+            this.announceInfo.type = AnnounceType.CUSTOM_CONSUMER;
+            return this;
+        }
+
+        public Builder announceInfo(AnnounceInfo announceInfo) {
+            this.announceInfo = announceInfo;
+            return this;
+        }
+
+        public Builder announcement(AnnounceType type) {
+            this.announceInfo.type = type;
+            return this;
+        }
+
+        public Builder noAnnouncement() {
+            this.announceInfo.type = AnnounceType.NONE;
+            return this;
+        }
+
+        public Builder announceToSelf() {
+            this.announceInfo.type = AnnounceType.ANNOUNCE_TO_SELF;
+
+            return this;
+        }
+
+        public Builder announceToSelf(boolean announce) {
+            if (announce) {
+                this.announceInfo.type = AnnounceType.ANNOUNCE_TO_SELF;
+            } else {
+                this.announceInfo.type = AnnounceType.NONE;
+            }
+            return this;
+        }
+
+        /**
+         * Allow this skill's handler to run even while on cooldown, for toggle-style
+         * deactivation.
+         */
+        public Builder toggleable(boolean toggleable) {
+            this.toggleable = toggleable;
+            return this;
+        }
+
+        /**
+         * Mark this skill as triggered only when the player is sneaking (shift + G).
+         * Excluded from V-key cycling.
+         */
+        public Builder shifted(boolean shifted) {
+            this.shifted = shifted;
+            return this;
+        }
+
+        /**
+         * 标记此技能为「模式切换」，切换技能键可直接触发它。
+         * 仅用于纯粹的模式/槽位切换（如小偷的偷窃/潜行模式），
+         * 不要标记任何有实际效果的技能——否则切换键会误放技能。
+         */
+        public Builder modeSwitch(boolean modeSwitch) {
+            this.modeSwitch = modeSwitch;
+            return this;
+        }
+
+        /**
+         * Whether this skill should appear on the HUD. Defaults to false. Set true for
+         * skills that need HUD display.
+         */
+        public Builder showOnHud(boolean showOnHud) {
+            this.showOnHud = showOnHud;
+            return this;
+        }
+
+        /**
+         * 指定技能的字面显示名（用于回放直接显示用户填写的技能名，而非当作翻译键解析）。
+         * 可为 null / 空串，此时回放回退用 nameKey 翻译。
+         */
+        public Builder recordName(Component recordName) {
+            this.recordName = recordName;
+            return this;
+        }
+
+        public Definition build() {
+            return new Definition(id, nameKey, cooldownTicks, maxCharges, continuous,
+                    holdIntervalTicks, noCastCCA, announceInfo, toggleable, shifted, modeSwitch, showOnHud, withTarget,
+                    targetType,
+                    haveRecord, widgetSkill,
+                    handler, recordName);
+        }
+    }
+
+    /** Global registry entry for every skill definition, keyed by skill id. */
+    public record SkillEntry(ResourceLocation skillId, ResourceLocation roleId, String nameKey) {
+    }
+
+    private static final Map<ResourceLocation, Consumer<RoleSkillContext>> LEGACY_SKILLS = new HashMap<>();
+    private static final Map<ResourceLocation, List<Definition>> UNIFIED_SKILLS = new HashMap<>();
+    private static final Map<ResourceLocation, SkillEntry> SKILL_REGISTRY = new HashMap<>();
+    /**
+     * 已在组件内部直接调用 onPlayerUsedSkill 记录技能释放的职业，
+     * 统一技能入口记录时需排除，避免同一技能双重记录。
+     */
+    private static final java.util.Set<String> ROLE_SKILL_REPLAY_EXCLUDED = java.util.Set.of(
+            "noellesroles:thief",
+            "noellesroles:candlebearer",
+            "noellesroles:bomber",
+            "noellesroles:blood_feudist",
+            "noellesroles:clockmaker",
+            "noellesroles:fortuneteller",
+            "noellesroles:noisemaker",
+            "noellesroles:builder",
+            "noellesroles:trapper",
+            "noellesroles:musician_phantom",
+            "xiaoheihand:super_loose_end");
+
+    private RoleSkill() {
+    }
+
+    public static Builder skill(ResourceLocation id, String nameKey, Handler handler) {
+        return Definition.builder(id, nameKey, handler);
+    }
+
+    /** 注册即能（会自动合并） */
+    public static void register(ResourceLocation role, Definition... definitions) {
+        if (role == null || definitions == null || definitions.length == 0) {
+            throw new IllegalArgumentException("Role and at least one skill definition are required");
+        }
+        List<Definition> presentSkills = UNIFIED_SKILLS.get(role);
+        List<Definition> skills = new ArrayList<>();
+        if (presentSkills != null && !presentSkills.isEmpty()) {
+            SRE.LOGGER.error("The skills of the role {} has already been registered!", role.toString());
+        }
+        Collections.addAll(skills, definitions);
+        validateUniqueIds(role, skills);
+        UNIFIED_SKILLS.put(role, List.copyOf(skills));
+        for (Definition def : definitions) {
+            SKILL_REGISTRY.put(def.id(), new SkillEntry(def.id(), role, def.nameKey()));
+        }
+    }
+
+    public static void register(SRERole role, Definition... definitions) {
+        register(role.identifier(), definitions);
+    }
+
+    public static List<Definition> getDefinitions(ResourceLocation role) {
+        return UNIFIED_SKILLS.getOrDefault(role, List.of());
+    }
+
+    public static List<Definition> getDefinitions(SRERole role) {
+        return role == null ? List.of() : getDefinitions(role.identifier());
+    }
+
+    public static boolean hasUnifiedSkills(ResourceLocation role) {
+        return role != null && !getDefinitions(role).isEmpty();
+    }
+
+    public static boolean hasUnifiedSkills(SRERole role) {
+        return role != null && hasUnifiedSkills(role.identifier());
+    }
+
+    /** Look up a skill by its global id. */
+    public static Optional<SkillEntry> getSkillEntry(ResourceLocation skillId) {
+        return Optional.ofNullable(SKILL_REGISTRY.get(skillId));
+    }
+
+    /** Return all registered skill entries. */
+    public static Collection<SkillEntry> getAllSkills() {
+        return SKILL_REGISTRY.values();
+    }
+
+    public static boolean selectSkill(ServerPlayer player, int slot) {
+        SRERole role = getRole(player);
+        List<Definition> definitions = getSelectableDefinitions(role);
+        if (definitions.isEmpty()) {
+            return false;
+        }
+        int selected = Math.floorMod(slot, definitions.size());
+        SREAbilityPlayerComponent ability = SREAbilityPlayerComponent.KEY.get(player);
+        ability.selectSkill(selected, definitions);
+        player.displayClientMessage(Component.translatable(
+                "message.sre.skill.selected",
+                Component.translatable(definitions.get(selected).nameKey())), true);
+        return true;
+    }
+
+    /** Definitions that participate in V-key cycling (excludes shifted skills). */
+    public static List<Definition> getSelectableDefinitions(ResourceLocation role) {
+        return getDefinitions(role).stream()
+                .filter(d -> !d.shifted())
+                .toList();
+    }
+
+    public static List<Definition> getSelectableDefinitions(SRERole role) {
+        return role == null ? List.of() : getSelectableDefinitions(role.identifier());
+    }
+
+    /** 该职业的模式切换技能（若有），供切换技能键直接触发。 */
+    public static Optional<Definition> getModeSwitchDefinition(SRERole role) {
+        return getDefinitions(role).stream().filter(Definition::modeSwitch).findFirst();
+    }
+
+    public static boolean blockForSpectator(ServerPlayer player) {
+        return blockForSpectator(player, false);
+    }
+
+    /**
+     * 全局旁观者检查：回报该玩家是否为旁观者且不允许使用技能。
+     * 返回 true = 被拦截（不应释放技能）。
+     * 所有技能派发路径应在入口处调用此方法。
+     * 
+     * @param player       玩家
+     * @param ignoreEffect 忽略SKILL_BANED等技能effect
+     */
+    public static boolean blockForSpectator(ServerPlayer player, boolean ignoreEffect) {
+        if (!ignoreEffect && (player.hasEffect(ModEffects.SKILL_BANED) || player.hasEffect(ModEffects.SKILL_FREEZED))) {
+            return true;
+        }
+        // 退出重进过的人无法使用技能
+        if (SREAbilityPlayerComponent.KEY.get(player).hasExited()) {
+            player.displayClientMessage(
+                    Component.translatable("skill.noellesroles.unable_to_use_exited").withStyle(ChatFormatting.RED),
+                    true);
+            return true;
+        }
+        if (!player.isSpectator()) {
+            return false;
+        }
+        SRERole role = getRole(player);
+        if (role != null && role.canUseSkillWhileSpectator()) {
+            return false;
+        }
+        return true;
+    }
+
+    /** Convenience: use while respecting the player's current sneak state. */
+    public static boolean beginUseShifted(ServerPlayer player) {
+        return beginUse(player, null, -2, Phase.PRESS, player.isShiftKeyDown());
+    }
+
+    /**
+     * Convenience: use with target while respecting the player's current sneak
+     * state.
+     */
+    public static boolean beginUseShiftedWithTarget(ServerPlayer player, UUID target) {
+        return beginUse(player, target, -2, Phase.PRESS, player.isShiftKeyDown());
+    }
+
+    public static boolean beginUse(ServerPlayer player, @Nullable UUID target, int requestedSlot, Phase phase) {
+        return beginUse(player, target, requestedSlot, phase, false);
+    }
+
+    /**
+     * 以"被附身"方式释放该玩家技能：合法绕过 {@code SKILL_BANED} 拦截。
+     * 用于操纵师附身期间，以目标身份释放目标自身的技能（冷却记在目标身上）。
+     */
+    public static boolean beginUseIgnoreSkillBannedEffects(ServerPlayer player) {
+        return beginUse(player, null, -1, Phase.PRESS, player.isShiftKeyDown(), true);
+    }
+
+    public static boolean beginUse(ServerPlayer player, @Nullable UUID target, int requestedSlot, Phase phase,
+            boolean shifted) {
+        return beginUse(player, target, requestedSlot, phase, shifted, false);
+    }
+
+    /**
+     * 技能释放必须在服务端主线程执行：它会读写世界、CCA 组件与玩家状态。
+     *
+     * <p>所有已知入口本身就在主线程：Fabric 的
+     * {@code ServerPlayNetworkAddon.receive} 会把回调包进
+     * {@code MinecraftServer.execute(...)}，命令与假人 AI 亦在 tick 内调用。
+     * 因此这里<b>不再做跨线程推迟</b>（推迟会掩盖调用方违约，并且在推迟任务仍被判为非主线程时
+     * 会自我递归、把栈撑爆成 StackOverflowError），而是直接报错并放弃本次释放，让违约现场立刻可见。
+     */
+    public static boolean beginUse(ServerPlayer player, @Nullable UUID target, int requestedSlot, Phase phase,
+            boolean shifted, boolean ignoreEffect) {
+        if (player == null) {
+            return false;
+        }
+        var server = player.getServer();
+        // 必须主线程！（待测试）
+        if (server != null && !server.isSameThread()) {
+            // 只在违约路径构造 Throwable：它提供调用栈，日志会连同堆栈一起打印，
+            // 用来定位是哪条异步链路把技能释放甩到了非主线程。
+            Throwable callSite = new Throwable("off-thread RoleSkill.beginUse call-site");
+            SRE.LOGGER.error(
+                    "RoleSkill.beginUse rejected: called off the server thread. player={} thread={} runningThread={}",
+                    player.getScoreboardName(), Thread.currentThread().getName(),
+                    server.getRunningThread().getName(), callSite);
+            // 若判定用的不是全局那个 MinecraftServer，说明 isSameThread 读的是另一个实例的
+            // serverThread，属于误报而非真异步；这种情况下拒绝执行会误伤全部技能，必须暴露出来。
+            if (server != SRE.SERVER) {
+                SRE.LOGGER.error(
+                        "RoleSkill.beginUse thread check used an unexpected MinecraftServer instance. "
+                                + "playerServer={} playerServerThread={} SRE.SERVER={}",
+                        Integer.toHexString(System.identityHashCode(server)),
+                        server.getRunningThread().getName(),
+                        String.valueOf(SRE.SERVER));
+            }
+            return false;
+        }
+        SRERole role = getRole(player);
+        if (role == null) {
+            return false;
+        }
+        // 旁观者模式禁止使用技能（通过 canUseSkillWhileSpectator() 标记豁免）
+        if (blockForSpectator(player, ignoreEffect)) {
+            return false;
+        }
+        List<Definition> definitions = getDefinitions(role);
+        if (!definitions.isEmpty()) {
+            return useUnified(player, role, definitions, target, requestedSlot, phase, shifted);
+        }
+        if (phase != Phase.PRESS) {
+            return false;
+        }
+
+        if (!beforeUse(player, role)) {
+            return false;
+        }
+        Consumer<RoleSkillContext> consumer = LEGACY_SKILLS.get(role.identifier());
+        if (consumer != null) {
+            consumer.accept(new RoleSkillContext(player, target));
+        } else if (target != null) {
+            AbilityHandler.handlerWithTarget(player, target, ignoreEffect);
+        } else if (!RoleMethodDispatcher.callOnAbilityUse(player)) {
+            AbilityHandler.handler(player, ignoreEffect);
+        }
+        afterUse(player, role);
+        return true;
+    }
+
+    private static boolean useUnified(ServerPlayer player, SRERole role, List<Definition> definitions,
+            @Nullable UUID target, int requestedSlot, Phase phase, boolean shifted) {
+        SREAbilityPlayerComponent ability = SREAbilityPlayerComponent.KEY.get(player);
+
+        // Filter definitions by shifted state and select the right one
+        List<Definition> applicable = definitions.stream()
+                .filter(d -> d.shifted() == shifted)
+                .toList();
+        // 当蹲下时没有匹配的 shifted 技能，回退到非 shifted 技能。
+        // 某些角色（如布袋鬼）在 handler 内部自行判断蹲下以触发大招，
+        // 依赖 RoleSkill 统一入口把调用分发到 handler。
+        if (applicable.isEmpty() && shifted) {
+            applicable = definitions.stream()
+                    .filter(d -> !d.shifted() && !d.modeSwitch())
+                    .toList();
+        }
+        if (applicable.isEmpty()) {
+            return false;
+        }
+        int slot = requestedSlot;
+        if (slot < 0) {
+            slot = ability.getSelectedSkill();
+        }
+        slot = Math.floorMod(slot, applicable.size());
+        Definition definition = null;
+        final var skills = applicable;
+        if (requestedSlot == -2) {
+            definition = applicable.stream().filter((d) -> d.widgetSkill).findFirst().orElseGet(() -> skills.get(0));
+        } else {
+            definition = applicable.get(slot);
+        }
+
+        ability.ensureSkills(definitions);
+
+        boolean skillReady = ability.canUseSkill(definition.id());
+
+        if (phase == Phase.HOLD && !definition.continuous()) {
+            return false;
+        }
+        if (phase == Phase.HOLD && !skillReady) {
+            return false;
+        }
+        if (phase == Phase.HOLD && !ability.shouldRunHold(definition.id(), definition.holdIntervalTicks())) {
+            return false;
+        }
+        // RELEASE phase should only stop ongoing casting for continuous skills.
+        // Calling the handler on RELEASE is dangerous for toggleable skills:
+        // the skill just went on cooldown from PRESS, so skillReady=false,
+        // which causes toggleable handlers to deactivate (e.g. Phantom
+        // immediately removing the Invisibility it just applied).
+        if (phase == Phase.RELEASE) {
+            ability.stopCasting(definition.id());
+            return false;
+        }
+
+        if (phase == Phase.PRESS && !skillReady) {
+            // Toggleable skills can still fire while on cooldown (for deactivation)
+            if (!definition.toggleable()) {
+                ability.showUnavailableMessage(definition.id());
+                return false;
+            }
+        }
+        if (!beforeUse(player, role)) {
+            return false;
+        }
+
+        boolean used = definition.handler().use(
+                new RoleSkillContext(player, target, definition.id(), phase, skillReady, definition, ability));
+
+        if (!used) {
+            return false;
+        }
+        // 只有 handler 真正执行成功时才消耗冷却/充能
+        if (skillReady) {
+            ability.markSkillUsed(definition);
+        } else {
+            // Toggleable deactivation: just stop casting if applicable
+            ability.stopCasting(definition.id());
+        }
+        definition.announceInfo().doAnnounce(player, definition, ability.getSkillState(definition.id()),
+                skillReady, target);
+        if (phase == Phase.PRESS && skillReady) {
+            SkillCastAnnounce.tryAnnounce(player, role, definition);
+        }
+        afterUse(player, role);
+        // 回放记录：玩家释放技能（统一技能系统入口；以下角色已在组件内部记录，避免重复）
+        if (!ROLE_SKILL_REPLAY_EXCLUDED.contains(role.identifier().toString()) && !definition.toggleable()
+                && definition.haveRecord() && !definition.modeSwitch()) {
+            Component literalName = definition.recordName();
+            if (literalName != null) {
+                // 自定义职业等：优先显示用户填写的技能名（字面文本）
+                SRE.REPLAY_MANAGER.recordSkillUsed(player, literalName);
+            } else {
+                SRE.REPLAY_MANAGER.recordSkillUsedId(player, definition.nameKey(),
+                        definition.withTarget() ? target : null);
+            }
+        }
+        return true;
+    }
+
+    public static boolean unregister(ResourceLocation role) {
+        boolean legacy = LEGACY_SKILLS.remove(role) != null;
+        boolean unified = UNIFIED_SKILLS.remove(role) != null;
+        return legacy || unified;
+    }
+
+    public static boolean tryRegister(ResourceLocation role, Consumer<RoleSkillContext> handler) {
+        if (role == null || handler == null || isRegistered(role)) {
+            return false;
+        }
+        LEGACY_SKILLS.put(role, handler);
+        return true;
+    }
+
+    public static void register(ResourceLocation role, Consumer<RoleSkillContext> handler) {
+        if (!tryRegister(role, handler)) {
+            throw new IllegalStateException("The handler of role '" + role + "' is already registered");
+        }
+    }
+
+    /**
+     * 访问此应当在初始化中访问而非在static中直接调用，这很可能会因为role为null导致崩溃。
+     * 
+     * @param role
+     * @param handler
+     */
+    public static void register(SRERole role, Consumer<RoleSkillContext> handler) {
+        register(role.identifier(), handler);
+    }
+
+    public static boolean isRegistered(ResourceLocation role) {
+        return role != null && (LEGACY_SKILLS.containsKey(role) || UNIFIED_SKILLS.containsKey(role));
+    }
+
+    public static boolean isRegistered(SRERole role) {
+        return role != null && isRegistered(role.identifier());
+    }
+
+    public static boolean beforeUse(ServerPlayer player, SRERole role) {
+        if (!isRegistered(role)) {
+            return true;
+        }
+        return OnRoleSkillUse.BEFORE.invoker().onUse(player, role);
+    }
+
+    public static void afterUse(ServerPlayer player, SRERole role) {
+        if (!isRegistered(role)) {
+            return;
+        }
+        OnRoleSkillUse.AFTER.invoker().onUse(player, role);
+    }
+
+    private static SRERole getRole(ServerPlayer player) {
+        return SRERoleWorldComponent.KEY.get(player.level()).getRole(player);
+    }
+
+    private static void validateUniqueIds(ResourceLocation role, List<Definition> definitions) {
+        long unique = definitions.stream().map(Definition::id).distinct().count();
+        if (unique != definitions.size()) {
+            throw new IllegalArgumentException("Duplicate skill id registered for role " + role);
+        }
+    }
+}

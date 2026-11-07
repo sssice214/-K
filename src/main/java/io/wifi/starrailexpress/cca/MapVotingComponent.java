@@ -1,0 +1,403 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.cca;
+
+import io.wifi.starrailexpress.SRE;
+import io.wifi.starrailexpress.api.GameMode;
+import io.wifi.starrailexpress.api.SREGameModes;
+import io.wifi.starrailexpress.game.GameUtils;
+import io.wifi.starrailexpress.network.MapDepartCancelPayload;
+import io.wifi.starrailexpress.network.MapVotingResultsPayload;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.minecraft.core.HolderLookup;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.Tag;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.level.Level;
+import org.jetbrains.annotations.NotNull;
+import org.ladysnake.cca.api.v3.component.ComponentKey;
+import org.ladysnake.cca.api.v3.component.ComponentRegistry;
+import org.ladysnake.cca.api.v3.component.sync.AutoSyncedComponent;
+import org.ladysnake.cca.api.v3.component.tick.CommonTickingComponent;
+import org.spongepowered.asm.mixin.Overwrite;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
+
+public class MapVotingComponent implements AutoSyncedComponent, CommonTickingComponent {
+    private static final int RESULT_REVEAL_TICKS = 50;
+    public static final ComponentKey<MapVotingComponent> KEY = ComponentRegistry.getOrCreate(SRE.id("map_voting"),
+            MapVotingComponent.class);
+
+    private final Level world;
+    private boolean votingActive = false;
+    private boolean votingPaused = false;
+    private boolean votingSystemPaused = false;
+    private int votingTimeLeft = 0;
+    private int totalVotingTime = 0;
+    private String presetGameMode = "murder"; // 预设游戏模式，默认murder
+    private final Map<String, Integer> votes = new HashMap<>();
+    private final Map<UUID, String> playerVotes = new HashMap<>(); // 记录每个玩家的投票
+    private boolean shouldSync = false;
+    private long pendingGameStartTick = -1L;
+    private String pendingGameMode;
+
+    public MapVotingComponent(Level world) {
+        this.world = world;
+    }
+
+    @Override
+    public void readFromNbt(@NotNull CompoundTag tag, HolderLookup.Provider provider) {
+        this.votingActive = tag.getBoolean("VotingActive");
+        this.votingPaused = tag.getBoolean("VotingPaused");
+        this.votingSystemPaused = tag.getBoolean("VotingSystemPaused");
+        this.votingTimeLeft = tag.getInt("VotingTimeLeft");
+        this.totalVotingTime = tag.getInt("TotalVotingTime");
+        this.presetGameMode = tag.getString("PresetGameMode");
+        if (this.presetGameMode.isEmpty()) {
+            this.presetGameMode = "murder"; // 默认值
+        }
+
+        // 读取投票数据
+        this.votes.clear();
+        ListTag votesList = tag.getList("Votes", Tag.TAG_COMPOUND);
+        for (int i = 0; i < votesList.size(); i++) {
+            CompoundTag voteTag = votesList.getCompound(i);
+            String mapId = voteTag.getString("MapId");
+            int count = voteTag.getInt("Count");
+            this.votes.put(mapId, count);
+        }
+    }
+
+    @Override
+    public void writeToNbt(@NotNull CompoundTag tag, HolderLookup.Provider provider) {
+        tag.putBoolean("VotingActive", this.votingActive);
+        tag.putBoolean("VotingPaused", this.votingPaused);
+        tag.putBoolean("VotingSystemPaused", this.votingSystemPaused);
+        tag.putInt("VotingTimeLeft", this.votingTimeLeft);
+        tag.putInt("TotalVotingTime", this.totalVotingTime);
+        tag.putString("PresetGameMode", this.presetGameMode);
+
+        // 写入投票数据
+        ListTag votesList = new ListTag();
+        for (Map.Entry<String, Integer> entry : this.votes.entrySet()) {
+            CompoundTag voteTag = new CompoundTag();
+            voteTag.putString("MapId", entry.getKey());
+            voteTag.putInt("Count", entry.getValue());
+            votesList.add(voteTag);
+        }
+        tag.put("Votes", votesList);
+    }
+
+    @Override
+    public void tick() {
+        if (!world.isClientSide && pendingGameStartTick >= 0L && world.getGameTime() >= pendingGameStartTick) {
+            startPendingGame();
+        }
+        // 检查是否需要同步投票状态
+        if (shouldSync) {
+            sync();
+            shouldSync = false;
+        }
+
+        // 处理投票倒计时
+        if (world != null && world.isClientSide && votingActive && !votingSystemPaused && !votingPaused) {
+            votingTimeLeft--;
+        } else if (world != null && votingActive && !votingSystemPaused && !votingPaused) {
+            votingTimeLeft--;
+            if (votingTimeLeft <= 0) {
+                finishVoting();
+                sync();
+            } else {
+                // 每10秒同步一次倒计时
+                if (votingTimeLeft % 200 == 0) {
+                    shouldSync = true;
+                }
+            }
+        }
+    }
+
+    @Overwrite
+    public boolean shouldSyncWith(ServerPlayer serverPlayer) {
+        // return this.world != serverPlayer.level();
+        return true;
+    }
+
+    public void sync() {
+        if (world != null) {
+            KEY.sync(world);
+        }
+    }
+
+    // Getters
+    public boolean isVotingActive() {
+        return votingActive;
+    }
+
+    public boolean isVotingPaused() {
+        return votingPaused;
+    }
+
+    public int getVotingTimeLeft() {
+        return votingTimeLeft;
+    }
+
+    public int getTotalVotingTime() {
+        return totalVotingTime;
+    }
+
+    public String getPresetGameMode() {
+        return presetGameMode;
+    }
+
+    public int getVoteCount(String mapId) {
+        return votes.getOrDefault(mapId, 0);
+    }
+
+    public Map<String, Integer> getAllVotes() {
+        return new HashMap<>(votes);
+    }
+
+    // Setters with sync capability
+    public void setVotingActive(boolean active) {
+        this.votingActive = active;
+        this.shouldSync = true;
+    }
+
+    public void setVotingPaused(boolean paused) {
+        this.votingPaused = paused;
+        this.shouldSync = true;
+    }
+
+    public void setVotingTimeLeft(int timeLeft) {
+        this.votingTimeLeft = timeLeft;
+        this.shouldSync = true;
+    }
+
+    public void setTotalVotingTime(int totalTime) {
+        this.totalVotingTime = totalTime;
+        this.shouldSync = true;
+    }
+
+    public boolean isVotingSystemPaused() {
+        return votingSystemPaused;
+    }
+
+    public void setVotingSystemPaused(boolean paused) {
+        this.votingSystemPaused = paused;
+        this.shouldSync = true;
+    }
+
+    public void setPresetGameMode(String presetGameMode) {
+        this.presetGameMode = presetGameMode;
+        this.shouldSync = true;
+    }
+
+    // 投票管理方法
+    public boolean voteForMap(UUID playerId, String mapId) {
+        if (!votingActive || votingPaused) {
+            return false;
+        }
+
+        // 如果玩家之前投过票，撤销之前的投票
+        String previousVote = playerVotes.get(playerId);
+        if (previousVote != null) {
+            int currentCount = votes.getOrDefault(previousVote, 0);
+            if (currentCount > 0) {
+                votes.put(previousVote, currentCount - 1);
+            }
+        }
+
+        // 记录新投票
+        playerVotes.put(playerId, mapId);
+        votes.put(mapId, votes.getOrDefault(mapId, 0) + 1);
+        // this.shouldSync = true;
+
+        return true;
+    }
+
+    public String getMostVotedMap() {
+        if (votes.isEmpty()) {
+            return "random"; // 默认返回随机地图
+        }
+
+        int maxVotes = 0;
+        String topMap = "random";
+        for (Map.Entry<String, Integer> entry : votes.entrySet()) {
+            if (entry.getValue() > maxVotes) {
+                maxVotes = entry.getValue();
+                topMap = entry.getKey();
+            } else if (entry.getValue() == maxVotes) {
+                // 如果有多个相同票数的地图，随机选择
+                if (Math.random() > 0.5) {
+                    topMap = entry.getKey();
+                }
+            }
+        }
+
+        return topMap;
+    }
+
+    public void startVoting(int votingTimeSeconds) {
+        if (world instanceof ServerLevel serverLevel)
+            io.wifi.starrailexpress.settlement.SettlementManager.stopAll(serverLevel.getServer());
+        reset();
+        this.votingActive = true;
+        this.votingPaused = false;
+        this.votingTimeLeft = votingTimeSeconds;
+        this.totalVotingTime = votingTimeSeconds;
+        this.shouldSync = true;
+    }
+
+    public void pauseVoting() {
+        if (votingActive && !votingPaused) {
+            this.votingPaused = true;
+            this.shouldSync = true;
+        }
+    }
+
+    public void resumeVoting() {
+        if (votingActive && votingPaused) {
+            this.votingPaused = false;
+            this.shouldSync = true;
+        }
+    }
+
+    public void stopVoting() {
+        this.votingActive = false;
+        this.votingPaused = false;
+        this.votingTimeLeft = 0;
+        this.shouldSync = true;
+    }
+
+    private void finishVoting() {
+
+        votingActive = false;
+
+        // 获取得票最多地图
+        String winningMap = getMostVotedMap();
+
+        // 在服务器上执行函数
+        MinecraftServer server = SRE.SERVER;
+        if (SREGameWorldComponent.KEY.get(world).isRunning()) {
+            // 已经启动了不要启动。
+            return;
+        }
+        if (world instanceof ServerLevel serverWorld
+                && GameUtils.getStartingPlayerCount(serverWorld) < resolveGameModeObject().minPlayerCount) {
+            // 人数不足以启动该模式：不发车、不换图，通知客户端关闭地图投票的铺黑显示。
+            if (server != null) {
+                int need = resolveGameModeObject().minPlayerCount;
+                for (ServerPlayer p : server.getPlayerList().getPlayers()) {
+                    ServerPlayNetworking.send(p, new MapDepartCancelPayload());
+                    p.displayClientMessage(
+                            Component.translatable("game.start_error.sre.not_enough_players", need), true);
+                }
+            }
+            this.shouldSync = true;
+            return;
+        }
+        if (server != null) {
+
+            if (!winningMap.equals("random")) {
+                // 加载对应地图
+                server.getCommands().performPrefixedCommand(server.createCommandSourceStack(),
+                        "tmm:switchmap load '" + winningMap + "'");
+            } else {
+                server.getCommands().performPrefixedCommand(server.createCommandSourceStack(),
+                        "tmm:switchmap random");
+            }
+            // 执行投票结束函数
+            server.getCommands().performPrefixedCommand(server.createCommandSourceStack(),
+                    "function harpymodloader:vote_over");
+
+            pendingGameMode = resolveGameMode();
+            pendingGameStartTick = world.getGameTime() + RESULT_REVEAL_TICKS;
+        }
+
+        if (server == null) {
+            SRE.LOGGER.error("投票结束时服务器实例不可用，无法展示结果或开始游戏");
+            this.shouldSync = true;
+            return;
+        }
+
+        // 随机投票在 switchmap 执行后解析为实际地图，保证介绍读取正确配置。
+        String loadedMap = AreasWorldComponent.KEY.get(world).mapName;
+        String resultMap = "random".equals(winningMap) && loadedMap != null && !loadedMap.isBlank()
+                ? loadedMap
+                : winningMap;
+        MapVotingResultsPayload payload = new MapVotingResultsPayload(resultMap);
+        for (var player : server.getPlayerList().getPlayers()) {
+            ServerPlayNetworking.send(player, payload);
+        }
+
+        this.shouldSync = true;
+    }
+
+    public void reset() {
+        this.votingActive = false;
+        this.votingTimeLeft = 0;
+        this.totalVotingTime = 0;
+        this.votes.clear();
+        this.playerVotes.clear();
+        this.pendingGameStartTick = -1L;
+        this.pendingGameMode = null;
+        this.shouldSync = true;
+    }
+
+    private String resolveGameMode() {
+        String resultGameMode = SREGameModes.MURDER.identifier.toString();
+        for (ResourceLocation key : SREGameModes.GAME_MODES.keySet()) {
+            if (key.getPath().equals(presetGameMode)) {
+                return key.toString();
+            }
+        }
+        return resultGameMode;
+    }
+
+    private GameMode resolveGameModeObject() {
+        for (ResourceLocation key : SREGameModes.GAME_MODES.keySet()) {
+            if (key.getPath().equals(presetGameMode)) {
+                GameMode mode = SREGameModes.GAME_MODES.get(key);
+                if (mode != null) {
+                    return mode;
+                }
+            }
+        }
+        return SREGameModes.MURDER;
+    }
+
+    private void startPendingGame() {
+        String mode = pendingGameMode;
+        pendingGameStartTick = -1L;
+        pendingGameMode = null;
+        MinecraftServer server = SRE.SERVER;
+        if (server == null || mode == null || SREGameWorldComponent.KEY.get(world).isRunning()) {
+            return;
+        }
+        try {
+            server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), "tmm:start " + mode);
+        } catch (Exception e) {
+            SRE.LOGGER.error("投票结果展示后自动开始游戏失败", e);
+        }
+    }
+}

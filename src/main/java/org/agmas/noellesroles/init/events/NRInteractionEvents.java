@@ -1,0 +1,395 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.agmas.noellesroles.init.events;
+
+import io.wifi.starrailexpress.api.data.RoleData;
+import io.wifi.starrailexpress.cca.SREGameWorldComponent;
+import io.wifi.starrailexpress.content.item.StandardRevolverItem;
+import io.wifi.starrailexpress.event.*;
+import io.wifi.starrailexpress.game.roles.SpecialGameModeRoles;
+import io.wifi.starrailexpress.index.SREDataComponentTypes;
+import io.wifi.starrailexpress.rules.*;
+import net.fabricmc.fabric.api.event.player.UseEntityCallback;
+import net.fabricmc.fabric.api.event.player.UseBlockCallback;
+import net.fabricmc.fabric.api.event.player.UseItemCallback;
+import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
+import net.minecraft.ChatFormatting;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.InteractionResultHolder;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
+import org.agmas.harpymodloader.component.WorldModifierComponent;
+import org.agmas.harpymodloader.events.ModdedRoleRemoved;
+import org.agmas.noellesroles.commands.BroadcastCommand;
+import org.agmas.noellesroles.component.DeathPenaltyComponent;
+import org.agmas.noellesroles.component.ModComponents;
+import org.agmas.noellesroles.content.item.*;
+import org.agmas.noellesroles.events.OnShopPurchase;
+import org.agmas.noellesroles.events.OnVendingMachinesBuyItems;
+import org.agmas.noellesroles.game.roles.killer.conspirator.ConspiratorKilledPlayer;
+import org.agmas.noellesroles.game.roles.innocence.insurance.InsuranceRoleHandler;
+import org.agmas.noellesroles.game.roles.innocence.waiter.WaiterRole;
+import org.agmas.noellesroles.role_data.innocence.CakeMakerRoleData;
+import org.agmas.noellesroles.role_data.killer.InsaneKillerRoleData;
+import org.agmas.noellesroles.role_data.killer.NinjaRoleData;
+import org.agmas.noellesroles.game.roles.neutral.commander.CommanderHandler;
+import org.agmas.noellesroles.role_data.neutral.CupidRoleData;
+import org.agmas.noellesroles.role_data.neutral.DoomedSinnerRoleData;
+import org.agmas.noellesroles.TrueKillerFinder;
+import org.agmas.noellesroles.role_data.neutral.GodfatherRoleData;
+import org.agmas.noellesroles.ModDataComponentTypes;
+import org.agmas.noellesroles.init.*;
+import org.agmas.noellesroles.role.ModRoles;
+import org.agmas.noellesroles.role.touhou.THRedHouseRoles;
+import org.agmas.noellesroles.utils.EntityClearUtils;
+import org.agmas.noellesroles.utils.MapScanner;
+import org.agmas.noellesroles.utils.RoleUtils;
+import pro.fazeclan.river.stupid_express.constants.SEModifiers;
+import pro.fazeclan.river.stupid_express.modifier.refugee.cca.PlayerStatsBeforeRefugee;
+import pro.fazeclan.river.stupid_express.modifier.refugee.cca.RefugeeComponent;
+import pro.fazeclan.river.stupid_express.modifier.split_personality.cca.SplitPersonalityComponent;
+
+import java.util.*;
+
+/**
+ * 玩家交互、聊天、商店、角色组件注册事件处理
+ */
+public class NRInteractionEvents {
+
+    public static void register() {
+        registerUseEntityCallbacks();
+        registerWaiterCallbacks();
+        registerUseItemCallback();
+        registerShopEvents();
+        registerChatEvents();
+        registerDropRules();
+        registerMiscRules();
+        registerRoleComponentEvents();
+        registerOtherEvents();
+    }
+
+    // --- UseEntityCallback ---
+
+    private static void registerUseEntityCallbacks() {
+        UseEntityCallback.EVENT.register((player, world, hand, entity, hitResult) ->
+                WaiterRole.tryFeed(player, world, hand, entity)
+                        ? InteractionResult.SUCCESS : InteractionResult.PASS);
+        // 蛋糕师：原料输入 + 蛋糕食用
+        UseEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
+            if (world.isClientSide || hand != InteractionHand.MAIN_HAND)
+                return InteractionResult.PASS;
+
+            // 烟熏炉交互方块 - 添加原料
+            if (CakeMakerRoleData.isSmokerInteractionEntity(entity)) {
+                UUID ownerId = CakeMakerRoleData.getSmokerOwner(entity);
+                if (ownerId != null && ownerId.equals(player.getUUID())) {
+                    CakeMakerRoleData cakeMaker = RoleData.getNullable(CakeMakerRoleData.class, player);
+                    if (cakeMaker != null && cakeMaker.addIngredient(player, entity)) {
+                        return InteractionResult.SUCCESS;
+                    }
+                }
+            }
+
+            // 蛋糕交互实体 - 食用
+            if (CakeMakerRoleData.isCakeInteractionEntity(entity)) {
+                if (player.isSpectator())
+                    return InteractionResult.PASS;
+                UUID ownerId = CakeMakerRoleData.getCakeOwner(entity);
+                if (ownerId != null) {
+                    ServerPlayer cakeOwner = world.getServer().getPlayerList().getPlayer(ownerId);
+                    if (cakeOwner != null) {
+                        CakeMakerRoleData cakeMaker = RoleData.getNullable(CakeMakerRoleData.class, cakeOwner);
+                        if (cakeMaker != null && cakeMaker.eat(entity, (ServerPlayer) player)) {
+                            return InteractionResult.SUCCESS;
+                        }
+                    }
+                }
+            }
+            return InteractionResult.PASS;
+        });
+
+        // 手铐交互 - 警长阵营，或开启了取用手铐能力的职业（黑警 / 程序员等）可取下他人手铐
+        UseEntityCallback.EVENT.register((player, level, interactionHand, entity, entityHitResult) -> {
+            if (player.isSpectator())
+                return InteractionResult.PASS;
+            var gameC = SREGameWorldComponent.KEY.get(level);
+            var playerRole = gameC.getRole(player);
+            if (playerRole == null || !playerRole.canTakeOffHandcuffs(player))
+                return InteractionResult.PASS;
+            if (HandCuffsItem.hasHandCuff(player))
+                return InteractionResult.PASS;
+            if (entity instanceof Player target) {
+                if (HandCuffsItem.hasHandCuff(target)) {
+                    if (!player.getMainHandItem().isEmpty())
+                        return InteractionResult.PASS;
+                    var fkit = HandCuffsItem.putOffHandCuff(target);
+                    if (fkit == null)
+                        return InteractionResult.FAIL;
+                    RoleUtils.insertStackInFreeSlot(player, fkit.copy());
+                    player.displayClientMessage(
+                            Component.translatable("item.noellesroles.handcuffs.put_off", target.getName())
+                                    .withStyle(ChatFormatting.GREEN),
+                            true);
+                    target.displayClientMessage(Component
+                            .translatable("item.noellesroles.handcuffs.reciever_put_off", player.getName())
+                            .withStyle(ChatFormatting.GREEN), true);
+                    return InteractionResult.SUCCESS;
+                }
+            }
+            return InteractionResult.PASS;
+        });
+    }
+
+    private static void registerWaiterCallbacks() {
+        UseBlockCallback.EVENT.register((player, world, hand, hit) -> {
+            if (WaiterRole.tryPurifyTray(player, world, hand, hit.getBlockPos())) {
+                return InteractionResult.SUCCESS;
+            }
+            return WaiterRole.tryTakeFromTray(player, world, hand, hit.getBlockPos())
+                    ? InteractionResult.SUCCESS : InteractionResult.PASS;
+        });
+    }
+
+    // --- UseItemCallback ---
+
+    private static void registerUseItemCallback() {
+        // 老人复活节彩蛋鱼竿 - 召唤骑乘猪
+        UseItemCallback.EVENT.register((player, world, hand) -> {
+            ItemStack stack = player.getItemInHand(hand);
+            if (!RoleShopHandler.isOldmanEasterEggRod(stack)) {
+                return InteractionResultHolder.pass(stack);
+            }
+            if (RoleShopHandler.hasUsedOldmanEasterEggRod(stack)) {
+                return InteractionResultHolder.pass(stack);
+            }
+            if (world.isClientSide()) {
+                return InteractionResultHolder.success(stack);
+            }
+
+            var pig = EntityType.PIG.create(world);
+            if (pig == null) {
+                return InteractionResultHolder.fail(stack);
+            }
+            pig.moveTo(player.getX(), player.getY(), player.getZ(), player.getYRot(), 0f);
+            if (pig instanceof net.minecraft.world.entity.Saddleable saddleable) {
+                saddleable.equipSaddle(ItemStack.EMPTY, null);
+            }
+            var pigStepHeight = pig.getAttribute(Attributes.STEP_HEIGHT);
+            if (pigStepHeight != null) {
+                pigStepHeight.setBaseValue(0.5D);
+            }
+            var pigJumpStrength = pig.getAttribute(Attributes.JUMP_STRENGTH);
+            if (pigJumpStrength != null) {
+                pigJumpStrength.setBaseValue(0.0D);
+            }
+            pig.addTag(RoleShopHandler.OLDMAN_EASTER_EGG_PIG_NO_STEP_TAG);
+            world.addFreshEntity(pig);
+            RoleShopHandler.markOldmanEasterEggRodUsed(stack);
+            return InteractionResultHolder.success(stack);
+        });
+    }
+
+    // --- 商店事件 ---
+
+    private static void registerShopEvents() {
+        // 吝啬 - 商店购买返还
+        OnShopPurchase.EVENT.register((player, entry, price) -> {
+            org.agmas.noellesroles.role.ModifierEffects
+                    .onStingyPurchase((ServerPlayer) player, price);
+        });
+
+        // 一次性左轮购买限制
+        OnVendingMachinesBuyItems.EVENT.register((player, itemStack) -> {
+            var gameWorldComponent = SREGameWorldComponent.KEY.get(player.level());
+            if (itemStack.stack().is(ModItems.ONCE_REVOLVER)) {
+                var role = gameWorldComponent.getRole(player);
+                if (role != null) {
+                    if (role.isInnocent() && role.canPickUpRevolver() && !role.isNeutrals()) {
+                        return true;
+                    } else if (role == SpecialGameModeRoles.DIRT) {
+                        return true;
+                    } else if (role == ModRoles.LIN_FAMILY) {
+                        return true;
+                    } else {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        });
+    }
+
+    // --- 聊天事件 ---
+
+    private static void registerChatEvents() {
+        // 分裂人格聊天广播
+        ServerMessageEvents.ALLOW_CHAT_MESSAGE.register((message, serverPlayer, bound) -> {
+            if (!WorldModifierComponent.KEY.get(serverPlayer.level()).isModifier(serverPlayer,
+                    SEModifiers.SPLIT_PERSONALITY))
+                return true;
+            var spc = SplitPersonalityComponent.KEY.get(serverPlayer);
+            if (!spc.isDeath()) {
+                ServerPlayer mainP = serverPlayer.server.getPlayerList().getPlayer(spc.getMainPersonality());
+                ServerPlayer secondP = serverPlayer.server.getPlayerList().getPlayer(spc.getSecondPersonality());
+                if (mainP == null || secondP == null)
+                    return true;
+                var broadcastMessage = Component
+                        .translatable("message.split_personality.broadcast_prefix",
+                                Component.literal("").append(serverPlayer.getDisplayName())
+                                        .withStyle(ChatFormatting.AQUA),
+                                Component.literal(message.signedContent()).withStyle(ChatFormatting.WHITE))
+                        .withStyle(ChatFormatting.GOLD);
+                BroadcastCommand.BroadcastMessage(mainP, broadcastMessage);
+                BroadcastCommand.BroadcastMessage(secondP, broadcastMessage);
+            }
+            return true;
+        });
+
+        // 聊天禁止药水效果
+        ServerMessageEvents.ALLOW_CHAT_MESSAGE.register((message, serverPlayer, bound) -> {
+            if (serverPlayer.hasEffect(ModEffects.CHAT_BAN)) {
+                return false;
+            }
+            return true;
+        });
+    }
+
+    // --- 掉落规则 ---
+
+    private static void registerDropRules() {
+        DropRules.canDrop.add((player) -> {
+            var mainHandItem = player.getMainHandItem();
+            if (mainHandItem.is(ModItems.INSURANCE)) {
+                return InsuranceRoleHandler.isInsuranceClerk(player);
+            }
+            if (mainHandItem.is(ModItems.NEWSPAPER)) {
+                if (mainHandItem.has(SREDataComponentTypes.WRITTEN_BOOK_CONTENT))
+                    return true;
+            }
+            var gameWorldComponent = SREGameWorldComponent.KEY.get(player.level());
+            if (gameWorldComponent.isRole(player, THRedHouseRoles.BAKA)) {
+                if (mainHandItem.is(FunnyItems.PROBLEM_SET))
+                    return true;
+            }
+            if (gameWorldComponent.isRole(player, ModRoles.CHEF)) {
+                if (mainHandItem.get(ModDataComponentTypes.COOKED) != null)
+                    return true;
+            }
+            if (mainHandItem.is(ModItems.RADIO))
+                return true;
+            if (RoleShopHandler.isOldmanEasterEggRod(mainHandItem))
+                return true;
+            if (gameWorldComponent.isRole(player, ModRoles.LIN_FAMILY)) {
+                return !org.agmas.noellesroles.role_data.neutral.LinFamilyRoleData.isKey(mainHandItem);
+            }
+            return false;
+        });
+    }
+
+    // --- 杂项规则 ---
+
+    private static void registerMiscRules() {
+        // 观战者不能发送回放
+        ReplayRules.cantSendReplay.add(player -> {
+            DeathPenaltyComponent component = ModComponents.DEATH_PENALTY.get(player);
+            if (component != null && component.hasPenalty())
+                return true;
+            return false;
+        });
+
+        // 防弹衣可被穿透的死亡原因
+        ArmorRules.canStickArmor.add((deathInfo -> {
+            String path = deathInfo.deathReason().getPath();
+            return path.equals("ignited") || path.equals("hoan_meirin_lonely")
+                    || path.equals("voodoo") || path.equals("shot_innocent");
+        }));
+
+        // 观战者不能使用聊天HUD
+        ChatHudRules.cantUseChatHud.add((p) -> {
+            var deathPenalty = ModComponents.DEATH_PENALTY.get(p);
+            if (deathPenalty.hasPenalty() && deathPenalty.chatEnabled == false)
+                return true;
+            return false;
+        });
+
+        // 可见毒药
+        CanSeePoison.EVENT.register((player) -> {
+            SREGameWorldComponent gameWorldComponent = SREGameWorldComponent.KEY.get(player.level());
+            if (gameWorldComponent.isRole((Player) player, ModRoles.BARTENDER)
+                    || gameWorldComponent.isRole((Player) player, ModRoles.WAITER))
+                return true;
+            if (gameWorldComponent.isRole((Player) player, ModRoles.POISONER))
+                return true;
+            return false;
+        });
+    }
+
+    // --- 角色组件事件注册 ---
+
+    private static void registerRoleComponentEvents() {
+        DoomedSinnerRoleData.registerEvents();
+        GodfatherRoleData.registerEvents();
+        StandardRevolverItem.registerEvents();
+        RefugeeComponent.register();
+        NinjaRoleData.registerEvents();
+        org.agmas.noellesroles.role_data.killer.NostalgistRoleData.registerEvents();
+        org.agmas.noellesroles.role_data.killer.WraithAssassinRoleData.registerEvents();
+        org.agmas.noellesroles.role_data.killer.StalkerRoleData.registerEvents();
+        org.agmas.noellesroles.role_data.killer.DelayerRoleData.registerEvents();
+        CupidRoleData.registerEvents();
+        CommanderHandler.registerChatEvent();
+        InsaneKillerRoleData.registerEvent();
+        ConspiratorKilledPlayer.registerEvents();
+        org.agmas.noellesroles.game.roles.neutral.infected.InfectedWinChecker.registerEvent();
+        EntityClearUtils.registerResetEvent();
+        org.agmas.noellesroles.game.roles.innocence.photographer.PhotographerFrameEvents.register();
+        org.agmas.noellesroles.game.roles.innocence.photographer.RoundPhotoCleanup.register();
+        MapScanner.registerMapScanEvent();
+        XiaoNaoHandler.registerEvent();
+        org.agmas.noellesroles.role_data.innocence.AwesomeRoleData.registerEvents();
+        org.agmas.noellesroles.role_data.innocence.ReturnTravelerRoleData.registerEvents();
+        TrueKillerFinder.registerEvents();
+
+        // 难民逃生前状态保存
+        PlayerStatsBeforeRefugee.beforeLoadFunc = (player) -> {
+            ModComponents.DEATH_PENALTY.get(player).init();
+        };
+
+        // 精神病杀手职业移除清理
+        ModdedRoleRemoved.EVENT.register((player, role) -> {
+            if (role != null && role.identifier().equals(ModRoles.INSANE_KILLER.identifier())) {
+                InsaneKillerRoleData insaneData = RoleData.getNullable(InsaneKillerRoleData.class, player);
+                if (insaneData != null) {
+                    insaneData.clear();
+                }
+            }
+        });
+
+        ModRolesInitialEventRegister.register();
+    }
+
+    // --- 其他事件 ---
+
+    private static void registerOtherEvents() {
+        // 漫游者事件
+        org.agmas.noellesroles.role_data.neutral.WayfarerRoleData.registerEvents();
+    }
+}

@@ -1,0 +1,313 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.api;
+
+import io.wifi.starrailexpress.SREConfig;
+import io.wifi.starrailexpress.cca.SREAbilityPlayerComponent;
+import io.wifi.starrailexpress.cca.SREGameWorldComponent;
+import io.wifi.starrailexpress.cca.SREPlayerPsychoComponent;
+import io.wifi.starrailexpress.cca.SREPlayerShopComponent;
+import io.wifi.starrailexpress.cca.SRERoleDataPlayerComponent;
+import io.wifi.starrailexpress.game.GameConstants;
+import io.wifi.starrailexpress.progression.ProgressionDataManager;
+import io.wifi.starrailexpress.util.TrueFalseResult;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.InteractionResultHolder;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.phys.BlockHitResult;
+
+import org.agmas.noellesroles.component.ModComponents;
+import org.jetbrains.annotations.Nullable;
+import org.ladysnake.cca.api.v3.component.ComponentKey;
+
+/**
+ * 角色方法调度器，用于调用角色的各个方法
+ */
+public class RoleMethodDispatcher {
+
+    /**
+     * 调用玩家角色的 onDeath 方法
+     */
+    public static void callOnDeath(Player victim, boolean spawnBody, @Nullable Player killer,
+            ResourceLocation deathReason, boolean forceDeath) {
+        SRERole role = getCurrentRole(victim);
+        if (role != null) {
+            role.onDeath(victim, spawnBody, killer, deathReason, forceDeath);
+        }
+    }
+
+    /**
+     * 调用玩家角色的 onKill 方法
+     */
+    public static void callOnKill(Player victim, boolean spawnBody, @Nullable Player killer,
+            ResourceLocation deathReason) {
+        SRERole role = getCurrentRole(killer);
+        if (role != null) {
+            role.onKill(victim, spawnBody, killer, deathReason);
+        }
+    }
+
+    /**
+     * 调用玩家角色的 onFinishQuest 方法（带连击奖励）
+     */
+    public static void callOnFinishQuest(Player player, String quest, int taskStreak) {
+        callOnFinishQuest(player, quest, taskStreak, false);
+    }
+
+    /**
+     * 调用玩家角色的 onFinishQuest 方法（带连击奖励和并列任务支持）
+     */
+    public static void callOnFinishQuest(Player player, String quest, int taskStreak, boolean isParallelTask) {
+        SRERole role = getCurrentRole(player);
+        ProgressionDataManager.onRoundQuestFinished(player, quest);
+        if (role != null) {
+            // 计算连击奖励
+            int streakBonus = Math.min(taskStreak * GameConstants.STREAK_BONUS_PER_LEVEL,
+                    GameConstants.MAX_STREAK_BONUS);
+            // 并列任务奖励倍率
+            float rewardMultiplier = isParallelTask ? GameConstants.PARALLEL_TASK_REWARD_MULTIPLIER : 1f;
+            boolean grantDefaultMoney = true;
+            if (player.level() instanceof ServerLevel serverLevel) {
+                var gameMode = SREGameWorldComponent.KEY.get(serverLevel).getGameMode();
+                if (gameMode != null) {
+                    grantDefaultMoney = gameMode.shouldGrantDefaultQuestMoneyOnFinish();
+                }
+            }
+            // 平民/中立完成任务：本人获得金币，并以此喂养场上所有杀手（任务驱动收入）
+            if (grantDefaultMoney && (role.isInnocent() || role.isNeutrals())) {
+                SREPlayerShopComponent shopComponent = SREPlayerShopComponent.KEY.get(player);
+                int reward = (int) ((SREConfig.instance().civilianTaskReward + streakBonus) * rewardMultiplier);
+                // 金币账本：完成任务收入（必须先于余额变动登记，供兜底认领）
+                org.agmas.noellesroles.game.economy.MoneyFlow.recordIncome(player,
+                        org.agmas.noellesroles.game.economy.MoneyFlow.IncomeType.TASK, reward);
+                shopComponent.addToBalance(reward);
+            } else if (grantDefaultMoney && role.isKiller() && !role.isNeutrals() && !role.isInnocent()) {
+                // 任意杀手完成一个任务 -> 每个杀手获得 killerTaskIncome
+                int killerGain = (int) (SREConfig.instance().killerTaskIncome * rewardMultiplier);
+                if (killerGain > 0) {
+                    player.level().players().forEach(a -> {
+                        SRERole aRole = getCurrentRole(a);
+                        if (aRole != null && aRole.canUseKiller() && !aRole.isNeutrals() && !aRole.isInnocent()) {
+                            // 金币账本：杀手任务收入
+                            org.agmas.noellesroles.game.economy.MoneyFlow.recordIncome(a,
+                                    org.agmas.noellesroles.game.economy.MoneyFlow.IncomeType.TASK, killerGain);
+                            SREPlayerShopComponent.KEY.get(a).addToBalance(killerGain);
+                        }
+                    });
+                }
+            }
+            // 杀手自己的伪装任务不再产生收入（防止杀手互刷）
+            role.onFinishQuest(player, quest);
+        }
+    }
+
+    /**
+     * 调用玩家角色的 onFinishQuest 方法（无连击，兼容旧调用）
+     */
+    public static void callOnFinishQuest(Player player, String quest) {
+        callOnFinishQuest(player, quest, 0);
+    }
+
+    public static void onStartGame(ServerLevel serverLevel) {
+        serverLevel.players().forEach(
+                player -> {
+                    TMMRoles.COMPONENT_KEYS.forEach(
+                            componentKey -> {
+                                RoleComponent roleComponent = componentKey.maybeGet(player).orElse(null);
+                                if (roleComponent != null) {
+                                    roleComponent.clear();
+                                    componentKey.sync(player);
+                                }
+                            });
+                });
+    }
+
+    public static void onEndGame(ServerLevel serverLevel) {
+        serverLevel.players().forEach(
+                player -> {
+                    TMMRoles.COMPONENT_KEYS.forEach(
+                            componentKey -> {
+                                RoleComponent roleComponent = componentKey.maybeGet(player).orElse(null);
+                                if (roleComponent != null) {
+                                    roleComponent.clear();
+                                    componentKey.sync(player);
+                                }
+                            });
+                });
+    }
+
+    /**
+     * 调用玩家角色的 onPickupItem 方法
+     */
+    public static TrueFalseResult callOnPickupItem(Player player, ItemStack item) {
+        // 持有警长左轮时，禁止捡起其他枪械（按 guns tag 判断）
+
+        SRERole role = getCurrentRole(player);
+        if (role != null) {
+            return role.onPickUpItem(player, item);
+        }
+        return TrueFalseResult.PASS;
+    }
+
+    public static InteractionResult callOnDropItem(Player player, ItemStack item) {
+        SRERole role = getCurrentRole(player);
+        if (role != null) {
+            return role.onDropItem(player, item);
+        }
+        return InteractionResult.PASS;
+    }
+
+    /**
+     * 调用玩家角色的 serverTick 方法
+     */
+
+    public static void callServerTick(ServerPlayer player) {
+        var gameComponent = io.wifi.starrailexpress.cca.SREGameWorldComponent.KEY.get(player.level());
+        callServerTick(player, gameComponent);
+    }
+
+    public static void callServerTick(ServerPlayer player, SREGameWorldComponent gameComponent) {
+        SRERole role = gameComponent.getRole(player);
+        if (role != null) {
+            role.serverGameTickEvent(player, gameComponent);
+        }
+    }
+
+    public static void onRemoveRole(SRERole role, MinecraftServer server, ServerPlayer serverPlayer) {
+
+        if (role == null) {
+            return;
+        }
+        SREPlayerPsychoComponent.KEY.get(serverPlayer).stopPsychoIfNeccessary();
+        if (role != null) {
+            role.onRemove(serverPlayer);
+        }
+        final var cca = SRERoleDataPlayerComponent.KEY.get(serverPlayer);
+        cca.onRemoveRole();
+    }
+
+    public static void onInit(SRERole role, MinecraftServer minecraftServer, ServerPlayer player) {
+        if (role == null) {
+            return;
+        }
+        SREAbilityPlayerComponent abilityComponent = ModComponents.ABILITY.get(player);
+        abilityComponent.init();
+
+        if (role.isAutoReset()) {
+            ComponentKey<? extends RoleComponent> componentKey = role.getComponentKey();
+            if (componentKey != null) {
+                RoleComponent component = componentKey.maybeGet(player).orElse(null);
+                if (component != null) {
+                    component.init();
+                }
+            }
+        }
+
+        {
+            final var cca = SRERoleDataPlayerComponent.KEY.get(player);
+            cca.init();
+        }
+
+        role.onInit(minecraftServer, player);
+    }
+
+    /**
+     * 调用玩家角色的 clientTick 方法
+     */
+    public static void callClientTick(Player player) {
+        var gameComponent = io.wifi.starrailexpress.cca.SREGameWorldComponent.KEY.get(player.level());
+        SRERole role = gameComponent.getRole(player);
+        if (role != null) {
+            role.clientGameTickEvent(player, gameComponent);
+        }
+    }
+
+    /**
+     * 调用玩家角色的 rightClickEntity 方法
+     */
+    public static InteractionResult callRightClickEntity(Player player, Entity victim) {
+        SRERole role = getCurrentRole(player);
+        if (role != null) {
+            return role.rightClickEntity(player, victim);
+        }
+        return InteractionResult.PASS;
+    }
+
+    /**
+     * 调用玩家角色的 leftClickEntity 方法
+     */
+    public static InteractionResult callLeftClickEntity(Player player, Entity victim) {
+        SRERole role = getCurrentRole(player);
+        if (role != null) {
+            return role.leftClickEntity(player, victim);
+        }
+        return InteractionResult.PASS;
+    }
+
+    /**
+     * 调用玩家角色的 onItemUse 方法
+     */
+    public static InteractionResultHolder<ItemStack> callOnItemUse(Player player, Level world, InteractionHand hand) {
+        SRERole role = getCurrentRole(player);
+        if (role != null) {
+            return role.onItemUse(player, world, hand);
+        }
+        return InteractionResultHolder.pass(ItemStack.EMPTY);
+    }
+
+    /**
+     * 调用玩家角色的 onAbilityUse 方法
+     */
+    public static boolean callOnAbilityUse(ServerPlayer player) {
+        SRERole role = getCurrentRole(player);
+        if (role != null) {
+            return role.onAbilityUse(player);
+        }
+        return false;
+    }
+
+    /**
+     * 调用玩家角色的 onUseBlock 方法
+     */
+    public static InteractionResult callOnUseBlock(Player player, Level world, InteractionHand hand,
+            BlockHitResult hitResult) {
+        SRERole role = getCurrentRole(player);
+        if (role != null) {
+            return role.onUseBlock(player, world, hand, hitResult);
+        }
+        return InteractionResult.PASS;
+    }
+
+    /**
+     * 获取玩家当前的角色
+     */
+    private static SRERole getCurrentRole(Player player) {
+        if (player.level() == null) {
+            return null;
+        }
+
+        var gameComponent = io.wifi.starrailexpress.cca.SREGameWorldComponent.KEY.get(player.level());
+        return gameComponent.getRole(player);
+    }
+}

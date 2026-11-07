@@ -1,0 +1,570 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.api.replay;
+
+import io.wifi.starrailexpress.SRE;
+import io.wifi.starrailexpress.api.SRERole;
+import io.wifi.starrailexpress.api.TMMRoles;
+import io.wifi.starrailexpress.api.replay.ReplayEventTypes.*;
+import io.wifi.starrailexpress.cca.SREGameWorldComponent;
+import io.wifi.starrailexpress.game.GameConstants;
+import io.wifi.starrailexpress.index.TMMItems;
+import net.minecraft.ChatFormatting;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.Items;
+
+import java.util.*;
+
+public class GameReplayData {
+    private int playerCount;
+    private List<UUID> civilianPlayers;
+    private List<UUID> killerPlayers;
+    private List<UUID> vigilantePlayers;
+    private List<UUID> looseEndPlayers;
+    private UUID winningPlayer;
+    private String winningTeam;
+    private final List<ReplayEvent> timeline;
+    private Map<UUID, String> playerRoles;
+    public MutableComponent winningTitle = null;
+
+    public GameReplayData() {
+        this.playerCount = 0;
+        this.civilianPlayers = new ArrayList<>();
+        this.killerPlayers = new ArrayList<>();
+        this.vigilantePlayers = new ArrayList<>();
+        this.looseEndPlayers = new ArrayList<>();
+        this.timeline = new ArrayList<>();
+        this.playerRoles = new HashMap<>();
+    }
+
+    public void setPlayerCount(int playerCount) {
+        this.playerCount = playerCount;
+    }
+
+    public void setCivilianPlayers(List<UUID> civilianPlayers) {
+        this.civilianPlayers = civilianPlayers;
+    }
+
+    public void setKillerPlayers(List<UUID> killerPlayers) {
+        this.killerPlayers = killerPlayers;
+    }
+
+    public void setVigilantePlayers(List<UUID> vigilantePlayers) {
+        this.vigilantePlayers = vigilantePlayers;
+    }
+
+    public void setLooseEndPlayers(List<UUID> looseEndPlayers) {
+        this.looseEndPlayers = looseEndPlayers;
+    }
+
+    public void setWinningPlayer(UUID winningPlayer) {
+        this.winningPlayer = winningPlayer;
+    }
+
+    public void setWinningTeam(String winningTeam) {
+        this.winningTeam = winningTeam;
+    }
+
+    public void addEvent(ReplayEvent event) {
+
+        this.timeline.add(event);
+    }
+
+    public int getPlayerCount() {
+        return playerCount;
+    }
+
+    public List<UUID> getCivilianPlayers() {
+        return civilianPlayers;
+    }
+
+    public List<UUID> getKillerPlayers() {
+        return killerPlayers;
+    }
+
+    public List<UUID> getVigilantePlayers() {
+        return vigilantePlayers;
+    }
+
+    public List<UUID> getLooseEndPlayers() {
+        return looseEndPlayers;
+    }
+
+    public UUID getWinningPlayer() {
+        return winningPlayer;
+    }
+
+    public MutableComponent getWinningTitle() {
+        if (winningTitle == null) {
+            return Component.translatable("announcement.star.win." + getWinningTeam().toLowerCase());
+        }
+        return winningTitle;
+    }
+
+    public String getWinningTeam() {
+        return winningTeam;
+    }
+
+    public List<ReplayEvent> getTimeline() {
+        return timeline;
+    }
+
+    public Map<UUID, String> getPlayerRoles() {
+        return playerRoles;
+    }
+
+    public void setPlayerRoles(Map<UUID, String> playerRoles) {
+        this.playerRoles = playerRoles;
+    }
+
+    /**
+     * 开局记录的职业；若开局未写入，则回退到该玩家第一条换职记录的旧职业。
+     */
+    public String getInitialPlayerRoleId(UUID playerUid) {
+        if (playerUid == null) {
+            return null;
+        }
+        String roleId = playerRoles == null ? null : playerRoles.get(playerUid);
+        if (roleId != null && !roleId.isBlank()) {
+            return roleId;
+        }
+        if (timeline == null) {
+            return null;
+        }
+        for (ReplayEvent event : timeline) {
+            String[] parts = parseChangeRoleMessage(event, playerUid);
+            if (parts != null && !parts[0].isBlank()) {
+                return parts[0];
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 还原玩家在时间线某条事件发生时的职业。
+     * ReplayEvent 记录了相关玩家当时的职业
+     */
+    public String resolvePlayerRoleId(UUID playerUid, GameReplayData.ReplayEvent event) {
+        if (playerUid == null) {
+            return null;
+        }
+        String roleId = getInitialPlayerRoleId(playerUid);
+        if (event == null) {
+            return null;
+        }
+        if (event.roles != null && event.roles.containsKey(playerUid)) {
+            return event.roles.get(playerUid).toString();
+        }
+        return roleId;
+    }
+
+    public String resolvePlayerRoleId(UUID playerUid, TimelineReplayEvent event) {
+        if (playerUid == null) {
+            return null;
+        }
+        String roleId = getInitialPlayerRoleId(playerUid);
+        if (event == null) {
+            return null;
+        }
+        if (event.roles() != null && event.roles().containsKey(playerUid)) {
+            return event.roles().get(playerUid).toString();
+        }
+        return roleId;
+    }
+
+    private static String[] parseChangeRoleMessage(ReplayEvent event, UUID playerUid) {
+        if (event == null || event.getType() != EventType.CHANGE_ROLE) {
+            return null;
+        }
+        if (!playerUid.equals(event.getSourcePlayer())) {
+            return null;
+        }
+        String message = event.getMessage();
+        if (message == null || message.isBlank()) {
+            return null;
+        }
+        String[] parts = message.split("===", 2);
+        if (parts.length == 2) {
+            return parts;
+        }
+        return new String[] { "", message };
+    }
+
+    public static final Map<ResourceLocation, Item> DEATH_REASON_TO_ITEM = new HashMap<>();
+
+    static {
+        DEATH_REASON_TO_ITEM.put(GameConstants.DeathReasons.BAT, TMMItems.BAT);
+        DEATH_REASON_TO_ITEM.put(GameConstants.DeathReasons.REVOLVER, TMMItems.REVOLVER);
+        DEATH_REASON_TO_ITEM.put(GameConstants.DeathReasons.DERRINGER, TMMItems.DERRINGER);
+        DEATH_REASON_TO_ITEM.put(GameConstants.DeathReasons.KNIFE, TMMItems.KNIFE);
+        DEATH_REASON_TO_ITEM.put(GameConstants.DeathReasons.GRENADE, TMMItems.GRENADE);
+        DEATH_REASON_TO_ITEM.put(GameConstants.DeathReasons.POISON, TMMItems.POISON_VIAL);
+        DEATH_REASON_TO_ITEM.put(GameConstants.DeathReasons.ARROW, Items.ARROW);
+        DEATH_REASON_TO_ITEM.put(GameConstants.DeathReasons.TRIDENT, Items.TRIDENT);
+        DEATH_REASON_TO_ITEM.put(GameConstants.DeathReasons.FIREWORK_CROSSBOW, Items.CROSSBOW);
+        DEATH_REASON_TO_ITEM.put(GameConstants.DeathReasons.KATANA, org.agmas.noellesroles.init.ModItems.KATANA);
+        // 注意：FELL_OUT_OF_TRAIN 和 GENERIC 没有对应物品
+    }
+
+    public Component toText(GameReplayManager manager, GameReplayData replayData,
+            io.wifi.starrailexpress.api.replay.TimelineReplayEvent event) {
+        if (event == null)
+            return null;
+        UUID sourcePlayer = null;
+        UUID targetPlayer = null;
+        Component itemUsedText = null;
+        String message = null;
+        Component Role_1 = null;
+        Component Role_2 = null;
+        // 根据 EventDetails 类型提取信息
+        if (event
+                .details() instanceof PlayerKillDetails(UUID killerUuid, UUID victimUuid, ResourceLocation deathReason)) {
+            sourcePlayer = killerUuid;
+            targetPlayer = victimUuid;
+            itemUsedText = GameReplayUtils.getItemDisplayName(deathReason);
+        } else if (event.details() instanceof PlayerPoisonedDetails(UUID poisonerUuid, UUID victimUuid)) {
+            sourcePlayer = poisonerUuid;
+            targetPlayer = victimUuid;
+            itemUsedText = GameReplayUtils.getItemDisplayName(GameConstants.DeathReasons.POISON); // 假设中毒事件使用毒药物品
+        } else if (event.details() instanceof TaskCompleteDetails(UUID playerUuid, ResourceLocation taskId)) {
+            sourcePlayer = playerUuid;
+            itemUsedText = Component.translatable("sre.task." + taskId.getPath());
+        } else if (event.details() instanceof StoreBuyDetails(UUID playerUuid, ResourceLocation itemId, int cost)) {
+            sourcePlayer = playerUuid;
+            itemUsedText = GameReplayUtils.getItemDisplayName(itemId);
+            message = String.valueOf(cost);
+        } else if (event.details() instanceof DoorActionDetails details) {
+            sourcePlayer = details.playerUuid();
+            message = String.valueOf(details.doorPos()); // 可以考虑更友好的门位置显示
+        } else if (event.details() instanceof LockpickAttemptDetails details) {
+            sourcePlayer = details.playerUuid();
+            message = String.valueOf(details.success());
+        } else if (event.details() instanceof ItemUsedDetails(UUID playerUuid, ResourceLocation itemId)) {
+            sourcePlayer = playerUuid;
+            itemUsedText = GameReplayUtils.getItemDisplayName(itemId);
+        } else if (event.details() instanceof MoodChangeDetails(UUID playerUuid, int oldMood, int newMood)) {
+            sourcePlayer = playerUuid;
+            message = String.format("%d -> %d", oldMood, newMood);
+        } else if (event.details() instanceof PsychoStateChangeDetails(UUID playerUuid, int oldState, int newState)) {
+            sourcePlayer = playerUuid;
+            message = String.format("%d -> %d", oldState, newState);
+        } else if (event.details() instanceof BlackoutEventDetails(long duration)) {
+            message = String.valueOf(duration);
+        } else if (event
+                .details() instanceof GrenadeThrownDetails(UUID playerUuid, net.minecraft.core.BlockPos position)) {
+            sourcePlayer = playerUuid;
+            message = String.valueOf(position);
+        } else if (event.details() instanceof ChangeRoleDetails roleDetail) {
+            sourcePlayer = roleDetail.player();
+            // 统一使用权威阵营颜色（RoleTeam）：特殊中立 / 事件中立 / 独立胜利中立等细分不再塌缩成黄色
+            Role_1 = GameReplayUtils.getRoleNameWithRoleColor(roleDetail.oldRole());
+            Role_2 = GameReplayUtils.getRoleNameWithRoleColor(roleDetail.newRole());
+            // message = ;
+        } else if (event.details() instanceof PlayerRevivalDetails revivalDetails) {
+            sourcePlayer = revivalDetails.player();
+            String r = revivalDetails.role();
+            if (r == null || r.isBlank()) {
+                r = replayData.resolvePlayerRoleId(sourcePlayer, event);
+            }
+            if (r == null || r.isBlank()) {
+                SRERole trole = null;
+                try {
+                    if (SRE.SERVER != null) {
+                        trole = SREGameWorldComponent.KEY.get(SRE.SERVER.overworld()).getRole(sourcePlayer);
+                    }
+                } catch (Exception ignored) {
+                }
+                if (trole == null) {
+                    trole = TMMRoles.CIVILIAN;
+                }
+                r = trole.identifier().toString();
+            }
+            // 复活后的职业名：统一使用权威阵营颜色（RoleTeam）
+            Role_1 = GameReplayUtils.getRoleNameWithRoleColor(r);
+
+            // message = ;
+        } else if (event.details() instanceof ArmorBreakDetails ambd) {
+            sourcePlayer = ambd.playerUuid();
+            // message = ;
+        } else if (event.details() instanceof PlayerJoinLeaveDetails pd) {
+            sourcePlayer = pd.player();
+            message = pd.scoreboardName();
+            // message = ;
+        }
+
+        Component sourceName = sourcePlayer != null ? manager.getPlayerName(sourcePlayer)
+                : Component.translatable("sre.replay.event.unknown_player").withStyle(ChatFormatting.OBFUSCATED)
+                        .withStyle(ChatFormatting.GRAY);
+        Component targetName = targetPlayer != null ? manager.getPlayerName(targetPlayer)
+                : Component.translatable("sre.replay.event.unknown_player").withStyle(ChatFormatting.OBFUSCATED)
+                        .withStyle(ChatFormatting.GRAY);
+
+        // 按该事件发生时的职业显示，而不是终局职业
+        sourceName = GameReplayUtils.getReplayPlayerDisplayText(sourcePlayer, manager, replayData, false, event);
+        targetName = GameReplayUtils.getReplayPlayerDisplayText(targetPlayer, manager, replayData, true, event);
+
+        return switch (event.eventType()) {
+            // 主要事件
+            case PLAYER_KILL -> {
+                if (sourceName != null) {
+                    yield Component.translatable("sre.replay.event.kill", sourceName, itemUsedText, targetName);
+                } else {
+                    // 如果没有杀手（例如意外死亡），则使用不同的翻译键
+                    yield Component.translatable("sre.replay.event.kill_no_killer", targetName, itemUsedText);
+                }
+            }
+            case PLAYER_POISONED -> {
+                if (sourceName != null) {
+                    yield Component.translatable("sre.replay.event.poison", sourceName, itemUsedText, targetName);
+                } else {
+                    // 如果没有下毒者（例如意外中毒），则使用不同的翻译键
+                    yield Component.translatable("sre.replay.event.poison_no_killer", targetName, itemUsedText);
+                }
+            }
+            case ARMOR_BREAK -> Component.translatable("sre.replay.event.armor_break", sourceName);
+            case GRENADE_THROWN -> Component.translatable("sre.replay.event.grenade_thrown", sourceName);
+            case ITEM_USED -> Component.translatable("sre.replay.event.skill_used", sourceName, itemUsedText);
+            case BLACKOUT_START ->
+                Component.translatable("sre.replay.event.blackout_start", Component.nullToEmpty(message));
+            case BLACKOUT_END -> Component.translatable("sre.replay.event.blackout_end");
+            // 系统事件
+            case GAME_START -> Component.translatable("sre.replay.event.game_start").withStyle(ChatFormatting.GREEN);
+            case GAME_END -> Component
+                    .translatable("sre.replay.event.game_end",
+                            replayData.getWinningTitle()
+                                    .withStyle(ChatFormatting.GOLD))
+                    .withStyle(ChatFormatting.GREEN);
+            case PLAYER_JOIN -> {
+                if (sourceName != null) {
+                    yield Component.translatable("sre.replay.event.player_join", sourceName)
+                            .withStyle(ChatFormatting.GRAY);
+                } else {
+                    if (message != null) {
+                        yield Component
+                                .translatable("sre.replay.event.player_join",
+                                        Component.literal(message).withStyle(ChatFormatting.GRAY))
+                                .withStyle(ChatFormatting.GRAY);
+                    } else {
+                        yield Component
+                                .translatable("sre.replay.event.player_join",
+                                        Component.translatable("sre.replay.event.unknown_player"))
+                                .withStyle(ChatFormatting.GRAY);
+                    }
+                }
+            }
+            case PLAYER_LEAVE -> {
+                if (sourceName != null) {
+                    yield Component.translatable("sre.replay.event.player_leave", sourceName)
+                            .withStyle(ChatFormatting.GRAY);
+                } else {
+                    if (message != null) {
+                        yield Component
+                                .translatable("sre.replay.event.player_leave",
+                                        Component.literal(message).withStyle(ChatFormatting.GRAY))
+                                .withStyle(ChatFormatting.GRAY);
+                    } else {
+                        yield Component
+                                .translatable("sre.replay.event.player_leave",
+                                        Component.translatable("sre.replay.event.unknown_player"))
+                                .withStyle(ChatFormatting.GRAY);
+                    }
+                }
+            }
+            case DOOR_LOCK -> {
+                // yield Component.translatable("sre.replay.event.door_lock", sourceName,
+                // message);
+                yield null;
+            }
+            case DOOR_UNLOCK -> {
+                // yield Component.translatable("sre.replay.event.door_unlock", sourceName,
+                // message);
+                yield null;
+            }
+            case TASK_COMPLETE, LOCKPICK_ATTEMPT, DOOR_CLOSE, DOOR_OPEN, STORE_BUY, MOOD_CHANGE,
+                    PSYCHO_STATE_CHANGE ->
+                null;
+            case CHANGE_ROLE -> {
+                yield Component.translatable("sre.replay.event.change_role", sourceName, Role_1, Role_2);
+            }
+            case PLAYER_REVIVAL -> {
+                yield Component.translatable("sre.replay.event.player_revival", sourceName, Role_1);
+            }
+            // ===== 新增低频关键事件 =====
+            case SKILL_RELEASE -> Component.translatable("sre.replay.event.skill_release", sourceName, itemUsedText);
+            case BOMB_DEFUSE -> {
+                if (targetPlayer != null) {
+                    yield Component.translatable("sre.replay.event.bomb_defuse", sourceName, targetName);
+                }
+                yield Component.translatable("sre.replay.event.bomb_defuse_block", sourceName);
+            }
+            case BOMB_DETONATE -> {
+                if (sourcePlayer != null) {
+                    yield Component.translatable("sre.replay.event.bomb_detonate", sourceName, targetName);
+                }
+                yield Component.translatable("sre.replay.event.bomb_detonate_no_source", targetName);
+            }
+            case DISGUISE -> Component.translatable("sre.replay.event.disguise", sourceName);
+            case TRAP_TRIGGERED -> {
+                yield null;
+            }
+            case DOOR_PRY -> Component.translatable("sre.replay.event.door_pry", sourceName);
+            case DOOR_SEAL -> Component.translatable("sre.replay.event.door_seal", sourceName);
+            case ROPE_PULL -> Component.translatable("sre.replay.event.rope_pull", sourceName, targetName);
+            // 次要事件
+
+            /*
+             * case DOOR_OPEN -> Component.translatable("sre.replay.event.door_open",
+             * sourceName);
+             * case DOOR_CLOSE -> Component.translatable("sre.replay.event.door_close",
+             * sourceName);
+             * case LOCKPICK_ATTEMPT ->
+             * Component.translatable("sre.replay.event.lockpick_attempt", sourceName,
+             * Boolean.parseBoolean(message) ?
+             * Component.translatable("sre.replay.event.success").withStyle(ChatFormatting.
+             * GREEN) :
+             * Component.translatable("sre.replay.event.failed").withStyle(ChatFormatting.
+             * RED));
+             * case TASK_COMPLETE ->
+             * Component.translatable("sre.replay.event.task_complete", sourceName,
+             * itemUsedText);
+             * case STORE_BUY -> {
+             * Component costComponent = message != null ? Component.nullToEmpty(message) :
+             * Component.nullToEmpty("?");
+             * yield Component.translatable("sre.replay.event.store_buy", sourceName,
+             * itemUsedText, costComponent);
+             * }
+             * case MOOD_CHANGE -> Component.translatable("sre.replay.event.mood_change",
+             * sourceName, Component.nullToEmpty(message));
+             * case DOOR_LOCK -> Component.translatable("sre.replay.event.door_lock",
+             * sourceName, Component.nullToEmpty(message));
+             * case DOOR_UNLOCK -> Component.translatable("sre.replay.event.door_unlock",
+             * sourceName, Component.nullToEmpty(message));
+             * case PSYCHO_STATE_CHANGE ->
+             * Component.translatable("sre.replay.event.psycho_state_change", sourceName,
+             * Component.nullToEmpty(message));
+             */
+            case CUSTOM_EVENT -> {
+                if (event
+                        .details() instanceof ReplayEventTypes.CustomEventDetails(Component msg)) {
+                    if (msg != null) {
+                        yield msg;
+                    }
+                    yield Component.translatable("sre.replay.event.custom_event",
+                            Component.nullToEmpty("Unknown Event"));
+                }
+                yield Component.translatable("sre.replay.event.custom_event", Component.nullToEmpty("Unknown Event"));
+            }
+            default -> throw new IllegalArgumentException("Unexpected value: " + event.eventType());
+        };
+    }
+
+    public enum EventType {
+        GAME_START,
+        GAME_END,
+        PLAYER_JOIN,
+        PLAYER_LEAVE,
+        PLAYER_KILL,
+        ARMOR_BREAK,
+        PLAYER_POISONED,
+        GRENADE_THROWN,
+        SKILL_USED,
+        DOOR_OPEN,
+        DOOR_CLOSE,
+        LOCKPICK_ATTEMPT,
+        TASK_COMPLETE,
+        STORE_BUY,
+        MOOD_CHANGE,
+        CUSTOM_MESSAGE,
+        ROLE_ASSIGNMENT,
+        DOOR_LOCK,
+        DOOR_UNLOCK,
+        ITEM_USED,
+        PSYCHO_STATE_CHANGE,
+        BLACKOUT_START,
+        BLACKOUT_END, CHANGE_ROLE, PLAYER_REVIVAL,
+        TRAP_TRIGGERED,
+        // ===== 新增低频关键事件 =====
+        SKILL_RELEASE,
+        BOMB_DEFUSE,
+        BOMB_DETONATE,
+        DISGUISE,
+        DOOR_PRY,
+        DOOR_SEAL,
+        ROPE_PULL
+    }
+
+    public static class ReplayEvent {
+        public final EventType type;
+        public final UUID sourcePlayer;
+        public final UUID targetPlayer;
+        public final String itemUsed;
+        public final String message;
+        public final long timestamp;
+        public final boolean hidden;
+        public final Map<UUID, ResourceLocation> roles;
+
+        public ReplayEvent(EventType type, UUID sourcePlayer, UUID targetPlayer, String itemUsed, String message,
+                boolean hidden, Map<UUID, ResourceLocation> roles) {
+            this.type = type;
+            this.sourcePlayer = sourcePlayer;
+            this.targetPlayer = targetPlayer;
+            this.itemUsed = itemUsed;
+            this.message = message;
+            this.timestamp = System.currentTimeMillis();
+            this.hidden = hidden;
+            this.roles = roles;
+        }
+
+        public EventType getType() {
+            return type;
+        }
+
+        public UUID getSourcePlayer() {
+            return sourcePlayer;
+        }
+
+        public UUID getTargetPlayer() {
+            return targetPlayer;
+        }
+
+        public String getItemUsed() {
+            return itemUsed;
+        }
+
+        public String getMessage() {
+            return message;
+        }
+
+        public long getTimestamp() {
+            return timestamp;
+        }
+
+        public boolean isHidden() {
+            return hidden;
+        }
+    }
+
+    public void setWinningTitle(Component customWinnerTitle) {
+        if (customWinnerTitle != null) {
+            this.winningTitle = customWinnerTitle.copy();
+        } else {
+            this.winningTitle = null;
+        }
+    }
+}

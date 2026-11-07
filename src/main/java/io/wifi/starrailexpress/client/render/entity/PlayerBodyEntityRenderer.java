@@ -1,0 +1,277 @@
+/*
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package io.wifi.starrailexpress.client.render.entity;
+
+import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.blaze3d.vertex.VertexConsumer;
+import com.mojang.math.Axis;
+import dev.doctor4t.ratatouille.client.lib.render.helpers.Easing;
+import io.wifi.starrailexpress.SRE;
+import io.wifi.starrailexpress.client.SREClient;
+import io.wifi.starrailexpress.client.model.TMMModelLayers;
+import io.wifi.starrailexpress.client.model.entity.PlayerSkeletonEntityModel;
+import io.wifi.starrailexpress.client.util.ClientSkinCache;
+import io.wifi.starrailexpress.content.entity.PlayerBodyEntity;
+import io.wifi.starrailexpress.game.GameConstants;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.model.EntityModel;
+import net.minecraft.client.model.HumanoidModel;
+import net.minecraft.client.model.PlayerModel;
+import net.minecraft.client.multiplayer.PlayerInfo;
+import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.culling.Frustum;
+import net.minecraft.client.renderer.entity.EntityRendererProvider;
+import net.minecraft.client.renderer.entity.LivingEntityRenderer;
+import net.minecraft.client.resources.DefaultPlayerSkin;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.util.FastColor;
+import net.minecraft.util.Mth;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.phys.AABB;
+
+import java.util.UUID;
+
+public class PlayerBodyEntityRenderer<T extends LivingEntity, M extends EntityModel<T>>
+        extends LivingEntityRenderer<PlayerBodyEntity, PlayerModel<PlayerBodyEntity>> {
+    public static final ResourceLocation DEFAULT_TEXTURE = DefaultPlayerSkin.getDefaultTexture();
+    private static final ResourceLocation SKELETON_TEXTURE = SRE.watheId("textures/entity/player_skeleton.png");
+    static final int MAX_DISTANCE = 36 * 36;
+
+    protected PlayerSkeletonEntityModel<PlayerBodyEntity> skeletonModel;
+
+    @Override
+    public boolean shouldRender(PlayerBodyEntity entity, Frustum frustum, double camX, double camY, double camZ) {
+        // 1. 距离剔除（原本在 render() 里，提前到此处）
+        Minecraft client = Minecraft.getInstance();
+        if (client.player == null)
+            return false;
+        if (entity.distanceToSqr(client.player) >= MAX_DISTANCE)
+            return false;
+
+        // 2. 视锥体剔除：实体包围盒不在相机视野内时跳过
+        AABB aabb = entity.getBoundingBoxForCulling();
+        if (!frustum.isVisible(aabb))
+            return false;
+
+        return super.shouldRender(entity, frustum, camX, camY, camZ);
+    }
+
+    public PlayerBodyEntityRenderer(EntityRendererProvider.Context ctx, boolean slim) {
+        super(ctx, new PlayerModel<>(ctx.bakeLayer(slim ? TMMModelLayers.PLAYER_BODY_SLIM : TMMModelLayers.PLAYER_BODY),
+                slim), 0F);
+        skeletonModel = new PlayerSkeletonEntityModel<>(ctx.bakeLayer(TMMModelLayers.PLAYER_SKELETON));
+    }
+
+    @Override
+    public void render(PlayerBodyEntity playerBodyEntity, float f, float g, PoseStack matrixStack,
+            MultiBufferSource vertexConsumerProvider, int light) {
+        // 提前返回必须在 pushPose 之前：留下未配对的 push 会让 LevelRenderer.checkPoseStack 抛
+        // "Pose stack not empty" 崩溃
+        final var moodComponent = SREClient.moodComponent;
+        if (moodComponent == null)
+            return;
+
+        this.setModelPose();
+        matrixStack.pushPose();
+        float clamp = Mth.clamp(
+                (float) (playerBodyEntity.tickCount - GameConstants.TIME_TO_DECOMPOSITION)
+                        / GameConstants.DECOMPOSING_TIME,
+                0f, 1f);
+        float ease = Easing.CUBIC_IN.ease(clamp, 0, -1, 1);
+
+        // 腐化尸体直接只显示骷髅模型，不渲染原玩家身体
+        if (playerBodyEntity.isCorrupted()) {
+            renderSkeleton(playerBodyEntity, f, g, matrixStack, vertexConsumerProvider, light, 1f);
+            matrixStack.popPose();
+            return;
+        }
+
+        boolean fullyDecomposed = ease <= -1f;
+        if (!fullyDecomposed) {
+            matrixStack.translate(0, ease, 0);
+            float alpha = moodComponent.isLowerThanDepressed() ? Mth.lerp(Mth
+                    .clamp(Easing.SINE_IN.ease(Math.min(1f, (float) playerBodyEntity.tickCount / 100f), 0, 1, 1), 0, 1),
+                    1f, 0f) : 1f;
+            this.renderBody(playerBodyEntity, f, g, matrixStack, vertexConsumerProvider, light, alpha);
+        }
+        matrixStack.popPose();
+
+        if (ease < 0f && !moodComponent.isLowerThanDepressed()) {
+            renderSkeleton(playerBodyEntity, f, g, matrixStack, vertexConsumerProvider, light,
+                    fullyDecomposed ? 1f : Mth.clamp(-ease, 0f, 1f));
+        }
+    }
+
+    public void renderBody(PlayerBodyEntity livingEntity, float f, float g, PoseStack matrixStack,
+            MultiBufferSource vertexConsumerProvider, int light, float alpha) {
+        boolean bl = this.isBodyVisible(livingEntity);
+        Minecraft client = Minecraft.getInstance();
+        boolean bl2 = !bl && !livingEntity.isInvisibleTo(client.player);
+        boolean bl3 = client.shouldEntityAppearGlowing(livingEntity);
+        RenderType bodyRenderLayer = this.getRenderType(livingEntity, bl, bl2, bl3);
+
+        render(livingEntity, f, g, matrixStack, vertexConsumerProvider, light, this.model, bodyRenderLayer, 1f, alpha);
+    }
+
+    public void renderSkeleton(PlayerBodyEntity livingEntity, float f, float g, PoseStack matrixStack,
+            MultiBufferSource vertexConsumerProvider, int light, float alpha) {
+        render(livingEntity, f, g, matrixStack, vertexConsumerProvider, light, this.skeletonModel,
+                this.getSkeletonRenderLayer(), .95f, alpha);
+    }
+
+    public void render(PlayerBodyEntity livingEntity, float f, float g, PoseStack matrixStack,
+            MultiBufferSource vertexConsumerProvider, int light, HumanoidModel<PlayerBodyEntity> model,
+            RenderType renderLayer, float scale, float alpha) {
+        if (alpha > 0) {
+            matrixStack.pushPose();
+            this.model.attackTime = this.getAttackAnim(livingEntity, g);
+            this.model.riding = livingEntity.isPassenger();
+            this.model.young = livingEntity.isBaby();
+
+            float h = Mth.rotLerp(g, livingEntity.yBodyRotO, livingEntity.yBodyRot);
+            float j = Mth.rotLerp(g, livingEntity.yHeadRotO, livingEntity.yHeadRot);
+            float k = j - h;
+
+            float m = Mth.lerp(g, livingEntity.xRotO, livingEntity.getXRot());
+            if (isEntityUpsideDown(livingEntity)) {
+                m *= -1.0F;
+                k *= -1.0F;
+            }
+
+            float lx = livingEntity.getScale();
+            matrixStack.scale(lx, lx, lx);
+            float n = this.getAttackAnim(livingEntity, g);
+            this.setupRotations(livingEntity, matrixStack, n, h, g, lx);
+            matrixStack.scale(-1.0F, -1.0F, 1.0F);
+            this.scale(livingEntity, matrixStack, g);
+            matrixStack.translate(0.0F, -1.501F, 0.0F);
+            float o = 0.0F;
+            float p = 0.0F;
+            if (!livingEntity.isPassenger() && livingEntity.isAlive()) {
+                o = livingEntity.walkAnimation.speed(g);
+                p = livingEntity.walkAnimation.position(g);
+                if (livingEntity.isBaby()) {
+                    p *= 3.0F;
+                }
+
+                if (o > 1.0F) {
+                    o = 1.0F;
+                }
+            }
+
+            model.prepareMobModel(livingEntity, p, o, g);
+            model.setupAnim(livingEntity, p, o, n, k, m);
+            Minecraft minecraftClient = Minecraft.getInstance();
+            boolean bl = this.isBodyVisible(livingEntity);
+            boolean bl2 = !bl && !livingEntity.isInvisibleTo(minecraftClient.player);
+            if (renderLayer != null) {
+                VertexConsumer vertexConsumer = vertexConsumerProvider.getBuffer(renderLayer);
+                int q = getOverlayCoords(livingEntity, this.getWhiteOverlayProgress(livingEntity, g));
+                matrixStack.pushPose();
+                matrixStack.scale(scale, scale, scale);
+
+                int color = bl2 ? 654311423 : FastColor.ARGB32.color(Mth.floor(alpha * 255.0F), 0xFFFFFF);
+                if (GameConstants.DeathReasons.PURPLE_MONSTER_ASSIMILATION.toString()
+                        .equals(livingEntity.getDeathReason())) {
+                    color = FastColor.ARGB32.color(Mth.floor(alpha * 255.0F), 0xA83BE3);
+                }
+                // 嬉命人·调色盘：给尸体覆一层随机 RGB
+                color = org.agmas.noellesroles.client.ClientEmbalmerPaletteState
+                        .blend(livingEntity.getUUID(), color);
+                model.renderToBuffer(matrixStack, vertexConsumer, light, q, color);
+                matrixStack.popPose();
+            }
+
+            matrixStack.popPose();
+        }
+    }
+
+    private RenderType getSkeletonRenderLayer() {
+        return this.model.renderType(SKELETON_TEXTURE);
+    }
+
+    private void setModelPose() {
+        PlayerModel<PlayerBodyEntity> playerEntityModel = this.getModel();
+        playerEntityModel.setAllVisible(true);
+        playerEntityModel.head.visible = true;
+        playerEntityModel.hat.visible = true;
+        playerEntityModel.jacket.visible = true;
+        playerEntityModel.leftPants.visible = true;
+        playerEntityModel.rightPants.visible = true;
+        playerEntityModel.leftSleeve.visible = true;
+        playerEntityModel.rightSleeve.visible = true;
+        skeletonModel.setAllVisible(true);
+        skeletonModel.young = false;
+    }
+
+    @Override
+    public ResourceLocation getTextureLocation(PlayerBodyEntity playerBodyEntity) {
+        PlayerInfo playerListEntry = ClientSkinCache.getCachedPlayerInfo(playerBodyEntity.getPlayerUuid());
+        UUID skinUuid = playerBodyEntity.getComponent().getSkinUuid();
+        if (skinUuid != null) {
+            PlayerInfo skinBodyInfo = ClientSkinCache.getCachedPlayerInfo(skinUuid);
+            if (skinBodyInfo != null) {
+                playerListEntry = skinBodyInfo;
+            }
+        }
+        if (SREClient.getLooseEndPenalty()) {
+            return DEFAULT_TEXTURE;
+        }
+        if (playerListEntry != null) {
+            return playerListEntry.getSkin().texture();
+        } else {
+            return DEFAULT_TEXTURE;
+        }
+    }
+
+    @Override
+    protected void renderNameTag(PlayerBodyEntity entity, Component component, PoseStack poseStack,
+            MultiBufferSource multiBufferSource, int i, float f) {
+    }
+
+    @Override
+    protected void setupRotations(PlayerBodyEntity livingEntity, PoseStack poseStack, float animationProgress,
+            float bodyYaw, float tickDelta, float scale) {
+        int animTickEnd = 20;
+        float t = Math.min(livingEntity.tickCount + tickDelta, animTickEnd) / animTickEnd;
+        float animProgress = Easing.BOUNCE_OUT.ease(t, 0, 1, 1);
+
+        poseStack.mulPose(Axis.YP.rotationDegrees(90 - bodyYaw));
+        poseStack.translate(1F, 0f, 0f);
+        poseStack.translate(0F, animProgress * 0.15f, 0F);
+        poseStack.mulPose(Axis.ZP.rotationDegrees(animProgress * this.getFlipDegrees(livingEntity)));
+        poseStack.mulPose(Axis.YP.rotationDegrees(90.0F));
+    }
+
+    @Override
+    protected void scale(PlayerBodyEntity entity, PoseStack matrices, float amount) {
+        float g = 0.9375F;
+        matrices.scale(g, g, g);
+    }
+
+    @Override
+    protected float getAttackAnim(PlayerBodyEntity livingEntity, float f) {
+        return 0f;
+    }
+
+    @Override
+    protected float getWhiteOverlayProgress(PlayerBodyEntity livingEntity, float f) {
+        return 0.1f;
+    }
+
+}
